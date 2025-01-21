@@ -12,6 +12,7 @@ import forgi.graph.bulge_graph as fgb
 def is_valid_dot_bracket(structure):
     """
     Check if a dot-bracket RNA structure has matching open and closing parentheses.
+    It does not accepts pseudoknots or other types of base pairs.
     """
     stack = []
     for char in structure:
