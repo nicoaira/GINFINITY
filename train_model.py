@@ -152,7 +152,11 @@ def main():
     parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping.')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for the optimizer.')
     parser.add_argument('--gin_layers', type=int, default=1, help='Number of gin layers.')
+    parser.add_argument('--num_workers', type=int, default=None, help='Number of worker threads for data loading. Defaults to half of available CPU cores if not set.')
     args = parser.parse_args()
+    
+    if args.num_workers is None:
+        args.num_workers = max(1, os.cpu_count() // 2)
 
     # Load data
     dataset_path = args.input_path
@@ -172,14 +176,30 @@ def main():
         model = SiameseResNetLSTM(input_channels=1, hidden_dim=args.hidden_dim, lstm_layers=1)
         train_dataset = TripletRNADataset(train_df, max_len=max_len)
         val_dataset = TripletRNADataset(val_df, max_len=max_len)
-        train_loader = TorchDataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, pin_memory=True)
-        val_loader = TorchDataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+        train_loader = TorchDataLoader(train_dataset,
+                                        batch_size=args.batch_size,
+                                        shuffle=True,
+                                        pin_memory=True,
+                                        num_workers=args.num_workers)
+        val_loader = TorchDataLoader(val_dataset,
+                                     batch_size=args.batch_size,
+                                     shuffle=False,
+                                     pin_memory=True,
+                                     num_workers=args.num_workers)
     elif args.model_type == "gin":
         model = GINModel(hidden_dim=args.hidden_dim, output_dim=args.output_dim, graph_encoding=args.graph_encoding, gin_layers = args.gin_layers)
         train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding)
         val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding)
-        train_loader = GeoDataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, pin_memory=True)
-        val_loader = GeoDataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+        train_loader = GeoDataLoader(train_dataset,
+                                     batch_size=args.batch_size,
+                                     shuffle=True,
+                                     pin_memory=True,
+                                     num_workers=args.num_workers)
+        val_loader = GeoDataLoader(val_dataset,
+                                   batch_size=args.batch_size,
+                                   shuffle=True,
+                                   pin_memory=True,
+                                   num_workers=args.num_workers)
         
 
     # Set up criterion
