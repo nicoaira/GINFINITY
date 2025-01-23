@@ -71,7 +71,8 @@ def train_model_with_early_stopping(
         num_epochs,
         patience,
         device,
-        log_path
+        log_path,
+        save_best_weights=True  # New argument with default value
 ):
     """
     Train either a GIN model or a Siamese model with early stopping.
@@ -88,6 +89,8 @@ def train_model_with_early_stopping(
     """
     model.to(device)
     early_stopping = EarlyStopping(patience=patience, min_delta=0.001)
+    best_val_loss = float('inf')
+    best_model_state_dict = None
 
     for epoch in range(num_epochs):
         # Training phase
@@ -127,10 +130,19 @@ def train_model_with_early_stopping(
         print(f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {running_loss / len(train_loader)}, Validation Loss: {val_loss / len(val_loader)}")
 
         # Early stopping
+        if val_loss / len(val_loader) < best_val_loss:
+            best_val_loss = val_loss / len(val_loader)
+            if save_best_weights:
+                best_model_state_dict = model.state_dict()
+
         early_stopping(val_loss / len(val_loader))
         if early_stopping.early_stop:
             print("Early stopping")
             break
+
+    # Restore the best model weights if early stopping was triggered and save_best_weights is True
+    if early_stopping.early_stop and save_best_weights and best_model_state_dict is not None:
+        model.load_state_dict(best_model_state_dict)
 
     finished_reason = "Early stopping" if early_stopping.early_stop else f"{epoch+1} epochs"
     log_information(log_path, {"Training finished": finished_reason})
@@ -153,6 +165,7 @@ def main():
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for the optimizer.')
     parser.add_argument('--gin_layers', type=int, default=1, help='Number of gin layers.')
     parser.add_argument('--num_workers', type=int, default=None, help='Number of worker threads for data loading. Defaults to half of available CPU cores if not set.')
+    parser.add_argument('--save_best_weights', type=bool, default=True, help='Save the best model weights during early stopping.')
     args = parser.parse_args()
     
     if args.num_workers is None:
@@ -245,7 +258,8 @@ def main():
         num_epochs=args.num_epochs,
         patience=args.patience,
         device=device,
-        log_path=log_path
+        log_path=log_path,
+        save_best_weights=args.save_best_weights  # Pass the new argument
     )
 
     end_time = time.time()
