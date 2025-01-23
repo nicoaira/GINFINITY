@@ -12,6 +12,7 @@ from src.utils import dotbracket_to_forgi_graph, forgi_graph_to_tensor, log_info
 import os
 import subprocess
 from pathlib import Path
+from torch.multiprocessing import Pool, set_start_method, Manager
 
 # Load the trained model
 
@@ -101,6 +102,18 @@ def validate_structure(structure):
     if not all(char in valid_characters for char in structure):
         raise ValueError(f"Invalid characters found in the column used for secondary structure: '{structure}'. Valid characters are: {valid_characters}")
 
+# Function to generate embeddings for a single row
+def generate_embedding_for_row(args):
+    idx, row, model, model_type, structure_column, max_len, device, graph_encoding = args
+    
+    structure = row[structure_column]
+    validate_structure(structure)
+    if model_type == "siamese":
+        embedding = get_siamese_embedding(model, structure, max_len, device=device)
+    elif "gin" in model_type:
+        embedding = get_gin_embedding(model, graph_encoding, structure, device)
+    return idx, embedding
+
 # Main function to generate embeddings from CSV or TSV
 
 
@@ -117,8 +130,9 @@ def generate_embeddings(
         gin_layers=1,
         hidden_dim=256,
         output_dim=128,
+        num_workers=4
 ):
-    # Load the trained model
+    # Load the trained model once
     model = load_trained_model(
         model_path,
         model_type,
@@ -129,24 +143,16 @@ def generate_embeddings(
         output_dim=output_dim
     )
 
-
     # Initialize list for storing embeddings
-    embeddings = []
+    embeddings = [None] * len(input_df)
 
-    # Iterate over rows and calculate embeddings using tqdm for progress bar
-    with torch.no_grad():
-        for idx, row in tqdm(input_df.iterrows(), total=len(input_df), desc="Processing Embeddings"):
-            structure = row[structure_column]
-            # Validate the dot-bracket structure
-            validate_structure(structure)
-            if model_type == "siamese":
-                embedding = get_siamese_embedding(
-                    model, structure, max_len, device=device)
-            elif "gin" in model_type:
-                embedding = get_gin_embedding(model, graph_encoding, structure, device)
+    # Prepare arguments for multiprocessing
+    args_list = [(idx, row, model, model_type, structure_column, max_len, device, graph_encoding) for idx, row in input_df.iterrows()]
 
-            # Convert list to comma-separated string
-            embeddings.append(embedding)
+    # Use multiprocessing to generate embeddings
+    with Pool(num_workers) as pool:
+        for idx, embedding in tqdm(pool.imap_unordered(generate_embedding_for_row, args_list), total=len(input_df), desc="Processing Embeddings"):
+            embeddings[idx] = embedding
 
     # Add the embeddings to the DataFrame
     input_df['embedding_vector'] = embeddings
@@ -188,6 +194,11 @@ def get_structure_column_name(input_df, header,structure_column_name, structure_
     return structure_column
 
 if __name__ == "__main__":
+    try:
+        set_start_method('spawn')
+    except RuntimeError:
+        pass
+
     parser = argparse.ArgumentParser(
         description="Generate embeddings from RNA secondary structures using a trained Siamese model.")
     parser.add_argument('--input', type=str, required=True,
@@ -219,6 +230,9 @@ if __name__ == "__main__":
                         help='Specify whether the input CSV file has a header (default: True). Use "True" or "False".')
     parser.add_argument('--hidden_dim', type=int, default=256, help='Hidden dimension size for the model.')
     parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model (ignored for siamese).')
+    parser.add_argument('--device', type=str, default="cuda" if torch.cuda.is_available() else "cpu",
+                        help='Device to run the model on (default: "cuda" if available, otherwise "cpu").')
+    parser.add_argument('--num_workers', type=int, default=4, help='Number of worker processes to use for multiprocessing (default: 4).')
     args = parser.parse_args()
 
     # Validate the header argument
@@ -239,7 +253,7 @@ if __name__ == "__main__":
     # Determine which column to use for structure
     structure_column = get_structure_column_name(input_df, args.header, args.structure_column_name, args.structure_column_num)
     
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = args.device
     
     output_folder = os.path.dirname(output_path) 
     os.makedirs(output_folder, exist_ok=True)
@@ -254,7 +268,8 @@ if __name__ == "__main__":
         "output_dim": args.output_dim,
         "device": device,
         "test_data_path": args.input,
-        "samples_test_data": input_df.shape[0]
+        "samples_test_data": input_df.shape[0],
+        "num_workers": args.num_workers
     }
     if args.model_type == "gin":
         predict_params["gin_layers"] = args.gin_layers
@@ -275,7 +290,8 @@ if __name__ == "__main__":
         graph_encoding=args.graph_encoding,
         gin_layers=args.gin_layers,
         hidden_dim=args.hidden_dim,
-        output_dim=args.output_dim
+        output_dim=args.output_dim,
+        num_workers=args.num_workers
     )
 
     end_time = time.time()
