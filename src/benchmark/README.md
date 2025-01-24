@@ -32,25 +32,44 @@ This script is used to run the benchmark on the prepared datasets. It performs t
 3. **Evaluate Performance**: Evaluates the performance of RNA classification models using the benchmark datasets.
 4. **Generate Reports**: Generates reports summarizing the benchmark results.
 
-#### Parameters
+## Parameters
 
-- `--model-script`: Path to the model script. Default: "./strusinet.py".
-- `--benchmark-metadata`: Name of the JSON file containing benchmark dataset information (in --datasets-dir). Default: 'benchmarking_datasets.json'.
-- `--datasets-dir`: Directory containing the benchmark metadata JSON, primary sampled datasets, and benchmark datasets. Default: './datasets'.
-- `--benchmark-datasets`: Specify one or more benchmark datasets by name or name-version. If not provided, uses all latest versions.
-- `--save-embeddings`: If set, embeddings will be saved. Ignored if --no-save is given.
-- `--emb-output-path`: Output path for embeddings if save_embeddings is set.
-- `--structure-column-name`: Name of the column with RNA secondary structures. Default: "secondary_structure".
-- `--structure-column-num`: Column number of the RNA secondary structures (0-indexed). If both name and num provided, name takes precedence.
-- `--model-path`: Path to the trained model file. Default: "saved_model/ResNet-Secondary.pth".
-- `--header`: Specify whether input CSV files have a header (True/False). Default: True.
-- `--skip-barplot`: Skip generating the AUC barplot.
-- `--skip-auc-curve`: Skip generating the ROC curve.
-- `--results-path`: Path to save results. Time-stamp appended unless --no-save is specified. Default: "./benchmarking_results".
-- `--save-distances`: Save the benchmark dataframes with the distance column.
-- `--no-save`: Do not save any output files.
-- `--only-needed-embeddings`: If set, only generate embeddings for RNAcentral IDs required by the benchmarks.
-- `--no-log`: If set, no log file will be created.
+### Required Parameters
+- `--model_type`: Type of model to use ('siamese' or 'gin').
+- `--model-path`: Path to the trained model weights file.
+
+### Model Configuration
+- `--embeddings-script`: Path to the embeddings generation script. Default: "./predict_embedding.py"
+- `--hidden_dim`: Hidden dimension size for the model. Default: 256
+- `--output_dim`: Output embedding size for the GIN model (ignored for siamese). Default: 128
+- `--gin_layers`: Number of GIN layers (only for GIN model)
+- `--graph_encoding`: Encoding for graph transformation ('standard' or 'forgi'). Default: 'standard'
+
+### Input/Output Configuration
+- `--benchmark-metadata`: JSON file containing benchmark dataset information. Default: 'benchmark_datasets.json'
+- `--datasets-dir`: Directory containing benchmark datasets. Default: 'data/benchmark_datasets'
+- `--benchmark-datasets`: Specify benchmark datasets by name or name-version
+- `--results-path`: Path to save results. Default: "./benchmarking_results"
+- `--emb-output-path`: Output path for embeddings. Default: 'benchmarking_results/embeddings'
+
+### Data Processing
+- `--structure-column-name`: Name of the RNA structure column
+- `--structure-column-num`: Index of the RNA structure column (0-based)
+- `--header`: Whether input files have headers ('True'/'False'). Default: 'True'
+
+### Performance Options
+- `--device`: Computation device ('cuda' or 'cpu'). Default: 'cuda' if available
+- `--num_workers`: Number of worker processes. Default: 4
+- `--distance-batch-size`: Batch size for distance calculations. Default: 1000
+
+### Output Control
+- `--save-embeddings`: Save the generated embeddings
+- `--save-distances`: Save the distance calculations
+- `--no-save`: Don't save any output files
+- `--no-log`: Don't create log files
+- `--skip-barplot`: Skip generating AUC barplots
+- `--skip-auc-curve`: Skip generating ROC curves
+- `--only-needed-embeddings`: Only generate embeddings required by benchmarks
 
 ## How to Use
 
@@ -67,6 +86,11 @@ This script is used to run the benchmark on the prepared datasets. It performs t
 1. Ensure that the benchmark datasets are prepared and saved in the specified directory.
 2. Run the `benchmark.py` script with the appropriate parameters to execute the benchmark.
 3. Review the generated reports to evaluate the performance of RNA classification models.
+
+### Example Usage
+```
+python benchmark.py --model_type siamese --model-path path/to/model --benchmark-metadata benchmark_datasets.json --datasets-dir data/benchmark_datasets --results-path ./benchmarking_results
+```
 
 ## Directory Structure
 

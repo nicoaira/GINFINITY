@@ -135,10 +135,14 @@ def train_model_with_early_stopping(
             if save_best_weights:
                 best_model_state_dict = model.state_dict()
 
-        early_stopping(val_loss / len(val_loader))
+        early_stopping(val_loss / len(val_loader), model)  # Added model parameter here
         if early_stopping.early_stop:
             print("Early stopping")
             break
+
+        # If early stopping was triggered and we have best weights saved
+        if early_stopping.early_stop and save_best_weights:
+            early_stopping.restore_best_weights(model)
 
     # Restore the best model weights if early stopping was triggered and save_best_weights is True
     if early_stopping.early_stop and save_best_weights and best_model_state_dict is not None:
@@ -166,6 +170,7 @@ def main():
     parser.add_argument('--gin_layers', type=int, default=1, help='Number of gin layers.')
     parser.add_argument('--num_workers', type=int, default=None, help='Number of worker threads for data loading. Defaults to half of available CPU cores if not set.')
     parser.add_argument('--save_best_weights', type=bool, default=True, help='Save the best model weights during early stopping.')
+    parser.add_argument('--device', type=str, choices=['cuda', 'cpu'], default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training (cuda or cpu).')
     args = parser.parse_args()
     
     if args.num_workers is None:
@@ -177,7 +182,7 @@ def main():
     df = remove_invalid_structures(df)
     train_df, val_df = train_test_split(df, test_size=0.2, random_state=42)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = args.device
 
     # Instantiate model, criterion, optimizer, and dataset based on model type
     if args.model_type == "siamese":
