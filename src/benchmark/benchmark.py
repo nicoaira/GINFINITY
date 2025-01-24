@@ -15,6 +15,7 @@ import re
 import platform
 import time
 import sys
+from multiprocessing import Pool
 
 def check_device(verbose=False):
     """
@@ -56,7 +57,7 @@ def get_time(timezone='Europe/Madrid'):
     formatted_time = geo_time.strftime('-%y%m%d-%H%M%SS')
     return formatted_time
 
-def get_embeddings(model_script,
+def get_embeddings(embeddings_script,  # Changed from model_script
                    sampled_rnas_path,
                    emb_output_path,
                    model_weights_path,
@@ -67,13 +68,15 @@ def get_embeddings(model_script,
                    output_dim,
                    structure_column_name,
                    structure_column_num,
-                   header):
+                   header,
+                   device='cuda',
+                   num_workers=4):
     """
-    Generate embeddings by running the model script as a subprocess.
+    Generate embeddings by running the embeddings script as a subprocess.
 
     Parameters
     ----------
-    model_script : str
+    embeddings_script : str
         Path to the script that generates embeddings.
     sampled_rnas_path : str
         Path to the input file containing RNA sequences and structures.
@@ -93,28 +96,32 @@ def get_embeddings(model_script,
         Column index of the RNA secondary structures if name is not provided.
     header : bool
         Whether the input file has a header.
+    device : str
+        Device to use for computation ('cuda' or 'cpu')
+    num_workers : int
+        Number of worker processes for parallel processing
 
     Raises
     ------
     FileNotFoundError
-        If the model script is not found.
+        If the embeddings script is not found.
     subprocess.CalledProcessError
         If the subprocess call to generate embeddings fails.
     """
-    if not os.path.isfile(model_script):
-        raise FileNotFoundError(f"Model script '{model_script}' not found.")
-
-    device = check_device(verbose=True)
+    if not os.path.isfile(embeddings_script):
+        raise FileNotFoundError(f"Embeddings script '{embeddings_script}' not found.")
 
     command = [
-        "python", model_script,
+        "python", embeddings_script,
         "--input", sampled_rnas_path,
         "--output", emb_output_path,
         "--model_path", model_weights_path,
         "--model_type", model_type,
         "--hidden_dim", str(hidden_dim),
         "--output_dim", str(output_dim),
-        "--header", str(header)
+        "--header", str(header),
+        "--device", device,
+        "--num_workers", str(num_workers)
     ]
 
     if gin_layers is not None:
@@ -134,33 +141,40 @@ def get_embeddings(model_script,
         print("Command to execute:", ' '.join(command))
         subprocess.run(command, check=True, text=True)
     except subprocess.CalledProcessError as e:
-        print("Error occurred while running the model script!")
+        print("Error occurred while running the embeddings script!")
         print(e)
 
-def calculate_square_distance(id1, id2, embedding_dict):
+def calculate_distance_batch(args):
     """
-    Calculate the squared Euclidean distance between two embeddings.
-
+    Calculate distances for a batch of pairs using vectorized operations.
+    
     Parameters
     ----------
-    id1 : str
-        First RNAcentral ID.
-    id2 : str
-        Second RNAcentral ID.
-    embedding_dict : dict
-        Dictionary mapping RNAcentral IDs to their embedding vectors (numpy arrays).
-
+    args : tuple
+        Contains (batch_pairs, embeddings_tensor)
+        batch_pairs is a list of (id1, id2) tuples
+        embeddings_tensor is a dictionary mapping IDs to embedding tensors
+    
     Returns
     -------
-    float
-        The squared distance, or NaN if any embedding is missing.
+    list
+        List of (id1, id2, distance) tuples
     """
-    vector1 = embedding_dict.get(id1)
-    vector2 = embedding_dict.get(id2)
-    if vector1 is not None and vector2 is not None:
-        return np.sum((vector1 - vector2) ** 2)
-    else:
-        return np.nan
+    batch_pairs, embedding_dict = args
+    results = []
+    for id1, id2 in batch_pairs:
+        vector1 = embedding_dict.get(id1)
+        vector2 = embedding_dict.get(id2)
+        if vector1 is not None and vector2 is not None:
+            # Convert numpy arrays to torch tensors if they aren't already
+            if not isinstance(vector1, torch.Tensor):
+                vector1 = torch.tensor(vector1, dtype=torch.float32)
+                vector2 = torch.tensor(vector2, dtype=torch.float32)
+            distance = torch.sum((vector1 - vector2) ** 2).item()
+        else:
+            distance = float('nan')
+        results.append((id1, id2, distance))
+    return results
 
 def count_initial_comment_lines(file_path):
     """
@@ -236,7 +250,9 @@ def get_distances(embedding_dict,
                   benchmarking_results_path,
                   expected_id,
                   save_distances=False,
-                  no_save=False):
+                  no_save=False,
+                  batch_size=1000,
+                  num_workers=4):
     """
     Calculate the square distances between embeddings for all pairs in the benchmark dataset,
     and optionally save the results.
@@ -259,6 +275,10 @@ def get_distances(embedding_dict,
         Whether to save distances.
     no_save : bool
         If True, do not save any outputs.
+    batch_size : int
+        Number of pairs to process in each batch.
+    num_workers : int
+        Number of worker processes for parallel processing.
 
     Returns
     -------
@@ -267,13 +287,29 @@ def get_distances(embedding_dict,
     """
     benchmark_df = load_benchmark_dataset(benchmark_path, expected_id)
 
-    square_distances = []
-    for _, row in tqdm(benchmark_df.iterrows(), total=benchmark_df.shape[0],
-                       desc=f"Calculating distances for {benchmark_name} (v{benchmark_version})"):
-        distance = calculate_square_distance(row['rnacentral_id_1'], row['rnacentral_id_2'], embedding_dict)
-        square_distances.append(distance)
-
-    benchmark_df['square_distance'] = square_distances
+    # Prepare pairs for batch processing
+    pairs = list(zip(benchmark_df['rnacentral_id_1'], benchmark_df['rnacentral_id_2']))
+    
+    # Split pairs into batches
+    batches = [pairs[i:i + batch_size] for i in range(0, len(pairs), batch_size)]
+    args_list = [(batch, embedding_dict) for batch in batches]
+    
+    # Calculate distances using multiprocessing
+    all_results = []
+    with Pool(num_workers) as pool:
+        with tqdm(total=len(pairs), desc=f"Calculating distances for {benchmark_name} (v{benchmark_version})") as pbar:
+            for results in pool.imap_unordered(calculate_distance_batch, args_list):
+                all_results.extend(results)
+                pbar.update(len(results))
+    
+    # Create a dictionary mapping (id1, id2) to distance
+    distance_dict = {(id1, id2): dist for id1, id2, dist in all_results}
+    
+    # Add distances to the benchmark dataframe
+    benchmark_df['square_distance'] = benchmark_df.apply(
+        lambda row: distance_dict.get((row['rnacentral_id_1'], row['rnacentral_id_2']), np.nan),
+        axis=1
+    )
 
     if save_distances and (not no_save):
         benchmark_version_f = 'v'+'_'.join(str(benchmark_version).split('.'))
@@ -281,7 +317,6 @@ def get_distances(embedding_dict,
         benchmark_w_dist_path = os.path.join(benchmarking_results_path, benchmark_w_dist_file)
         benchmark_df.to_csv(benchmark_w_dist_path, sep='\t', index=False)
 
-    #return benchmark_df
     return benchmark_df[benchmark_df.square_distance.notna()]
 
 def get_roc_auc(benchmark_name, benchmark_version,
@@ -475,7 +510,7 @@ def parse_benchmarks(benchmark_args, benchmark_metadata):
 
     return selected_benchmarks
 
-def check_required_files(model_script,
+def check_required_files(embeddings_script,
                          model_weights_path,
                          benchmark_metadata_path,
                          datasets_dir,
@@ -486,7 +521,7 @@ def check_required_files(model_script,
 
     Parameters
     ----------
-    model_script, model_weights_path, benchmark_metadata_path : str
+    embeddings_script, model_weights_path, benchmark_metadata_path : str
     datasets_dir : str
     selected_benchmarks : list of dict
     benchmark_metadata : dict
@@ -495,8 +530,8 @@ def check_required_files(model_script,
     ------
     FileNotFoundError, ValueError
     """
-    if not os.path.isfile(model_script):
-        raise FileNotFoundError(f"Model script not found: {model_script}")
+    if not os.path.isfile(embeddings_script):
+        raise FileNotFoundError(f"Embeddings script not found: {embeddings_script}")
 
     if not os.path.isfile(model_weights_path):
         raise FileNotFoundError(f"Model weights file not found: {model_weights_path}")
@@ -537,7 +572,7 @@ def log_information(log_path, info_dict):
         for key, value in info_dict.items():
             f.write(f"{key}: {value}\n")
 
-def run_benchmark(model_script,
+def run_benchmark(embeddings_script,  # Changed from model_script
                   benchmark_datasets,
                   benchmark_metadata,
                   benchmark_metadata_path,
@@ -559,7 +594,10 @@ def run_benchmark(model_script,
                   save_distances,
                   no_save,
                   only_needed_embeddings,
-                  no_log):
+                  no_log,
+                  device='cuda',  # Add device parameter
+                  num_workers=4,  # Add num_workers parameter
+                  distance_batch_size=1000):  # Add new parameter
     """
     Main function to run the benchmark with logging support.
 
@@ -573,7 +611,7 @@ def run_benchmark(model_script,
 
     Parameters
     ----------
-    model_script, benchmark_datasets, benchmark_metadata, benchmark_metadata_path : str / list
+    embeddings_script, benchmark_datasets, benchmark_metadata, benchmark_metadata_path : str / list
     datasets_dir : str
     save_embeddings, skip_barplot, skip_auc_curve, save_distances, no_save, only_needed_embeddings, no_log : bool
     emb_output_path, model_weights_path, structure_column_name, structure_column_num : various
@@ -589,7 +627,7 @@ def run_benchmark(model_script,
     needed_primary_ids = set([bm["primary_sampled_dataset_id"] for bm in selected_benchmarks])
 
     check_required_files(
-        model_script=model_script,
+        embeddings_script=embeddings_script,
         model_weights_path=model_weights_path,
         benchmark_metadata_path=benchmark_metadata_path,
         datasets_dir=datasets_dir,
@@ -685,7 +723,7 @@ def run_benchmark(model_script,
 
         emb_gen_start = time.time()
         get_embeddings(
-            model_script=model_script,
+            embeddings_script=embeddings_script,
             sampled_rnas_path=embedding_input_path,
             emb_output_path=curr_emb_output_path,
             model_weights_path=model_weights_path,
@@ -696,7 +734,9 @@ def run_benchmark(model_script,
             output_dim=output_dim,
             structure_column_name=structure_column_name,
             structure_column_num=structure_column_num,
-            header=header
+            header=header,
+            device=device,  
+            num_workers=num_workers  
         )
         emb_gen_end = time.time()
 
@@ -747,7 +787,9 @@ def run_benchmark(model_script,
             benchmarking_results_path=benchmarking_results_path,
             expected_id=benchmark_id,
             save_distances=save_distances,
-            no_save=no_save
+            no_save=no_save,
+            num_workers=num_workers,  # Add this parameter
+            batch_size=distance_batch_size  # Pass the batch size parameter
         )
         dist_end = time.time()
 
@@ -793,9 +835,9 @@ def run_benchmark(model_script,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate embeddings from RNA secondary structures using a trained model and benchmark them.")
 
-    parser.add_argument('--model-script', dest='model_script', type=str, 
+    parser.add_argument('--embeddings-script', dest='embeddings_script', type=str,  # Changed from model-script
                         default="./predict_embedding.py",
-                        help='Path to the model script. Default: "./predict_embedding.py".')
+                        help='Path to the embeddings generation script. Default: "./predict_embedding.py".')
 
     parser.add_argument('--benchmark-metadata', dest='benchmark_metadata_path', type=str,
                         default='benchmark_datasets.json',
@@ -862,6 +904,16 @@ if __name__ == "__main__":
 
     parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model (ignored for siamese).')
 
+    parser.add_argument('--num_workers', type=int, default=4,
+                        help='Number of worker processes for parallel processing. Default: 4')
+    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
+                        choices=['cuda', 'cpu'],
+                        help='Device to use for computation (cuda or cpu).')
+
+    parser.add_argument('--distance-batch-size', dest='distance_batch_size', 
+                       type=int, default=1000,
+                       help='Batch size for distance calculations. Default: 1000')
+
     args = parser.parse_args()
 
     if args.header.lower() not in ['true', 'false']:
@@ -889,7 +941,7 @@ if __name__ == "__main__":
         benchmark_datasets = args.benchmark_datasets
 
     run_benchmark(
-        model_script=args.model_script,
+        embeddings_script=args.embeddings_script,
         benchmark_datasets=benchmark_datasets,
         benchmark_metadata=benchmark_metadata,
         benchmark_metadata_path=benchmark_metadata_fullpath,
@@ -911,5 +963,8 @@ if __name__ == "__main__":
         save_distances=args.save_distances,
         no_save=args.no_save,
         only_needed_embeddings=args.only_needed_embeddings,
-        no_log=args.no_log
+        no_log=args.no_log,
+        device=args.device,
+        num_workers=args.num_workers,
+        distance_batch_size=args.distance_batch_size
     )
