@@ -57,15 +57,37 @@ def dotbracket_to_graph(dotbracket):
     
     return G
 
+def generate_slices(G, L, keep_paired_neighbors=True):
+    slices = []
+    nodes = sorted(G.nodes())
+    n = len(nodes)
+    for start in range(n - L + 1):
+        window_nodes = list(range(start, start + L))
+        sub_nodes = set(window_nodes)
+        if keep_paired_neighbors:
+            for node in window_nodes:
+                for neighbor in G.neighbors(node):
+                    if G.edges[node, neighbor].get('edge_type') == 'base_pair' and neighbor not in window_nodes:
+                        sub_nodes.add(neighbor)
+        H = G.subgraph(sub_nodes).copy()
+        if keep_paired_neighbors:
+            for node in list(H.nodes()):
+                if node not in window_nodes:
+                    for neighbor in list(H.neighbors(node)):
+                        if H.edges[node, neighbor].get('edge_type') == 'adjacent':
+                            H.remove_edge(node, neighbor)
+        slices.append((start, H))
+    return slices
 
-def graph_to_tensor(g):
-    x = torch.Tensor([[0] if g.nodes[node]['label'] == 'unpaired' else [1] for node in g.nodes])
-    edge_index = torch.LongTensor(list(g.edges())).t().contiguous()
-
-    # Graph to Data object
-    data = Data(x=x, edge_index=edge_index)
-
-    return data
+def graph_to_tensor(G):
+    nodes = sorted(G.nodes())
+    node_features = [[1.0] if G.nodes[node]['label'] == 'paired' else [0.0] for node in nodes]
+    x = torch.tensor(node_features, dtype=torch.float)
+    edge_indices = [[u, v] for u, v in G.edges()]
+    edge_attrs = [[1.0, 0.0] if G.edges[u, v]['edge_type'] == 'adjacent' else [0.0, 1.0] for u, v in G.edges()]
+    edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+    edge_attr = torch.tensor(edge_attrs, dtype=torch.float)
+    return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
 def dotbracket_to_forgi_graph(dotbracket):
     bulge_graph = fgb.BulgeGraph.from_dotbracket(dotbracket)
@@ -96,7 +118,6 @@ def forgi_graph_to_tensor(g):
     data = Data(x=x, edge_index=edge_index)
 
     return data
-
 
 def get_system_info():
     # Operating System
@@ -168,7 +189,6 @@ def log_setup(log_path):
 
     system_info = get_system_info()
     log_information(log_path, system_info, "System Info", print_log = True)
-
 
 def log_information(log_path, info_dict, log_name = None, open_type='a', print_log = False):
     """

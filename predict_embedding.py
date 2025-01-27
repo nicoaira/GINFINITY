@@ -7,7 +7,7 @@ import pandas as pd
 from tqdm import tqdm
 import argparse
 from src.model.gin_model import GINModel
-from src.utils import dotbracket_to_forgi_graph, forgi_graph_to_tensor, log_information, log_setup, dotbracket_to_graph, graph_to_tensor
+from src.utils import dotbracket_to_forgi_graph, forgi_graph_to_tensor, log_information, log_setup, dotbracket_to_graph, graph_to_tensor, generate_slices
 import os
 import subprocess
 from pathlib import Path
@@ -26,7 +26,7 @@ def load_trained_model(model_path, device='cpu'):
 # Function to get embedding from graph
 
 
-def get_gin_embedding(model, graph_encoding, structure, device):
+def get_gin_embedding(model, graph_encoding, structure, device, L=None, keep_paired_neighbors=False):
     if graph_encoding == "standard":
         graph = dotbracket_to_graph(structure)
         tg = graph_to_tensor(graph)
@@ -37,9 +37,29 @@ def get_gin_embedding(model, graph_encoding, structure, device):
     tg = tg.to(device)  # Move tensor to the specified device
     model.eval()
     with torch.no_grad():
-        embedding = model.forward_once(tg)
-    return ','.join(f'{x:.6f}' for x in embedding.cpu().numpy().flatten())
-
+        if L is not None:
+            node_embs = model.get_node_embeddings(tg)
+            sorted_nodes = sorted(graph.nodes())
+            n = len(sorted_nodes)
+            if n < L:
+                return [(-1, "")]
+            embeddings = []
+            slices = generate_slices(graph, L, keep_paired_neighbors)
+            for start_idx, subgraph_H in slices:
+                subgraph_nodes = sorted(subgraph_H.nodes())
+                node_indices = [sorted_nodes.index(node) for node in subgraph_nodes]
+                if not node_indices:
+                    continue
+                sub_embs = node_embs[node_indices]
+                batch = torch.zeros(len(sub_embs), dtype=torch.long, device=device)
+                pooled = model.pooling(sub_embs, batch)
+                sub_embedding = model.fc(pooled)
+                embedding_str = ','.join(f'{x:.6f}' for x in sub_embedding.cpu().numpy().flatten())
+                embeddings.append((start_idx, embedding_str))
+            return embeddings if embeddings else [(-1, "")]
+        else:
+            embedding = model.forward_once(tg)
+            return [(None, ','.join(f'{x:.6f}' for x in embedding.cpu().numpy().flatten()))]
 
 # Function to validate dot-bracket structure
 def validate_structure(structure):
@@ -52,12 +72,16 @@ def validate_structure(structure):
 
 # Function to generate embeddings for a single row
 def generate_embedding_for_row(args):
-    idx, row, model, structure_column, device, graph_encoding = args
+    idx, row, model, structure_column, device, graph_encoding, subgraphs, L, keep_paired_neighbors = args
     
     structure = row[structure_column]
     validate_structure(structure)
-    embedding = get_gin_embedding(model, graph_encoding, structure, device)
-    return idx, embedding
+    if subgraphs:
+        emb_list = get_gin_embedding(model, graph_encoding, structure, device, L, keep_paired_neighbors)
+        return [(idx, start, emb) for (start, emb) in emb_list]
+    else:
+        emb = get_gin_embedding(model, graph_encoding, structure, device)
+        return [(idx, None, emb)]
 
 # Main function to generate embeddings from CSV or TSV
 
@@ -69,6 +93,9 @@ def generate_embeddings(
         log_path,
         structure_column,
         device='cpu',
+        subgraphs=False,
+        L=None,
+        keep_paired_neighbors=False,
         num_workers=4
 ):
     # Load the trained model once - simplified as parameters are loaded from checkpoint
@@ -79,18 +106,26 @@ def generate_embeddings(
     embeddings = [None] * len(input_df)
 
     # Prepare arguments for multiprocessing
-    args_list = [(idx, row, model, structure_column, device, graph_encoding) for idx, row in input_df.iterrows()]
+    args_list = [(idx, row, model, structure_column, device, graph_encoding, subgraphs, L, keep_paired_neighbors) for idx, row in input_df.iterrows()]
 
-    # Use multiprocessing to generate embeddings
+    results = []
     with Pool(num_workers) as pool:
-        for idx, embedding in tqdm(pool.imap_unordered(generate_embedding_for_row, args_list), total=len(input_df), desc="Processing Embeddings"):
-            embeddings[idx] = embedding
+        for result in tqdm(pool.imap_unordered(generate_embedding_for_row, args_list), total=len(input_df), desc="Processing Embeddings"):
+            results.extend(result)
 
-    # Add the embeddings to the DataFrame
-    input_df['embedding_vector'] = embeddings
+    # Create an output DataFrame with one entry per subgraph
+    new_rows = []
+    for (orig_idx, window_start, emb) in results:
+        # Skip out-of-bounds indices
+        if orig_idx < 0 or orig_idx >= len(input_df):
+            continue
+        this_row_dict = input_df.iloc[orig_idx].to_dict()
+        this_row_dict['window_start'] = window_start
+        this_row_dict['embedding_vector'] = emb
+        new_rows.append(this_row_dict)
 
-    # Save the output TSV
-    input_df.to_csv(output_path, sep='\t', index=False)
+    output_df = pd.DataFrame(new_rows)
+    output_df.to_csv(output_path, sep='\t', index=False)
     print(f"Embeddings saved to {output_path}")
     save_log = {
         "Embeddings saved path": output_path
@@ -156,6 +191,12 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help='Device to run the model on (default: "cuda" if available, otherwise "cpu").')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of worker processes to use for multiprocessing (default: 4).')
+    parser.add_argument('--subgraphs', action='store_true',
+                        help='Generate subgraph embeddings instead of whole graph embeddings.')
+    parser.add_argument('--L', type=int,
+                        help='Window length for subgraph generation (required if --subgraphs).')
+    parser.add_argument('--keep_paired_neighbors', action='store_true',
+                        help='Include paired neighbors in subgraphs.')
     args = parser.parse_args()
 
     # Validate the header argument
@@ -204,6 +245,9 @@ if __name__ == "__main__":
         log_path,
         structure_column,
         device=device,
+        subgraphs=args.subgraphs,
+        L=args.L,
+        keep_paired_neighbors=args.keep_paired_neighbors,
         num_workers=args.num_workers
     )
 

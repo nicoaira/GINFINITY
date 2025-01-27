@@ -84,22 +84,20 @@ class GINModel(nn.Module):
             
         torch.save(checkpoint, path)
 
-    def forward_once(self, data):
+    def get_node_embeddings(self, data):
         x, edge_index, batch = data.x, data.edge_index, data.batch
-
-        # Pass through GIN convolution layer
-        for i, conv in enumerate(self.convs):
+        for conv in self.convs:
             x = conv(x, edge_index)
-            #x = self.dropout(x)
+        # Return node-level embedding
+        return x
 
-        # Pooling for graph-level embedding
-        x = self.pooling(x, batch)
-        #x = self.dropout(x)
+    def pool_and_project(self, x, batch):
+        x_pooled = self.pooling(x, batch)
+        return self.fc(x_pooled)
 
-        # Final projection to embedding space
-        embedding = self.fc(x)
-
-        return embedding
+    def forward_once(self, data):
+        x = self.get_node_embeddings(data)
+        return self.pool_and_project(x, data.batch)
 
     def forward(self, anchor, positive, negative):
         # Forward pass for each of the triplet inputs
