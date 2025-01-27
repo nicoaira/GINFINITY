@@ -1,4 +1,4 @@
-# GINFINITY: Graph-based RNA Structure Embedding Generator
+# GINFINITY 🚀 : Graph-based RNA Structure Embedding Generator
 
 ## Introduction
 GINFINITY is a tool designed to generate embeddings from RNA secondary structures using a Graph Isomorphism Network (GIN). This project converts RNA secondary structures from dot-bracket notation into graph representations, which are then processed by a GIN model to obtain meaningful embeddings. These embeddings can be used for downstream tasks such as clustering, classification, or other forms of analysis.
