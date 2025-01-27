@@ -1,43 +1,58 @@
 import torch
 import unittest
-from src.model.siamese_model import SiameseResNetLSTM
-from src.utils import pad_and_convert_to_contact_matrix
+from src.model.gin_model import GINModel
+from src.utils import dotbracket_to_graph, graph_to_tensor, dotbracket_to_forgi_graph, forgi_graph_to_tensor
 
-
-
-class TestSiameseModel(unittest.TestCase):
+class TestGINModel(unittest.TestCase):
     def setUp(self):
         # Set up model and dummy data for testing
-        self.input_channels = 1
         self.hidden_dim = 256
-        self.lstm_layers = 1
-        self.max_len = 641
+        self.output_dim = 128
+        self.gin_layers = 2
         self.device = 'cpu'
 
-        # Instantiate the model
-        self.model = SiameseResNetLSTM(input_channels=self.input_channels, hidden_dim=self.hidden_dim, lstm_layers=self.lstm_layers)
-        self.model.to(self.device)
-        self.model.eval()
-
+        # Instantiate both standard and forgi models
+        self.standard_model = GINModel(hidden_dim=self.hidden_dim, output_dim=self.output_dim, 
+                                     graph_encoding="standard", gin_layers=self.gin_layers)
+        self.forgi_model = GINModel(hidden_dim=self.hidden_dim, output_dim=self.output_dim, 
+                                   graph_encoding="forgi", gin_layers=self.gin_layers)
+        
         # Example dot-bracket structure
         self.dot_bracket_structure = "((((...))))...((((....))))"
 
-    def test_pad_and_convert_to_contact_matrix(self):
-        # Test if the contact matrix is generated correctly
-        contact_matrix = pad_and_convert_to_contact_matrix(self.dot_bracket_structure, self.max_len)
-        self.assertEqual(contact_matrix.shape, (self.max_len, self.max_len))
+    def test_standard_graph_conversion(self):
+        # Test if the standard graph conversion works
+        graph = dotbracket_to_graph(self.dot_bracket_structure)
+        tensor_data = graph_to_tensor(graph)
+        self.assertIsNotNone(tensor_data.x)
+        self.assertIsNotNone(tensor_data.edge_index)
 
-    def test_model_forward_once(self):
-        # Test if the model generates an embedding without errors
-        contact_matrix = pad_and_convert_to_contact_matrix(self.dot_bracket_structure, self.max_len)
-        contact_tensor = torch.tensor(contact_matrix, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(self.device)  # Shape: (1, 1, max_len, max_len)
+    def test_forgi_graph_conversion(self):
+        # Test if the forgi graph conversion works
+        graph = dotbracket_to_forgi_graph(self.dot_bracket_structure)
+        tensor_data = forgi_graph_to_tensor(graph)
+        self.assertIsNotNone(tensor_data.x)
+        self.assertIsNotNone(tensor_data.edge_index)
+
+    def test_model_forward_standard(self):
+        # Test if the model generates an embedding with standard encoding
+        graph = dotbracket_to_graph(self.dot_bracket_structure)
+        tensor_data = graph_to_tensor(graph)
         
         with torch.no_grad():
-            embedding = self.model.forward_once(contact_tensor)
+            embedding = self.standard_model.forward_once(tensor_data)
             
-        # Ensure the output is of expected shape (256,)
-        self.assertEqual(embedding.shape, torch.Size([1, self.hidden_dim]))
+        self.assertEqual(embedding.shape, torch.Size([1, self.output_dim]))
 
+    def test_model_forward_forgi(self):
+        # Test if the model generates an embedding with forgi encoding
+        graph = dotbracket_to_forgi_graph(self.dot_bracket_structure)
+        tensor_data = forgi_graph_to_tensor(graph)
+        
+        with torch.no_grad():
+            embedding = self.forgi_model.forward_once(tensor_data)
+            
+        self.assertEqual(embedding.shape, torch.Size([1, self.output_dim]))
 
 if __name__ == '__main__':
     unittest.main()

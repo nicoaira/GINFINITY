@@ -2,20 +2,18 @@
 
 ## Overview
 
-This script is designed for training deep learning models to generate embeddings from RNA secondary structures. It supports two types of models: **Siamese ResNet-LSTM** and **GIN (Graph Isomorphism Network)**. The script includes data preprocessing, training with early stopping, and metadata logging.
+This script trains a Graph Isomorphism Network (GIN) model to generate embeddings from RNA secondary structures. The script includes data preprocessing, training with early stopping, and metadata logging.
 
 ---
 
 ## Features
 
-- **Model Types**:
-  - Siamese ResNet-LSTM for sequence-based RNA embedding.
-  - GIN for graph-based RNA embedding.
-- **Early Stopping**: Stops training if the validation loss does not improve for a specified number of epochs.
-- **Triplet Loss**: Utilizes triplet loss for training embeddings.
-- **Data Validation**: Removes invalid RNA secondary structures based on dot-bracket notation.
-- **Logging**: Tracks training progress, parameters, and execution time.
-- **Device Support**: Automatically uses GPU if available.
+- **GIN Model**: Graph-based RNA embedding with configurable layers and encoding
+- **Early Stopping**: Stops training if validation loss doesn't improve
+- **Triplet Loss**: Uses triplet loss for training embeddings
+- **Data Validation**: Removes invalid RNA secondary structures
+- **Logging**: Tracks training progress, parameters, and execution time
+- **Device Support**: Automatically uses GPU if available
 
 ---
 
@@ -46,9 +44,7 @@ Place the following modules in the `src/` directory:
 - `early_stopping.py`: Implements early stopping logic.
 - `gin_rna_dataset.py`: Dataset class for GIN models.
 - `model/gin_model.py`: GIN model definition.
-- `model/siamese_model.py`: Siamese ResNet-LSTM model definition.
 - `triplet_loss.py`: Implements triplet loss function.
-- `triplet_rna_dataset.py`: Dataset class for Siamese models.
 - `utils.py`: Utility functions like logging and validation.
 
 ---
@@ -60,23 +56,26 @@ Place the following modules in the `src/` directory:
 Run the script using the following arguments:
 
 ```bash
-python train_script.py --input_path <path_to_csv> --model_type <siamese|gin> [options]
+python train_script.py --input_path <path_to_csv> [options]
 ```
 
 #### Required Arguments
 - `--input_path`: Path to the CSV/TSV file containing RNA secondary structures with `structure_A`, `structure_P`, and `structure_N` columns.
-- `--model_type`: Model type (`siamese` or `gin`).
 
 #### Optional Arguments
-- `--model_id`: Identifier for the model (default: `siamese_model`).
-- `--graph_encoding`: Encoding for GIN model (`standard` or `forgi`). Ignored for Siamese models (default: `standard`).
+- `--model_id`: Identifier for the model (default: `gin_model`).
+- `--graph_encoding`: Encoding for GIN model (`standard` or `forgi`) (default: `standard`).
 - `--hidden_dim`: Hidden dimension size for the model (default: `256`).
 - `--output_dim`: Output embedding size for GIN model (default: `128`).
 - `--batch_size`: Batch size for training and validation (default: `100`).
 - `--num_epochs`: Number of epochs for training (default: `10`).
 - `--patience`: Patience for early stopping (default: `5`).
+- `--min_delta`: Minimum validation loss decrease to qualify as improvement (default: `0.001`).
 - `--lr`: Learning rate for the optimizer (default: `0.001`).
 - `--gin_layers`: Number of GIN layers (default: `1`).
+- `--num_workers`: Number of worker threads for data loading (default: CPU count/2).
+- `--save_best_weights`: Save best model weights (default: `True`).
+- `--device`: Training device (`cuda` or `cpu`).
 
 ---
 
@@ -99,16 +98,10 @@ The input file should be a CSV/TSV with the following columns:
 
 ## Example
 
-To train a Siamese model:
-
-```bash
-python train_script.py --input_path data/rna_structures.csv --model_type siamese --hidden_dim 256 --batch_size 64
-```
-
 To train a GIN model:
 
 ```bash
-python train_script.py --input_path data/rna_structures.csv --model_type gin --hidden_dim 128 --gin_layers 2
+python train_script.py --input_path data/rna_structures.csv --hidden_dim 128 --gin_layers 2
 ```
 
 ---
@@ -120,18 +113,23 @@ python train_script.py --input_path data/rna_structures.csv --model_type gin --h
    - Splits data into training and validation sets.
 
 2. **Model Initialization**:
-   - Creates the specified model (Siamese or GIN).
+   - Creates the GIN model.
    - Initializes the optimizer and loss function.
 
-3. **Training**:
-   - Trains the model for a specified number of epochs or until early stopping is triggered.
-   - Logs progress after each epoch.
+3. **Training Loop**:
+   - Trains the model with early stopping monitoring.
+   - Early stopping triggers when validation loss improvement is less than `min_delta` for `patience` epochs.
+   - Saves best model weights when validation loss improves significantly.
+   - Logs detailed progress including loss values and early stopping status.
 
 4. **Model Saving**:
-   - Saves the model and optimizer states to a checkpoint file.
+   - Saves the best model state achieved during training.
+   - Records training metadata and parameters.
 
 5. **Logging**:
-   - Logs training parameters, loss metrics, and execution time.
+   - Logs training parameters and configuration.
+   - Tracks early stopping parameters and decisions.
+   - Records loss metrics and execution time.
 
 ---
 

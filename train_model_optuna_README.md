@@ -1,16 +1,13 @@
-# README for Hyperparameter Optimization Script
+# README for GIN Model Hyperparameter Optimization
 
 ## Overview
 
-This script performs **hyperparameter optimization** for training models that generate embeddings from RNA secondary structures. It uses **Optuna**, a state-of-the-art hyperparameter optimization framework, to minimize validation loss by tuning hyperparameters. The script supports two model types: **Siamese ResNet-LSTM** and **GIN (Graph Isomorphism Network)**.
-
----
+This script performs hyperparameter optimization for training Graph Isomorphism Network (GIN) models that generate embeddings from RNA secondary structures. It uses Optuna to minimize validation loss by tuning the model's hyperparameters.
 
 ## Features
 
-- **Model Support**:
-  - **Siamese ResNet-LSTM**: Sequence-based RNA embeddings.
-  - **GIN**: Graph-based RNA embeddings with `standard` or `forgi` graph encoding.
+- **GIN Model Optimization**: Tune parameters for graph-based RNA embeddings
+- **Graph Encoding Options**: Support for 'standard' and 'forgi' encodings
 - **Hyperparameter Optimization**: Optimizes:
   - Hidden dimension size
   - Output dimension size
@@ -51,12 +48,12 @@ For `torch_geometric`, follow the [installation guide](https://pytorch-geometric
 Run the script as follows:
 
 ```bash
-python optimize_hyperparameters.py --input_path <path_to_input_file> --model_type <siamese|gin> [options]
+python optimize_hyperparameters.py --input_path <path_to_input_file> --model_type <gin> [options]
 ```
 
 #### **Required Arguments**
 - `--input_path`: Path to the input CSV/TSV file containing RNA secondary structures with `structure_A`, `structure_P`, and `structure_N` columns.
-- `--model_type`: Model type to use (`siamese` or `gin`).
+- `--model_type`: Model type to use (`gin`).
 
 #### **Optional Arguments**
 - `--optimisation_id`: Identifier for the optimization run (default: `gin_optimisation`).
@@ -94,11 +91,6 @@ The input file must be a CSV/TSV with columns `structure_A`, `structure_P`, and 
 ---
 
 ## Example Commands
-
-### Optimize a Siamese Model
-```bash
-python optimize_hyperparameters.py --input_path data/rna_structures.csv --model_type siamese --n_trials 100
-```
 
 ### Optimize a GIN Model with Fixed Hyperparameters
 ```bash

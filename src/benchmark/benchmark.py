@@ -57,11 +57,10 @@ def get_time(timezone='Europe/Madrid'):
     formatted_time = geo_time.strftime('-%y%m%d-%H%M%SS')
     return formatted_time
 
-def get_embeddings(embeddings_script,  # Changed from model_script
+def get_embeddings(embeddings_script,
                    sampled_rnas_path,
                    emb_output_path,
                    model_weights_path,
-                   model_type,
                    gin_layers,
                    graph_encoding,
                    hidden_dim,
@@ -84,8 +83,6 @@ def get_embeddings(embeddings_script,  # Changed from model_script
         Path where the embeddings output file will be saved.
     model_weights_path : str
         Path to the model weights.
-    model_type: str
-        Model that's being evaluated: siamese or gin
     gin_layers: int
         Optional number of gin layers.
     graph_encoding: str
@@ -116,7 +113,6 @@ def get_embeddings(embeddings_script,  # Changed from model_script
         "--input", sampled_rnas_path,
         "--output", emb_output_path,
         "--model_path", model_weights_path,
-        "--model_type", model_type,
         "--hidden_dim", str(hidden_dim),
         "--output_dim", str(output_dim),
         "--header", str(header),
@@ -580,7 +576,6 @@ def run_benchmark(embeddings_script,  # Changed from model_script
                   save_embeddings,
                   emb_output_path,
                   model_weights_path,
-                  model_type,
                   gin_layers,
                   graph_encoding,
                   hidden_dim,
@@ -727,7 +722,6 @@ def run_benchmark(embeddings_script,  # Changed from model_script
             sampled_rnas_path=embedding_input_path,
             emb_output_path=curr_emb_output_path,
             model_weights_path=model_weights_path,
-            model_type=model_type,
             gin_layers=gin_layers,
             graph_encoding=graph_encoding,
             hidden_dim=hidden_dim,
@@ -894,15 +888,13 @@ if __name__ == "__main__":
     parser.add_argument('--no-log', dest='no_log', action='store_true',
                         help='If set, no log file will be created.')
     
-    parser.add_argument('--model_type', type=str, default='siamese', required=True, choices=['siamese', 'gin'], help="Type of model to use: 'siamese' or 'gin'.")
-    
-    parser.add_argument('--gin_layers', type=int, help='Number of gin layers.')
+    parser.add_argument('--gin_layers', type=int, required=True, help='Number of gin layers.')
 
-    parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard', help='Encoding to use for the transformation to graph. Only used in case of gin modeling')
+    parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard', help='Encoding to use for the transformation to graph.')
 
     parser.add_argument('--hidden_dim', type=int, default=256, help='Hidden dimension size for the model.')
 
-    parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model (ignored for siamese).')
+    parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model.')
 
     parser.add_argument('--num_workers', type=int, default=4,
                         help='Number of worker processes for parallel processing. Default: 4')
@@ -949,7 +941,6 @@ if __name__ == "__main__":
         save_embeddings=args.save_embeddings,
         emb_output_path=args.emb_output_path,
         model_weights_path=args.model_path,
-        model_type=args.model_type,
         gin_layers=args.gin_layers,
         graph_encoding=args.graph_encoding,
         hidden_dim=args.hidden_dim,

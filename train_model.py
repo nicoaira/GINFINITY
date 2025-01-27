@@ -2,7 +2,6 @@ import os
 import torch
 from torch import optim
 from torch_geometric.loader import DataLoader as GeoDataLoader
-from torch.utils.data import DataLoader as TorchDataLoader
 from sklearn.model_selection import train_test_split
 import pandas as pd
 import argparse
@@ -10,9 +9,7 @@ from tqdm import tqdm
 from src.early_stopping import EarlyStopping
 from src.gin_rna_dataset import GINRNADataset
 from src.model.gin_model import GINModel
-from src.model.siamese_model import SiameseResNetLSTM
 from src.triplet_loss import TripletLoss
-from src.triplet_rna_dataset import TripletRNADataset
 from src.utils import is_valid_dot_bracket, log_information, log_setup
 import time
 
@@ -70,27 +67,30 @@ def train_model_with_early_stopping(
         criterion,
         num_epochs,
         patience,
+        min_delta,  # Added parameter
         device,
         log_path,
-        save_best_weights=True  # New argument with default value
+        save_best_weights=True
 ):
     """
-    Train either a GIN model or a Siamese model with early stopping.
-
+    Train a GIN model with early stopping.
+    
     Args:
-        model (nn.Module): The model to be trained.
-        train_loader (DataLoader): The DataLoader for training data.
-        val_loader (DataLoader): The DataLoader for validation data.
-        optimizer (torch.optim.Optimizer): The optimizer.
-        criterion (nn.Module): The loss function.
-        num_epochs (int): Number of epochs for training.
-        patience (int): Early stopping patience.
-        device (str): Device to use ('cuda' or 'cpu').
+        # ...existing args...
+        min_delta (float): Minimum change in validation loss to qualify as improvement
     """
     model.to(device)
-    early_stopping = EarlyStopping(patience=patience, min_delta=0.001)
+    early_stopping = EarlyStopping(patience=patience, min_delta=min_delta)
     best_val_loss = float('inf')
     best_model_state_dict = None
+
+    early_stopping_params = {
+        "Early Stopping Parameters": {
+            "patience": patience,
+            "min_delta": min_delta
+        }
+    }
+    log_information(log_path, early_stopping_params)
 
     for epoch in range(num_epochs):
         # Training phase
@@ -121,21 +121,24 @@ def train_model_with_early_stopping(
                 val_loss += loss.item()
                 progress_bar_val.set_postfix({"Val Loss": val_loss / (i + 1)})
 
+        avg_val_loss = val_loss / len(val_loader)
         epoch_log = {
             "Epoch": f"{epoch + 1}/{num_epochs}",
             "Training Loss": f"{running_loss / len(train_loader)}",
-            "Validation Loss": f"{val_loss / len(val_loader)}"
+            "Validation Loss": f"{avg_val_loss}",
+            "Best Validation Loss": f"{early_stopping.best_loss}",
+            "Early Stopping Counter": f"{early_stopping.counter}/{patience}"
         }
         log_information(log_path, epoch_log)
-        print(f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {running_loss / len(train_loader)}, Validation Loss: {val_loss / len(val_loader)}")
+        print(f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {running_loss / len(train_loader)}, Validation Loss: {avg_val_loss}")
 
         # Early stopping
-        if val_loss / len(val_loader) < best_val_loss:
-            best_val_loss = val_loss / len(val_loader)
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
             if save_best_weights:
                 best_model_state_dict = model.state_dict()
 
-        early_stopping(val_loss / len(val_loader), model)  # Added model parameter here
+        early_stopping(avg_val_loss, model)  # Added model parameter here
         if early_stopping.early_stop:
             print("Early stopping")
             break
@@ -156,21 +159,21 @@ def train_model_with_early_stopping(
 
 def main():
     # Argument parsing
-    parser = argparse.ArgumentParser(description="Generate embeddings from RNA secondary structures using a trained Siamese or GIN model.")
+    parser = argparse.ArgumentParser(description="Train a GIN model on RNA secondary structures.")
     parser.add_argument('--input_path', type=str, required=True, help='Path to the input CSV/TSV file containing RNA secondary structures.')
-    parser.add_argument('--model_id', type=str, default='siamese_model', help='Model id')
-    parser.add_argument('--model_type', type=str, default='siamese', required=True, choices=['siamese', 'gin'], help="Type of model to use: 'siamese' or 'gin'.")
-    parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard', help='Encoding to use for the transformation to graph. Only used in case of gin modeling')
+    parser.add_argument('--model_id', type=str, default='gin_model', help='Model id')
+    parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard', help='Encoding to use for the transformation to graph')
     parser.add_argument('--hidden_dim', type=int, default=256, help='Hidden dimension size for the model.')
-    parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model (ignored for siamese).')
+    parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model.')
     parser.add_argument('--batch_size', type=int, default=100, help='Batch size for training and validation.')
     parser.add_argument('--num_epochs', type=int, default=10, help='Number of epochs to train the model.')
     parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping.')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for the optimizer.')
     parser.add_argument('--gin_layers', type=int, default=1, help='Number of gin layers.')
-    parser.add_argument('--num_workers', type=int, default=None, help='Number of worker threads for data loading. Defaults to half of available CPU cores if not set.')
+    parser.add_argument('--num_workers', type=int, default=None, help='Number of worker threads for data loading.')
     parser.add_argument('--save_best_weights', type=bool, default=True, help='Save the best model weights during early stopping.')
-    parser.add_argument('--device', type=str, choices=['cuda', 'cpu'], default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training (cuda or cpu).')
+    parser.add_argument('--device', type=str, choices=['cuda', 'cpu'], default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training.')
+    parser.add_argument('--min_delta', type=float, default=0.001, help='Minimum validation loss decrease to qualify as improvement (default: 0.001)')
     args = parser.parse_args()
     
     if args.num_workers is None:
@@ -184,46 +187,22 @@ def main():
 
     device = args.device
 
-    # Instantiate model, criterion, optimizer, and dataset based on model type
-    if args.model_type == "siamese":
-        max_len = max(
-            max(df['structure_A'].str.len()),
-            max(df['structure_P'].str.len()),
-            max(df['structure_N'].str.len())
-        )
-        model = SiameseResNetLSTM(input_channels=1, hidden_dim=args.hidden_dim, lstm_layers=1)
-        train_dataset = TripletRNADataset(train_df, max_len=max_len)
-        val_dataset = TripletRNADataset(val_df, max_len=max_len)
-        train_loader = TorchDataLoader(train_dataset,
-                                        batch_size=args.batch_size,
-                                        shuffle=True,
-                                        pin_memory=True,
-                                        num_workers=args.num_workers)
-        val_loader = TorchDataLoader(val_dataset,
-                                     batch_size=args.batch_size,
-                                     shuffle=False,
-                                     pin_memory=True,
-                                     num_workers=args.num_workers)
-    elif args.model_type == "gin":
-        model = GINModel(hidden_dim=args.hidden_dim, output_dim=args.output_dim, graph_encoding=args.graph_encoding, gin_layers = args.gin_layers)
-        train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding)
-        val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding)
-        train_loader = GeoDataLoader(train_dataset,
-                                     batch_size=args.batch_size,
-                                     shuffle=True,
-                                     pin_memory=True,
-                                     num_workers=args.num_workers)
-        val_loader = GeoDataLoader(val_dataset,
-                                   batch_size=args.batch_size,
-                                   shuffle=True,
-                                   pin_memory=True,
-                                   num_workers=args.num_workers)
-        
+    # Initialize GIN model
+    model = GINModel(hidden_dim=args.hidden_dim, output_dim=args.output_dim, graph_encoding=args.graph_encoding, gin_layers=args.gin_layers)
+    train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding)
+    val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding)
+    train_loader = GeoDataLoader(train_dataset,
+                                batch_size=args.batch_size,
+                                shuffle=True,
+                                pin_memory=True,
+                                num_workers=args.num_workers)
+    val_loader = GeoDataLoader(val_dataset,
+                              batch_size=args.batch_size,
+                              shuffle=True,
+                              pin_memory=True,
+                              num_workers=args.num_workers)
 
-    # Set up criterion
     criterion = TripletLoss(margin=1.0)
-
-    # Set up optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     start_time = time.time()
@@ -237,18 +216,16 @@ def main():
     training_params = {
         "train_data_path": dataset_path,
         "train_data_samples": df.shape[0],
-        "model_type": args.model_type,
         "hidden_dim": args.hidden_dim,
         "output_dim": args.output_dim,
         "batch_size": args.batch_size,
         "num_epochs": args.num_epochs,
         "patience": args.patience,
         "lr": args.lr,
-        "criterion": "TripletLoss"
+        "criterion": "TripletLoss",
+        "gin_layers": args.gin_layers,
+        "graph_encoding": args.graph_encoding
     }
-    if args.model_type == "gin":
-        training_params["gin_layers"] = args.gin_layers
-        training_params["graph_encoding"] = args.graph_encoding
 
     log_information(log_path, training_params, "Training params")
     
@@ -262,6 +239,7 @@ def main():
         criterion,
         num_epochs=args.num_epochs,
         patience=args.patience,
+        min_delta=args.min_delta,  # Added parameter
         device=device,
         log_path=log_path,
         save_best_weights=args.save_best_weights  # Pass the new argument

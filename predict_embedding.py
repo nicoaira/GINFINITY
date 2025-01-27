@@ -7,8 +7,7 @@ import pandas as pd
 from tqdm import tqdm
 import argparse
 from src.model.gin_model import GINModel
-from src.model.siamese_model import SiameseResNetLSTM
-from src.utils import dotbracket_to_forgi_graph, forgi_graph_to_tensor, log_information, log_setup, pad_and_convert_to_contact_matrix, dotbracket_to_graph, graph_to_tensor
+from src.utils import dotbracket_to_forgi_graph, forgi_graph_to_tensor, log_information, log_setup, dotbracket_to_graph, graph_to_tensor
 import os
 import subprocess
 from pathlib import Path
@@ -19,61 +18,24 @@ from torch.multiprocessing import Pool, set_start_method, Manager
 
 def load_trained_model(
         model_path,
-        model_type="siamese",
         graph_encoding="standard",
         hidden_dim=256,
         output_dim=128,
-        lstm_layers=1,
         device='cpu',
-        gin_layers = 1
+        gin_layers=1
 ):
-    # Check if the model file exists, if not provide instruction to download it
-    if not os.path.exists(model_path):
-        print(f"Model file not found at {model_path}. Attempting to download...")
-        model_url = "https://drive.google.com/uc?export=download&id=1ltrAQ2OfmvrRx8cKxeNKK_oebwVRClEW"
-        download_command = f"wget -O {model_path} \"{model_url}\""
-        try:
-            subprocess.run(download_command, shell=True, check=True)
-            print(f"Model downloaded successfully and saved at {model_path}")
-        except subprocess.CalledProcessError:
-            raise FileNotFoundError(
-                f"Failed to download the model file. Please download it manually from {model_url} and place it in the 'saved_model/' directory."
-            )
+    model = GINModel(
+        hidden_dim=hidden_dim,
+        output_dim=output_dim,
+        graph_encoding=graph_encoding,
+        gin_layers=gin_layers
+    )
 
-    # Instantiate the model
-    if model_type == "siamese":
-        model = SiameseResNetLSTM(
-            input_channels=1, hidden_dim=hidden_dim, lstm_layers=lstm_layers)
-    elif model_type == "gin":
-        model = GINModel(
-            hidden_dim=hidden_dim,
-            output_dim=output_dim,
-            graph_encoding=graph_encoding,
-            gin_layers = gin_layers
-        )
-
-    # Load the checkpoint that contains multiple states (epoch, optimizer, and model state_dict)
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
-
-    # Load only the model's state_dict from the checkpoint
     model.load_state_dict(checkpoint['model_state_dict'])
-
-    # Move model to the appropriate device (CPU or GPU)
     model.to(device)
-    model.eval()  # Set the model to evaluation mode
+    model.eval()
     return model
-
-# Function to get embedding from contact matrix
-
-
-def get_siamese_embedding(model, structure, max_len, device='cpu'):
-    contact_matrix = pad_and_convert_to_contact_matrix(structure, max_len)
-    contact_tensor = torch.tensor(contact_matrix, dtype=torch.float32).unsqueeze(
-        0).unsqueeze(0).to(device)  # Shape: (1, 1, max_len, max_len)
-
-    with torch.no_grad():
-        embedding = model.forward_once(contact_tensor)
-    return ','.join(f'{x:.6f}' for x in embedding.cpu().numpy().flatten())
 
 # Function to get embedding from graph
 
@@ -104,14 +66,11 @@ def validate_structure(structure):
 
 # Function to generate embeddings for a single row
 def generate_embedding_for_row(args):
-    idx, row, model, model_type, structure_column, max_len, device, graph_encoding = args
+    idx, row, model, structure_column, device, graph_encoding = args
     
     structure = row[structure_column]
     validate_structure(structure)
-    if model_type == "siamese":
-        embedding = get_siamese_embedding(model, structure, max_len, device=device)
-    elif "gin" in model_type:
-        embedding = get_gin_embedding(model, graph_encoding, structure, device)
+    embedding = get_gin_embedding(model, graph_encoding, structure, device)
     return idx, embedding
 
 # Main function to generate embeddings from CSV or TSV
@@ -120,11 +79,9 @@ def generate_embedding_for_row(args):
 def generate_embeddings(
         input_df,
         output_path,
-        model_type,
         model_path,
         log_path,
         structure_column,
-        max_len=641,
         device='cpu',
         graph_encoding='standard',
         gin_layers=1,
@@ -135,7 +92,6 @@ def generate_embeddings(
     # Load the trained model once
     model = load_trained_model(
         model_path,
-        model_type,
         graph_encoding,
         device=device,
         gin_layers= gin_layers,
@@ -147,7 +103,7 @@ def generate_embeddings(
     embeddings = [None] * len(input_df)
 
     # Prepare arguments for multiprocessing
-    args_list = [(idx, row, model, model_type, structure_column, max_len, device, graph_encoding) for idx, row in input_df.iterrows()]
+    args_list = [(idx, row, model, structure_column, device, graph_encoding) for idx, row in input_df.iterrows()]
 
     # Use multiprocessing to generate embeddings
     with Pool(num_workers) as pool:
@@ -200,7 +156,7 @@ if __name__ == "__main__":
         pass
 
     parser = argparse.ArgumentParser(
-        description="Generate embeddings from RNA secondary structures using a trained Siamese model.")
+        description="Generate embeddings from RNA secondary structures using a trained GIN model.")
     parser.add_argument('--input', type=str, required=True,
                         help='Path to the input CSV/TSV file containing RNA secondary structures.')
     parser.add_argument('--samples', type=int)
@@ -216,20 +172,18 @@ if __name__ == "__main__":
     # Allows the default model_path to be dynamic
     script_directory = Path(__file__).resolve().parent
     default_model_path = script_directory / 'saved_model' / 'ResNet-Secondary.pth'
-    parser.add_argument('--model_path', type=str, default=str(default_model_path),
-                        help=f'Path to the trained model file (default: {default_model_path}).')
-
-    parser.add_argument('--model_type', type=str, choices=['siamese', 'gin'], default='siamese', help='Model type to run (e.g., "siamese" or "gin").')
-
-    parser.add_argument('--gin_layers', type=int, default=1, help='Number of gin layers.')
+    parser.add_argument('--model_path', type=str, required=True,
+                        help='Path to the trained model file.')
 
     parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard',
-                        help='Encoding to use for the transformation to graph. Only used in case of gin modeling')
+                        help='Encoding to use for the transformation to graph.')
+
+    parser.add_argument('--gin_layers', type=int, required=True, help='Number of gin layers.')
 
     parser.add_argument('--header', type=str, default='True',
                         help='Specify whether the input CSV file has a header (default: True). Use "True" or "False".')
     parser.add_argument('--hidden_dim', type=int, default=256, help='Hidden dimension size for the model.')
-    parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model (ignored for siamese).')
+    parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size.')
     parser.add_argument('--device', type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help='Device to run the model on (default: "cuda" if available, otherwise "cpu").')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of worker processes to use for multiprocessing (default: 4).')
@@ -263,7 +217,6 @@ if __name__ == "__main__":
 
     predict_params = {
         "model_path": args.model_path,
-        "model_type": args.model_type,
         "hidden_dim": args.hidden_dim,
         "output_dim": args.output_dim,
         "device": device,
@@ -271,9 +224,8 @@ if __name__ == "__main__":
         "samples_test_data": input_df.shape[0],
         "num_workers": args.num_workers
     }
-    if args.model_type == "gin":
-        predict_params["gin_layers"] = args.gin_layers
-        predict_params["graph_encoding"] = args.graph_encoding
+    predict_params["gin_layers"] = args.gin_layers
+    predict_params["graph_encoding"] = args.graph_encoding
 
     log_information(log_path, predict_params, "Predict params")
     
@@ -282,7 +234,6 @@ if __name__ == "__main__":
     generate_embeddings(
         input_df,
         output_path,
-        args.model_type,
         args.model_path,
         log_path,
         structure_column,

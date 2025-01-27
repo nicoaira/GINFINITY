@@ -1,24 +1,25 @@
-# StrusiNet2: RNA Structure Embedding Generator
+# GINFINITY: Graph-based RNA Structure Embedding Generator
 
 ## Introduction
-StrusiNet2 is a tool designed to generate embeddings from RNA secondary structures using a pre-trained Siamese Neural Network model. This project takes RNA sequences with their secondary structure in dot-bracket notation, processes them into contact matrices, and then feeds them into a neural network to obtain meaningful embeddings. These embeddings can be used for downstream tasks such as clustering, classification, or other forms of analysis.
+GINFINITY is a tool designed to generate embeddings from RNA secondary structures using a Graph Isomorphism Network (GIN). This project converts RNA secondary structures from dot-bracket notation into graph representations, which are then processed by a GIN model to obtain meaningful embeddings. These embeddings can be used for downstream tasks such as clustering, classification, or other forms of analysis.
 
 ## Repository Structure
 The repository contains the following key components:
 
-- **`src/model/siamese_model.py`**: Contains the Siamese neural network definition.
-- **`src/model/utils.py`**: Utility functions for processing RNA data.
-- **`strusinet.py`**: Main script for generating embeddings from RNA secondary structures.
-- **`tsne_embedding_tool.py`**: A script to visualize generated embeddings using t-SNE.
-- **`tests/test_model.py`** and **`tests/test_strusinet.py`**: Unit tests for ensuring the model and the whole embedding generation process work correctly.
+- **`src/model/gin_model.py`**: GIN model implementation
+- **`src/utils.py`**: Utility functions for RNA graph processing
+- **`predict_embedding.py`**: Main script for generating embeddings
+- **`train_model.py`**: Script for training new GIN models
+- **`train_model_optuna.py`**: Hyperparameter optimization script
+- **`src/benchmark/`**: Benchmarking tools and datasets
 
 ## Installation
-To run the StrusiNet2 project, you will need Python and the required dependencies installed.
+To run the GINFINITY project, you will need Python and the required dependencies installed.
 
 ### Step 1: Clone the Repository
 ```sh
-git clone https://github.com/nicoaira/StrusiNet2.git
-cd StrusiNet2
+git clone https://github.com/nicoaira/GINFINITY.git
+cd GINFINITY
 ```
 
 ### Step 2: Set Up the Environment and Install Dependencies
@@ -28,12 +29,12 @@ It is recommended to use a ```conda``` environment to manage dependencies and en
 #### 1. Create a new conda environment:
 
 ```sh
-conda create --name strusi_env python=3.12.7
+conda create --name ginfinity_env python=3.12.7
 ```
 #### 2. Activate the conda environment:
 
 ```sh
-conda activate strusi_env
+conda activate ginfinity_env
 ```
 
 #### 2. Install the dependencies
@@ -55,16 +56,16 @@ Dependencies include:
 Ensure that the versions match those in the `requirements.txt` 
 
 ### Step 3: Download Pre-trained Model
-The pre-trained model file (`ResNet-Secondary.pth`) is not included in this repository due to its size. Please download it using the command below:
+The pre-trained model file (`GIN-Secondary.pth`) sis not included in this repository due to its size. Please download it using the command below:
 
 ```sh
 # Download the model from Google Drive and save it in the 'saved_model' directory
 mkdir -p saved_model
-wget -O saved_model/ResNet-Secondary.pth "https://drive.google.com/uc?export=download&id=1ltrAQ2OfmvrRx8cKxeNKK_oebwVRClEW"
+wget -O saved_model/GIN-Secondary.pth "link-to-be-added"
 ```
 
 ## Usage
-StrusiNet2 can generate embeddings from RNA sequences stored in a CSV file.
+GINFINITY can generate embeddings from RNA sequences stored in a CSV file.
 
 ### Input Format
 The input file should be a CSV containing at least one column with the RNA secondary structure in dot-bracket notation.
@@ -73,7 +74,7 @@ The input file should be a CSV containing at least one column with the RNA secon
 To generate embeddings from an RNA dataset:
 
 ```sh
-python strusinet.py --input example_data/sample_dataset.csv --output example_data/sample_dataset_with_embeddings.tsv
+python predict_embedding.py --input example_data/sample_dataset.csv --output example_data/sample_dataset_with_embeddings.tsv
 ```
 
 **Arguments**:
@@ -81,7 +82,7 @@ python strusinet.py --input example_data/sample_dataset.csv --output example_dat
 - `--output`: Path to save the output TSV file with embeddings.
 - `--structure_column_name`: The column name containing RNA secondary structures (default: 'secondary_structure').
 - `--structure_column_num`: (Optional) Column number of RNA secondary structures (0-indexed). If both column name and number are provided, column number will be ignored.
-- `--model_path`: Path to the trained model file (default: `saved_model/ResNet-Secondary.pth`).
+- `--model_path`: Path to the trained model file (default: `saved_model/GIN-Secondary.pth`).
 - `--device`: Device to run the model on (`cpu` or `cuda`, default: `cpu`).
 - `--header`: Specify whether the input CSV has a header row (`True` or `False`, default: `True`).
 
@@ -89,7 +90,7 @@ python strusinet.py --input example_data/sample_dataset.csv --output example_dat
 If your CSV doesn't have a header and the secondary structure is in the 6th column:
 
 ```sh
-python strusinet.py --input example_data/sample_dataset.csv --output example_data/sample_dataset_with_embeddings.tsv --structure_column_num 6 --header False --device cuda
+python predict_embedding.py --input example_data/sample_dataset.csv --output example_data/sample_dataset_with_embeddings.tsv --structure_column_num 6 --header False --device cuda
 ```
 
 ## Running the t-SNE Embedding Tool

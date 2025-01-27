@@ -18,6 +18,8 @@ class GINModel(nn.Module):
                     nn.Linear(hidden_dim, hidden_dim)
                 )
             else:
+                #TODO: allow hidden dims of different sizes for each layer. 
+                # Change hidden_dim by hidden_dims parameter with a list of size == gin_layers
                 net = nn.Sequential(
                     nn.Linear(hidden_dim, hidden_dim),
                     nn.ReLU(),

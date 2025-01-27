@@ -1,22 +1,16 @@
-# README for RNA Embedding Prediction Script
+# RNA Embedding Prediction Script
 
 ## Overview
 
-This script predicts RNA embeddings using a pre-trained deep learning model. It supports two model types: **Siamese ResNet-LSTM** and **GIN (Graph Isomorphism Network)**. The script processes RNA secondary structures (in dot-bracket notation) from an input CSV/TSV file, computes embeddings, and saves the results to an output file.
-
----
+This script generates embeddings from RNA secondary structures using a trained GIN (Graph Isomorphism Network) model. It processes RNA structures in dot-bracket notation and outputs their vector representations.
 
 ## Features
 
-- **Model Types**:
-  - **Siamese ResNet-LSTM**: Sequence-based RNA embedding.
-  - **GIN**: Graph-based RNA embedding using `standard` or `forgi` graph encoding.
-- **Input Validation**: Ensures RNA structures are valid dot-bracket strings.
-- **Logging**: Tracks runtime parameters, progress, and execution time.
-- **Device Support**: Runs on GPU if available, otherwise defaults to CPU.
-- **Dynamic Model Loading**: Automatically downloads the pre-trained model if not found locally.
-
----
+- **GIN Model**: Graph-based RNA embedding
+- **Graph Encoding Options**: `standard` or `forgi` encoding
+- **Input Validation**: Validates dot-bracket structures
+- **Parallel Processing**: Multi-worker embedding generation
+- **Logging**: Records parameters and execution details
 
 ## Prerequisites
 
@@ -45,13 +39,13 @@ For GIN model support, ensure `torch_geometric` is installed following the [inst
 Run the script as follows:
 
 ```bash
-python predict_embeddings.py --input <path_to_input_file> --model_type <siamese|gin> [options]
+python predict_embeddings.py --input <path_to_input_file> --model_type gin [options]
 ```
 
 #### Required Arguments
 
 - `--input`: Path to the input CSV/TSV file containing RNA secondary structures.
-- `--model_type`: Model type (`siamese` or `gin`).
+- `--model_type`: Model type (`gin`).
 
 #### Optional Arguments
 
@@ -65,7 +59,7 @@ python predict_embeddings.py --input <path_to_input_file> --model_type <siamese|
 - `--gin_layers`: Number of GIN layers (default: `1`).
 - `--graph_encoding`: Graph encoding type for GIN model (`standard` or `forgi`, default: `standard`).
 - `--hidden_dim`: Hidden dimension size for the model (default: `256`).
-- `--output_dim`: Output embedding size for the GIN model (ignored for Siamese, default: `128`).
+- `--output_dim`: Output embedding size for the GIN model (default: `128`).
 
 ---
 
@@ -96,12 +90,6 @@ The input file must be a CSV/TSV with one column containing RNA secondary struct
 
 ## Example
 
-### Predict Embeddings Using a Siamese Model
-
-```bash
-python predict_embeddings.py --input data/rna_structures.csv --model_type siamese --structure_column_name secondary_structure
-```
-
 ### Predict Embeddings Using a GIN Model
 
 ```bash
@@ -111,7 +99,7 @@ python predict_embeddings.py --input data/rna_structures.csv --model_type gin --
 ### Process a Random Sample of 100 Structures
 
 ```bash
-python predict_embeddings.py --input data/rna_structures.csv --samples 100 --model_type siamese
+python predict_embeddings.py --input data/rna_structures.csv --samples 100 --model_type gin
 ```
 
 ---
@@ -126,7 +114,6 @@ python predict_embeddings.py --input data/rna_structures.csv --samples 100 --mod
    - Ensures valid RNA structures using dot-bracket notation.
 
 3. **Generate Embeddings**:
-   - **Siamese Model**: Converts RNA structures to contact matrices and predicts embeddings.
    - **GIN Model**: Converts RNA structures to graphs (`standard` or `forgi`) and predicts embeddings.
 
 4. **Save Results**:

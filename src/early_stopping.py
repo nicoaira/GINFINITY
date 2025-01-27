@@ -1,30 +1,32 @@
 class EarlyStopping:
-    def __init__(self, patience=5, min_delta=0):
+    def __init__(self, patience=5, min_delta=0.001):
         """
         Early stops the training if validation loss doesn't improve after a given patience.
         Args:
             patience (int): How long to wait after last time validation loss improved.
-            min_delta (float): Minimum change in the monitored quantity to qualify as an improvement.
+            min_delta (float): Minimum change in monitored quantity to qualify as improvement.
+                            A decrease of more than min_delta counts as improvement.
         """
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
         self.best_loss = None
         self.early_stop = False
-        self.best_state_dict = None 
+        self.best_state_dict = None
 
     def __call__(self, val_loss, model):
         if self.best_loss is None:
             self.best_loss = val_loss
-            self.best_state_dict = model.state_dict().copy()  # Save initial state
-        elif val_loss > self.best_loss - self.min_delta:
+            self.best_state_dict = model.state_dict().copy()
+        elif val_loss < self.best_loss - self.min_delta:  # Changed comparison
+            # Significant improvement found
+            self.best_loss = val_loss
+            self.best_state_dict = model.state_dict().copy()
+            self.counter = 0  # Reset counter on improvement
+        else:
             self.counter += 1
             if self.counter >= self.patience:
                 self.early_stop = True
-        else:
-            self.best_loss = val_loss
-            self.best_state_dict = model.state_dict().copy()  # Save best state
-            self.counter = 0
 
     def restore_best_weights(self, model):
         if self.best_state_dict is not None:
