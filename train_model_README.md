@@ -1,8 +1,8 @@
-# README for RNA Structure Embedding Training Script
+# RNA Structure Embedding Training Script
 
 ## Overview
 
-This script trains a Graph Isomorphism Network (GIN) model to generate embeddings from RNA secondary structures. The script includes data preprocessing, training with early stopping, and metadata logging.
+This script trains a Graph Isomorphism Network (GIN) model to generate embeddings from RNA secondary structures. The script includes data preprocessing, training with early stopping, and automatic metadata logging.
 
 ---
 
@@ -103,8 +103,6 @@ To train a GIN model:
 ```bash
 python train_script.py --input_path data/rna_structures.csv --hidden_dim 128 --gin_layers 2
 ```
-
----
 
 ## Training Flow
 

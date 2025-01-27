@@ -36,19 +36,12 @@ This script runs the benchmark on the prepared datasets, performing:
 ## Parameters
 
 ### Required Parameters
-- `--model-path`: Path to the trained GIN model weights
-- `--gin_layers`: Number of GIN layers in the model
-
-### Model Configuration
-- `--embeddings-script`: Path to embeddings script (default: "./predict_embedding.py")
-- `--hidden_dim`: Hidden dimension size (default: 256)
-- `--output_dim`: Embedding size (default: 128)
-- `--graph_encoding`: Graph encoding type ('standard' or 'forgi', default: 'standard')
+- `--model-path`: Path to the trained model checkpoint (contains weights and metadata)
 
 ### Input/Output Configuration
+- `--embeddings-script`: Path to embeddings script (default: "./predict_embedding.py")
 - `--benchmark-metadata`: Benchmark dataset info JSON (default: 'benchmark_datasets.json')
 - `--datasets-dir`: Benchmark datasets directory (default: 'data/benchmark_datasets')
-- `--benchmark-datasets`: Benchmark dataset specifications
 - `--results-path`: Results save path (default: "./benchmarking_results")
 - `--emb-output-path`: Embeddings output path (default: 'benchmarking_results/embeddings')
 

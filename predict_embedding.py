@@ -16,24 +16,10 @@ from torch.multiprocessing import Pool, set_start_method, Manager
 # Load the trained model
 
 
-def load_trained_model(
-        model_path,
-        graph_encoding="standard",
-        hidden_dim=256,
-        output_dim=128,
-        device='cpu',
-        gin_layers=1
-):
-    model = GINModel(
-        hidden_dim=hidden_dim,
-        output_dim=output_dim,
-        graph_encoding=graph_encoding,
-        gin_layers=gin_layers
-    )
-
-    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.to(device)
+def load_trained_model(model_path, device='cpu'):
+    """Load trained model from checkpoint with metadata"""
+    model = GINModel.load_from_checkpoint(model_path, device)
+    model.to(device)  # Move model to the specified device
     model.eval()
     return model
 
@@ -48,7 +34,7 @@ def get_gin_embedding(model, graph_encoding, structure, device):
         graph = dotbracket_to_forgi_graph(structure)
         tg = forgi_graph_to_tensor(graph)
 
-    tg.to(device)
+    tg = tg.to(device)  # Move tensor to the specified device
     model.eval()
     with torch.no_grad():
         embedding = model.forward_once(tg)
@@ -83,21 +69,11 @@ def generate_embeddings(
         log_path,
         structure_column,
         device='cpu',
-        graph_encoding='standard',
-        gin_layers=1,
-        hidden_dim=256,
-        output_dim=128,
         num_workers=4
 ):
-    # Load the trained model once
-    model = load_trained_model(
-        model_path,
-        graph_encoding,
-        device=device,
-        gin_layers= gin_layers,
-        hidden_dim=hidden_dim,
-        output_dim=output_dim
-    )
+    # Load the trained model once - simplified as parameters are loaded from checkpoint
+    model = load_trained_model(model_path, device)
+    graph_encoding = model.metadata['graph_encoding']
 
     # Initialize list for storing embeddings
     embeddings = [None] * len(input_df)
@@ -175,15 +151,8 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', type=str, required=True,
                         help='Path to the trained model file.')
 
-    parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard',
-                        help='Encoding to use for the transformation to graph.')
-
-    parser.add_argument('--gin_layers', type=int, required=True, help='Number of gin layers.')
-
     parser.add_argument('--header', type=str, default='True',
                         help='Specify whether the input CSV file has a header (default: True). Use "True" or "False".')
-    parser.add_argument('--hidden_dim', type=int, default=256, help='Hidden dimension size for the model.')
-    parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size.')
     parser.add_argument('--device', type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help='Device to run the model on (default: "cuda" if available, otherwise "cpu").')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of worker processes to use for multiprocessing (default: 4).')
@@ -217,16 +186,13 @@ if __name__ == "__main__":
 
     predict_params = {
         "model_path": args.model_path,
-        "hidden_dim": args.hidden_dim,
-        "output_dim": args.output_dim,
         "device": device,
         "test_data_path": args.input,
         "samples_test_data": input_df.shape[0],
         "num_workers": args.num_workers
     }
-    predict_params["gin_layers"] = args.gin_layers
-    predict_params["graph_encoding"] = args.graph_encoding
-
+    
+    # Model metadata will be logged automatically when loading the model
     log_information(log_path, predict_params, "Predict params")
     
     start_time = time.time()
@@ -238,10 +204,6 @@ if __name__ == "__main__":
         log_path,
         structure_column,
         device=device,
-        graph_encoding=args.graph_encoding,
-        gin_layers=args.gin_layers,
-        hidden_dim=args.hidden_dim,
-        output_dim=args.output_dim,
         num_workers=args.num_workers
     )
 

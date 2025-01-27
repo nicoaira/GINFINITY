@@ -25,35 +25,12 @@ import torch
 from datetime import datetime
 
 def save_model_to_local(model, optimizer, epoch, model_id, log_path):
-    """
-    Save the model's state_dict, optimizer's state_dict, and the current epoch to local,
-    including a timestamp in the file name.
-
-    Args:
-    - model: The PyTorch model to save.
-    - optimizer: The optimizer used during training.
-    - epoch: The current epoch to save.
-    - model_save_path: Path to save the model (without file extension).
-    """
-
+    """Save model checkpoint with metadata"""
     output_path = f"output/{model_id}/{model_id}.pth"
-
-    # Append the timestamp to the file name
-    file_name = output_path
-
-    # Create the checkpoint
-    checkpoint = {
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-    }
-
-    # Save the checkpoint
-    torch.save(checkpoint, file_name)
-    print(f"Model saved to {file_name}")
-
+    model.save_checkpoint(output_path, optimizer, epoch)
+    
     save_log = {
-        "Model saved path": file_name
+        "Model saved path": output_path
     }
     log_information(log_path, save_log)
 
@@ -163,7 +140,7 @@ def main():
     parser.add_argument('--input_path', type=str, required=True, help='Path to the input CSV/TSV file containing RNA secondary structures.')
     parser.add_argument('--model_id', type=str, default='gin_model', help='Model id')
     parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard', help='Encoding to use for the transformation to graph')
-    parser.add_argument('--hidden_dim', type=int, default=256, help='Hidden dimension size for the model.')
+    parser.add_argument('--hidden_dim', type=str, default='256', help='Hidden dimension size(s) for the model. Can be a single number or a comma-separated list of numbers of the same size of gin_layers(e.g. "256,126,256)" .')
     parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model.')
     parser.add_argument('--batch_size', type=int, default=100, help='Batch size for training and validation.')
     parser.add_argument('--num_epochs', type=int, default=10, help='Number of epochs to train the model.')
@@ -176,6 +153,15 @@ def main():
     parser.add_argument('--min_delta', type=float, default=0.001, help='Minimum validation loss decrease to qualify as improvement (default: 0.001)')
     args = parser.parse_args()
     
+    # Process hidden_dim argument
+    try:
+        if ',' in args.hidden_dim:
+            hidden_dim = [int(x.strip()) for x in args.hidden_dim.split(',')]
+        else:
+            hidden_dim = int(args.hidden_dim)
+    except ValueError:
+        raise ValueError("hidden_dim must be an integer or comma-separated list of integers")
+
     if args.num_workers is None:
         args.num_workers = max(1, os.cpu_count() // 2)
 
@@ -187,8 +173,13 @@ def main():
 
     device = args.device
 
-    # Initialize GIN model
-    model = GINModel(hidden_dim=args.hidden_dim, output_dim=args.output_dim, graph_encoding=args.graph_encoding, gin_layers=args.gin_layers)
+    # Initialize GIN model with processed hidden_dim
+    model = GINModel(
+        hidden_dim=hidden_dim,
+        output_dim=args.output_dim,
+        graph_encoding=args.graph_encoding,
+        gin_layers=args.gin_layers
+    )
     train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding)
     val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding)
     train_loader = GeoDataLoader(train_dataset,
@@ -216,7 +207,7 @@ def main():
     training_params = {
         "train_data_path": dataset_path,
         "train_data_samples": df.shape[0],
-        "hidden_dim": args.hidden_dim,
+        "hidden_dims": hidden_dim if isinstance(hidden_dim, list) else [hidden_dim] * args.gin_layers,
         "output_dim": args.output_dim,
         "batch_size": args.batch_size,
         "num_epochs": args.num_epochs,

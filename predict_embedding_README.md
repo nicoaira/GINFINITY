@@ -2,7 +2,7 @@
 
 ## Overview
 
-This script generates embeddings from RNA secondary structures using a trained GIN (Graph Isomorphism Network) model. It processes RNA structures in dot-bracket notation and outputs their vector representations.
+This script generates embeddings from RNA secondary structures using a trained GIN (Graph Isomorphism Network) model. The model parameters and configuration are automatically loaded from the checkpoint metadata.
 
 ## Features
 
@@ -39,13 +39,13 @@ For GIN model support, ensure `torch_geometric` is installed following the [inst
 Run the script as follows:
 
 ```bash
-python predict_embeddings.py --input <path_to_input_file> --model_type gin [options]
+python predict_embeddings.py --input <path_to_input_file> --model_path <path_to_model_checkpoint> [options]
 ```
 
 #### Required Arguments
 
 - `--input`: Path to the input CSV/TSV file containing RNA secondary structures.
-- `--model_type`: Model type (`gin`).
+- `--model_path`: Path to the pre-trained model file.
 
 #### Optional Arguments
 
@@ -55,11 +55,7 @@ python predict_embeddings.py --input <path_to_input_file> --model_type gin [opti
 - `--structure_column_num`: Column index (0-indexed) of RNA secondary structures if no header is present.
 - `--header`: Specify if the input file has a header (`True` or `False`, default: `True`).
 - `--samples`: Number of random samples to process from the input file.
-- `--model_path`: Path to the pre-trained model file (default: `saved_model/ResNet-Secondary.pth`).
-- `--gin_layers`: Number of GIN layers (default: `1`).
-- `--graph_encoding`: Graph encoding type for GIN model (`standard` or `forgi`, default: `standard`).
-- `--hidden_dim`: Hidden dimension size for the model (default: `256`).
-- `--output_dim`: Output embedding size for the GIN model (default: `128`).
+- `--num_workers`: Number of worker processes to use for multiprocessing (default: `4`).
 
 ---
 
@@ -93,13 +89,13 @@ The input file must be a CSV/TSV with one column containing RNA secondary struct
 ### Predict Embeddings Using a GIN Model
 
 ```bash
-python predict_embeddings.py --input data/rna_structures.csv --model_type gin --graph_encoding forgi
+python predict_embeddings.py --input data/rna_structures.csv --model_path saved_model/gin_model.pth
 ```
 
 ### Process a Random Sample of 100 Structures
 
 ```bash
-python predict_embeddings.py --input data/rna_structures.csv --samples 100 --model_type gin
+python predict_embeddings.py --input data/rna_structures.csv --samples 100 --model_path saved_model/gin_model.pth
 ```
 
 ---
@@ -108,7 +104,7 @@ python predict_embeddings.py --input data/rna_structures.csv --samples 100 --mod
 
 1. **Load Model**:
    - Loads the pre-trained model from `--model_path`.
-   - If missing, attempts to download the default model.
+   - The model metadata is automatically loaded from the checkpoint.
 
 2. **Input Validation**:
    - Ensures valid RNA structures using dot-bracket notation.

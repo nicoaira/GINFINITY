@@ -91,3 +91,9 @@ def train_model_with_early_stopping(
 
     # Save the best model
     save_model_to_local(model, optimizer, epoch, model_id, log_path)
+
+def save_model_to_local(model, optimizer, epoch, model_id, log_path):
+    """Save model with metadata to local disk"""
+    save_path = f'saved_model/{model_id}.pth'
+    model.save_checkpoint(save_path, optimizer, epoch)
+    log_information(log_path, {"Model saved": save_path})

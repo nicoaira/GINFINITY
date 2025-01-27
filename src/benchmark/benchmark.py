@@ -1,3 +1,9 @@
+import sys
+import os
+
+# Add the parent directory of 'src' to the system path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+
 import pandas as pd
 import subprocess
 import torch
@@ -6,7 +12,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score, roc_curve
 import argparse
-import os
 from datetime import datetime
 import pytz
 import shutil
@@ -14,9 +19,8 @@ import json
 import re
 import platform
 import time
-import sys
 from multiprocessing import Pool
-
+from src.model.gin_model import GINModel
 def check_device(verbose=False):
     """
     Check if CUDA is available. If it is, return "cuda". Otherwise, return "cpu".
@@ -61,10 +65,6 @@ def get_embeddings(embeddings_script,
                    sampled_rnas_path,
                    emb_output_path,
                    model_weights_path,
-                   gin_layers,
-                   graph_encoding,
-                   hidden_dim,
-                   output_dim,
                    structure_column_name,
                    structure_column_num,
                    header,
@@ -83,10 +83,6 @@ def get_embeddings(embeddings_script,
         Path where the embeddings output file will be saved.
     model_weights_path : str
         Path to the model weights.
-    gin_layers: int
-        Optional number of gin layers.
-    graph_encoding: str
-        Type of gin encoding, forgi or standard
     structure_column_name : str
         Name of the column containing RNA secondary structures, if provided.
     structure_column_num : int
@@ -113,18 +109,10 @@ def get_embeddings(embeddings_script,
         "--input", sampled_rnas_path,
         "--output", emb_output_path,
         "--model_path", model_weights_path,
-        "--hidden_dim", str(hidden_dim),
-        "--output_dim", str(output_dim),
         "--header", str(header),
         "--device", device,
         "--num_workers", str(num_workers)
     ]
-
-    if gin_layers is not None:
-        command.extend(["--gin_layers", str(gin_layers)])
-    
-    if graph_encoding is not None:
-        command.extend(["--graph_encoding", graph_encoding])
 
     if structure_column_name:
         command.extend(["--structure_column_name", structure_column_name])
@@ -568,7 +556,7 @@ def log_information(log_path, info_dict):
         for key, value in info_dict.items():
             f.write(f"{key}: {value}\n")
 
-def run_benchmark(embeddings_script,  # Changed from model_script
+def run_benchmark(embeddings_script,
                   benchmark_datasets,
                   benchmark_metadata,
                   benchmark_metadata_path,
@@ -576,10 +564,6 @@ def run_benchmark(embeddings_script,  # Changed from model_script
                   save_embeddings,
                   emb_output_path,
                   model_weights_path,
-                  gin_layers,
-                  graph_encoding,
-                  hidden_dim,
-                  output_dim,
                   structure_column_name,
                   structure_column_num,
                   header,
@@ -590,29 +574,14 @@ def run_benchmark(embeddings_script,  # Changed from model_script
                   no_save,
                   only_needed_embeddings,
                   no_log,
-                  device='cuda',  # Add device parameter
-                  num_workers=4,  # Add num_workers parameter
-                  distance_batch_size=1000):  # Add new parameter
-    """
-    Main function to run the benchmark with logging support.
+                  device='cuda',
+                  num_workers=4,
+                  distance_batch_size=1000):
+    
+    # Load model to get metadata
+    model = GINModel.load_from_checkpoint(model_weights_path, device)
+    model_metadata = model.metadata
 
-    Logging includes:
-    - Date and time
-    - Command run
-    - Platform characteristics (OS, Python version, GPU)
-    - Datasets used
-    - Timing info for embeddings and distances
-    - Benchmark AUC results
-
-    Parameters
-    ----------
-    embeddings_script, benchmark_datasets, benchmark_metadata, benchmark_metadata_path : str / list
-    datasets_dir : str
-    save_embeddings, skip_barplot, skip_auc_curve, save_distances, no_save, only_needed_embeddings, no_log : bool
-    emb_output_path, model_weights_path, structure_column_name, structure_column_num : various
-    header : bool
-    results_path : str
-    """
     start_time = time.time()
     bm_start_time = get_time(timezone='Europe/Madrid')
 
@@ -722,15 +691,11 @@ def run_benchmark(embeddings_script,  # Changed from model_script
             sampled_rnas_path=embedding_input_path,
             emb_output_path=curr_emb_output_path,
             model_weights_path=model_weights_path,
-            gin_layers=gin_layers,
-            graph_encoding=graph_encoding,
-            hidden_dim=hidden_dim,
-            output_dim=output_dim,
             structure_column_name=structure_column_name,
             structure_column_num=structure_column_num,
             header=header,
-            device=device,  
-            num_workers=num_workers  
+            device=device,
+            num_workers=num_workers
         )
         emb_gen_end = time.time()
 
@@ -782,8 +747,8 @@ def run_benchmark(embeddings_script,  # Changed from model_script
             expected_id=benchmark_id,
             save_distances=save_distances,
             no_save=no_save,
-            num_workers=num_workers,  # Add this parameter
-            batch_size=distance_batch_size  # Pass the batch size parameter
+            num_workers=num_workers,
+            batch_size=distance_batch_size
         )
         dist_end = time.time()
 
@@ -887,14 +852,6 @@ if __name__ == "__main__":
 
     parser.add_argument('--no-log', dest='no_log', action='store_true',
                         help='If set, no log file will be created.')
-    
-    parser.add_argument('--gin_layers', type=int, required=True, help='Number of gin layers.')
-
-    parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard', help='Encoding to use for the transformation to graph.')
-
-    parser.add_argument('--hidden_dim', type=int, default=256, help='Hidden dimension size for the model.')
-
-    parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model.')
 
     parser.add_argument('--num_workers', type=int, default=4,
                         help='Number of worker processes for parallel processing. Default: 4')
@@ -941,11 +898,7 @@ if __name__ == "__main__":
         save_embeddings=args.save_embeddings,
         emb_output_path=args.emb_output_path,
         model_weights_path=args.model_path,
-        gin_layers=args.gin_layers,
-        graph_encoding=args.graph_encoding,
-        hidden_dim=args.hidden_dim,
-        output_dim=args.output_dim,
-        structure_column_name=args.structure_column_name, 
+        structure_column_name=args.structure_column_name,
         structure_column_num=args.structure_column_num,
         header=args.header,
         skip_barplot=args.skip_barplot,
