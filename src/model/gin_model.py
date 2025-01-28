@@ -1,10 +1,10 @@
 import torch.nn as nn
-from torch_geometric.nn import global_add_pool
-from torch_geometric.nn import GINConv, Set2Set
+from torch_geometric.nn import global_add_pool, Set2Set
+from torch_geometric.nn import GINConv
 import torch
 
 class GINModel(nn.Module):
-    def __init__(self, hidden_dim, output_dim, graph_encoding="standard", gin_layers=1, dropout=0.1):
+    def __init__(self, hidden_dim, output_dim, graph_encoding="standard", gin_layers=1, dropout=0.1, pooling_type="global_add_pool"):
         super(GINModel, self).__init__()
 
         # Process hidden_dim to handle both int and list inputs
@@ -23,7 +23,8 @@ class GINModel(nn.Module):
             'output_dim': output_dim,
             'graph_encoding': graph_encoding,
             'gin_layers': gin_layers,
-            'dropout': dropout
+            'dropout': dropout,
+            'pooling_type': pooling_type
         }
 
         input_dim = 1 if graph_encoding == "standard" else 7
@@ -48,10 +49,12 @@ class GINModel(nn.Module):
         self.convs = nn.ModuleList(convs)
        
         # Define pooling layer option
-        self.pooling = global_add_pool
-
-        # Fully connected layer to project to embedding space
-        self.fc = nn.Linear(hidden_dims[-1], output_dim)
+        if pooling_type == "set2set":
+            self.pooling = Set2Set(hidden_dims[-1], processing_steps=2)
+            self.fc = nn.Linear(2 * hidden_dims[-1], output_dim)
+        else:
+            self.pooling = global_add_pool
+            self.fc = nn.Linear(hidden_dims[-1], output_dim)
 
     @staticmethod
     def load_from_checkpoint(checkpoint_path, device='cpu'):
@@ -64,7 +67,8 @@ class GINModel(nn.Module):
             output_dim=checkpoint['metadata']['output_dim'],
             graph_encoding=checkpoint['metadata']['graph_encoding'],
             gin_layers=checkpoint['metadata']['gin_layers'],
-            dropout=checkpoint['metadata']['dropout']
+            dropout=checkpoint['metadata']['dropout'],
+            pooling_type=checkpoint['metadata']['pooling_type']
         )
         
         # Load state dict

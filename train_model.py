@@ -159,6 +159,7 @@ def main():
     parser.add_argument('--device', type=str, choices=['cuda', 'cpu'], default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training.')
     parser.add_argument('--min_delta', type=float, default=0.001, help='Minimum validation loss decrease to qualify as improvement (default: 0.001)')
     parser.add_argument('--decay_rate', type=float, default=0.01, help='Decay rate for the learning rate.')
+    parser.add_argument('--pooling_type', type=str, choices=['global_add_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the GIN model.')
     args = parser.parse_args()
     
     # Process hidden_dim argument
@@ -186,7 +187,8 @@ def main():
         hidden_dim=hidden_dim,
         output_dim=args.output_dim,
         graph_encoding=args.graph_encoding,
-        gin_layers=args.gin_layers
+        gin_layers=args.gin_layers,
+        pooling_type=args.pooling_type  # Pass the new argument
     )
     train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding)
     val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding)
