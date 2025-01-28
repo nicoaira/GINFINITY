@@ -42,7 +42,8 @@ def train_model_with_early_stopping(
         num_epochs,
         patience,
         device,
-        log_path
+        log_path,
+        decay_rate=0.1  # Add decay_rate parameter
 ):
     model.to(device)
     early_stopping = EarlyStopping(patience=patience, min_delta=0.001)
@@ -51,6 +52,10 @@ def train_model_with_early_stopping(
     for epoch in range(num_epochs):
         # Training phase...
         # [existing training code remains the same]
+
+        # Apply learning rate decay
+        for param_group in optimizer.param_groups:
+            param_group['lr'] *= decay_rate
 
         # Validation phase
         model.eval()
@@ -64,13 +69,16 @@ def train_model_with_early_stopping(
             
         avg_val_loss = val_loss / len(val_loader)
         
+        # Log epoch information including learning rate
+        current_lr = optimizer.param_groups[0]['lr']
         epoch_log = {
             "Epoch": f"{epoch + 1}/{num_epochs}",
             "Training Loss": f"{running_loss / len(train_loader)}",
-            "Validation Loss": f"{avg_val_loss}"
+            "Validation Loss": f"{avg_val_loss}",
+            "Learning Rate": f"{current_lr}"
         }
         log_information(log_path, epoch_log)
-        print(f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {running_loss / len(train_loader)}, Validation Loss: {avg_val_loss}")
+        print(f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {running_loss / len(train_loader)}, Validation Loss: {avg_val_loss}, Learning Rate: {current_lr}")
 
         # Early stopping check
         early_stopping(avg_val_loss, model)

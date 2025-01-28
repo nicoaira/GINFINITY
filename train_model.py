@@ -47,7 +47,8 @@ def train_model_with_early_stopping(
         min_delta,  # Added parameter
         device,
         log_path,
-        save_best_weights=True
+        save_best_weights=True,
+        decay_rate=0.1  # Add decay_rate parameter
 ):
     """
     Train a GIN model with early stopping.
@@ -85,6 +86,10 @@ def train_model_with_early_stopping(
             running_loss += loss.item()
             progress_bar.set_postfix({"Loss": running_loss / (i + 1)})
 
+        # Apply learning rate decay
+        for param_group in optimizer.param_groups:
+            param_group['lr'] *= decay_rate
+
         # Validation phase
         model.eval()
         val_loss = 0.0
@@ -104,7 +109,9 @@ def train_model_with_early_stopping(
             "Training Loss": f"{running_loss / len(train_loader)}",
             "Validation Loss": f"{avg_val_loss}",
             "Best Validation Loss": f"{early_stopping.best_loss}",
-            "Early Stopping Counter": f"{early_stopping.counter}/{patience}"
+            "Early Stopping Counter": f"{early_stopping.counter}/{patience}",
+            "Learning Rate": f"{optimizer.param_groups[0]['lr']}"
+            
         }
         log_information(log_path, epoch_log)
         print(f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {running_loss / len(train_loader)}, Validation Loss: {avg_val_loss}")
@@ -151,6 +158,7 @@ def main():
     parser.add_argument('--save_best_weights', type=bool, default=True, help='Save the best model weights during early stopping.')
     parser.add_argument('--device', type=str, choices=['cuda', 'cpu'], default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training.')
     parser.add_argument('--min_delta', type=float, default=0.001, help='Minimum validation loss decrease to qualify as improvement (default: 0.001)')
+    parser.add_argument('--decay_rate', type=float, default=0.01, help='Decay rate for the learning rate.')
     args = parser.parse_args()
     
     # Process hidden_dim argument
@@ -233,7 +241,8 @@ def main():
         min_delta=args.min_delta,  # Added parameter
         device=device,
         log_path=log_path,
-        save_best_weights=args.save_best_weights  # Pass the new argument
+        save_best_weights=args.save_best_weights,  # Pass the new argument
+        decay_rate=args.decay_rate  # Pass the new argument
     )
 
     end_time = time.time()
