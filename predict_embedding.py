@@ -81,7 +81,8 @@ def generate_embedding_for_row(args):
         return [(idx, start, emb) for (start, emb) in emb_list]
     else:
         emb = get_gin_embedding(model, graph_encoding, structure, device)
-        return [(idx, None, emb)]
+        # Return only the embedding vector as a string of numbers
+        return [(idx, None, emb[0][1])]
 
 # Main function to generate embeddings from CSV or TSV
 
@@ -110,8 +111,12 @@ def generate_embeddings(
 
     results = []
     with Pool(num_workers) as pool:
-        for result in tqdm(pool.imap_unordered(generate_embedding_for_row, args_list), total=len(input_df), desc="Processing Embeddings"):
-            results.extend(result)
+        try:
+            for result in tqdm(pool.imap_unordered(generate_embedding_for_row, args_list), total=len(input_df), desc="Processing Embeddings"):
+                results.extend(result)
+        finally:
+            pool.close()
+            pool.join()
 
     # Create an output DataFrame with one entry per subgraph
     new_rows = []
