@@ -6,6 +6,7 @@ import numpy as np
 import psutil
 import torch
 import networkx as nx
+import os
 from torch_geometric.data import Data
 import forgi.graph.bulge_graph as fgb
 
@@ -226,3 +227,16 @@ def log_information(log_path, info_dict, log_name = None, open_type='a', print_l
             f.write(to_log)
             if print_log:
                 print(to_log)
+
+def get_project_root(marker=".git"):
+    """
+    Finds the root directory of the project by locating the specified marker file.
+    """
+    current_dir = os.path.abspath(os.path.dirname(__file__))
+    while True:
+        if marker in os.listdir(current_dir):
+            return current_dir
+        parent_dir = os.path.dirname(current_dir)
+        if current_dir == parent_dir:
+            raise FileNotFoundError(f"Project root marker '{marker}' not found.")
+        current_dir = parent_dir

@@ -1,0 +1,11 @@
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ginfinity"
+version = "0.1.0"
+description = "Graph Isomorphism Network (GIN) for generating embeddings of RNA secondary structures and enabling efficient similarity searches"
+authors = [{ name = "Your Name", email = "your.email@example.com" }]
+dependencies = []
