@@ -4,7 +4,7 @@ from torch_geometric.nn import GINConv
 import torch
 
 class GINModel(nn.Module):
-    def __init__(self, hidden_dim, output_dim, graph_encoding="standard", gin_layers=1, dropout=0.1, pooling_type="global_add_pool"):
+    def __init__(self, hidden_dim, output_dim, graph_encoding="standard", gin_layers=1, dropout=0.05, pooling_type="global_add_pool"):
         super(GINModel, self).__init__()
 
         # Process hidden_dim to handle both int and list inputs
@@ -42,6 +42,7 @@ class GINModel(nn.Module):
                 net = nn.Sequential(
                     nn.Linear(hidden_dims[i-1], hidden_dims[i]),
                     nn.ReLU(),
+                    nn.Dropout(p=dropout),
                     nn.Linear(hidden_dims[i], hidden_dims[i])
                 )
             convs.append(GINConv(net))
