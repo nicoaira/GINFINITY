@@ -15,6 +15,7 @@ from src.utils import is_valid_dot_bracket, log_information, log_setup, get_proj
 from optuna.integration import PyTorchLightningPruningCallback
 import time
 from datetime import datetime
+from src.benchmark.benchmark import run_benchmark
 
 # Get the project root directory
 project_root = get_project_root()
@@ -92,6 +93,10 @@ def objective(trial, args):
     pooling_type = args.pooling_type
     if "pooling_type" in config and args.pooling_type == parser.get_default("pooling_type"):
         pooling_type = trial.suggest_categorical("pooling_type", config["pooling_type"])
+
+    # Load benchmark metadata
+    with open(os.path.join(project_root, 'data/benchmark_datasets/benchmark_datasets.json'), 'r') as f:
+        benchmark_metadata = json.load(f)
 
     # Initialize GIN model with suggested hyperparameters
     model = GINModel(
@@ -176,8 +181,8 @@ def objective(trial, args):
     # Restore best weights
     early_stopping.restore_best_weights(model)
 
-    # Create trial log directory
-    trial_log_dir = os.path.join(args.output_dir, f"trial_{trial.number}_log")
+    # Create trial log directory inside tuning_timestamp/trials_logs
+    trial_log_dir = os.path.join(args.output_dir, args.study_id, "trials_logs", f"trial_{trial.number}")
     os.makedirs(trial_log_dir, exist_ok=True)
 
     # Save trial log as a .log file
@@ -190,7 +195,35 @@ def objective(trial, args):
     model_checkpoint_path = os.path.join(trial_log_dir, f"trial_{trial.number}_model.pth")
     model.save_checkpoint(model_checkpoint_path)
 
-    return avg_val_loss
+    # Run benchmark and get average AUCs
+    benchmark_results_path = os.path.join(trial_log_dir, "benchmark")
+    average_aucs = run_benchmark(
+        embeddings_script=os.path.join(project_root, "predict_embedding.py"),
+        benchmark_datasets=[args.benchmark_datasets],  # Pass as a list
+        benchmark_metadata=benchmark_metadata,
+        benchmark_metadata_path=os.path.join(project_root, 'data/benchmark_datasets/benchmark_datasets.json'),
+        datasets_dir=os.path.join(project_root, 'data/benchmark_datasets'),
+        save_embeddings=False,
+        emb_output_path=os.path.join(benchmark_results_path, "embeddings"),
+        model_weights_path=model_checkpoint_path,
+        structure_column_name="secondary_structure",
+        structure_column_num=None,
+        header=True,
+        skip_barplot=True,
+        skip_auc_curve=True,
+        results_path=benchmark_results_path,
+        save_distances=False,
+        no_save=False,
+        only_needed_embeddings=True,
+        no_log=False,
+        device=device,
+        num_workers=args.num_workers,
+        distance_batch_size=1000,
+        quiet=True  # Set quiet flag
+    )
+
+    # Return the average of the average AUCs
+    return sum(average_aucs) / len(average_aucs)
 
 def main():
     parser = argparse.ArgumentParser(description="Hyperparameter tuning for GIN model using Optuna.")
@@ -209,6 +242,7 @@ def main():
     parser.add_argument('--json_config', type=str, default=os.path.join(project_root, 'src/hyperparameter_tuning/config.json'), help='Path to the JSON configuration file for hyperparameter search space.')
     parser.add_argument('--study_id', type=str, default=f"tuning_{datetime.now().strftime('%y%m%d_%H%M')}", help='Study ID for this run.')
     parser.add_argument('--output_dir', type=str, default=os.path.join(project_root, 'output/hyperparameter_tuning'), help='Directory to save the results.')
+    parser.add_argument('--benchmark_datasets', type=str, default='hard_rfam_benchmark_big', help='Benchmark datasets to use for evaluation.')
     args = parser.parse_args()
 
     # Load JSON configuration if provided
@@ -252,7 +286,7 @@ def main():
         study_name=args.study_id,
         storage=args.storage,
         load_if_exists=True,
-        direction='minimize'
+        direction='maximize'
     )
 
     # Optimize

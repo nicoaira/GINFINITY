@@ -21,6 +21,11 @@ import platform
 import time
 from multiprocessing import Pool
 from src.model.gin_model import GINModel
+from src.utils import get_project_root
+
+# Get the project root directory
+project_root = get_project_root()
+
 def check_device(verbose=False):
     """
     Check if CUDA is available. If it is, return "cuda". Otherwise, return "cpu".
@@ -69,7 +74,8 @@ def get_embeddings(embeddings_script,
                    structure_column_num,
                    header,
                    device='cuda',
-                   num_workers=4):
+                   num_workers=4,
+                   quiet=False):
     """
     Generate embeddings by running the embeddings script as a subprocess.
 
@@ -93,6 +99,8 @@ def get_embeddings(embeddings_script,
         Device to use for computation ('cuda' or 'cpu')
     num_workers : int
         Number of worker processes for parallel processing
+    quiet : bool
+        If True, suppress console output.
 
     Raises
     ------
@@ -122,8 +130,11 @@ def get_embeddings(embeddings_script,
         command.extend(["--structure_column_name", "secondary_structure"])
 
     try:
-        print("Command to execute:", ' '.join(command))
-        subprocess.run(command, check=True, text=True)
+        if quiet:
+            with open(os.devnull, 'w') as devnull:
+                subprocess.run(command, check=True, text=True, stdout=devnull, stderr=devnull)
+        else:
+            subprocess.run(command, check=True, text=True)
     except subprocess.CalledProcessError as e:
         print("Error occurred while running the embeddings script!")
         print(e)
@@ -236,7 +247,8 @@ def get_distances(embedding_dict,
                   save_distances=False,
                   no_save=False,
                   batch_size=1000,
-                  num_workers=4):
+                  num_workers=4,
+                  quiet=False):
     """
     Calculate the square distances between embeddings for all pairs in the benchmark dataset,
     and optionally save the results.
@@ -281,10 +293,16 @@ def get_distances(embedding_dict,
     # Calculate distances using multiprocessing
     all_results = []
     with Pool(num_workers) as pool:
-        with tqdm(total=len(pairs), desc=f"Calculating distances for {benchmark_name} (v{benchmark_version})") as pbar:
+        if quiet:
+            all_results = []
             for results in pool.imap_unordered(calculate_distance_batch, args_list):
                 all_results.extend(results)
-                pbar.update(len(results))
+        else:
+            all_results = []
+            with tqdm(total=len(pairs), desc=f"Calculating distances for {benchmark_name} (v{benchmark_version})") as pbar:
+                for results in pool.imap_unordered(calculate_distance_batch, args_list):
+                    all_results.extend(results)
+                    pbar.update(len(results))
     
     # Create a dictionary mapping (id1, id2) to distance
     distance_dict = {(id1, id2): dist for id1, id2, dist in all_results}
@@ -307,7 +325,7 @@ def get_roc_auc(benchmark_name, benchmark_version,
                 benchmark_df, target,
                 benchmarking_results_path,
                 skip_barplot=False, skip_auc_curve=False,
-                no_save=False):
+                no_save=False, quiet=False):
     """
     Calculate ROC AUC scores and optionally generate plots.
 
@@ -322,6 +340,8 @@ def get_roc_auc(benchmark_name, benchmark_version,
     skip_barplot : bool
     skip_auc_curve : bool
     no_save : bool
+    quiet : bool
+        If True, suppress console output.
 
     Returns
     -------
@@ -344,10 +364,11 @@ def get_roc_auc(benchmark_name, benchmark_version,
 
     average_auc = np.nanmean(list(auc_results.values()))
 
-    print("Benchmark: " + benchmark_name)
-    for rna_type, auc_val in auc_results.items():
-        print(f"RNA Type: {rna_type}, AUC: {auc_val:.4f}")
-    print(f"Average AUC across all RNA types: {average_auc:.4f}")
+    if not quiet:
+        print("Benchmark: " + benchmark_name)
+        for rna_type, auc_val in auc_results.items():
+            print(f"RNA Type: {rna_type}, AUC: {auc_val:.4f}")
+        print(f"Average AUC across all RNA types: {average_auc:.4f}")
 
     if no_save:
         return {"auc_results": auc_results, "average_auc": average_auc}
@@ -417,7 +438,7 @@ def get_roc_auc(benchmark_name, benchmark_version,
 
     return {"auc_results": auc_results, "average_auc": average_auc}
 
-def cleanup(files=[], directories=[]):
+def cleanup(files=[], directories=[], quiet=False):
     """
     Remove specified temporary files and directories.
 
@@ -431,7 +452,8 @@ def cleanup(files=[], directories=[]):
     if len(files) == 0 and len(directories) == 0:
         return
     else:
-        print('Removing temporary directories and files...')
+        if not quiet:
+            print('Removing temporary directories and files...')
         for d in directories:
             if os.path.exists(d):
                 shutil.rmtree(d)
@@ -576,7 +598,8 @@ def run_benchmark(embeddings_script,
                   no_log,
                   device='cuda',
                   num_workers=4,
-                  distance_batch_size=1000):
+                  distance_batch_size=1000,
+                  quiet=False):
     
     # Load model to get metadata
     model = GINModel.load_from_checkpoint(model_weights_path, device)
@@ -695,7 +718,8 @@ def run_benchmark(embeddings_script,
             structure_column_num=structure_column_num,
             header=header,
             device=device,
-            num_workers=num_workers
+            num_workers=num_workers,
+            quiet=quiet
         )
         emb_gen_end = time.time()
 
@@ -720,9 +744,11 @@ def run_benchmark(embeddings_script,
             log_information(log_path, emb_log_info)
 
         if not save_embeddings:
-            cleanup(directories=[emb_output_dir])
+            cleanup(directories=[emb_output_dir], quiet=quiet)
 
     embedding_end = time.time()
+
+    average_aucs = []
 
     # Benchmarking (distances and AUC)
     for bm in selected_benchmarks:
@@ -748,7 +774,8 @@ def run_benchmark(embeddings_script,
             save_distances=save_distances,
             no_save=no_save,
             num_workers=num_workers,
-            batch_size=distance_batch_size
+            batch_size=distance_batch_size,
+            quiet=quiet
         )
         dist_end = time.time()
 
@@ -764,9 +791,12 @@ def run_benchmark(embeddings_script,
             benchmarking_results_path=benchmarking_results_path,
             skip_barplot=skip_barplot,
             skip_auc_curve=skip_auc_curve,
-            no_save=no_save
+            no_save=no_save,
+            quiet=quiet
         )
         auc_end = time.time()
+
+        average_aucs.append(auc_info['average_auc'])
 
         if log_path:
             dist_time = dist_end - dist_start
@@ -791,19 +821,21 @@ def run_benchmark(embeddings_script,
         dataset_info["Total Execution Time"] = f"{total_time:.4f} seconds"
         log_information(log_path, dataset_info)
 
+    return average_aucs
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate embeddings from RNA secondary structures using a trained model and benchmark them.")
 
     parser.add_argument('--embeddings-script', dest='embeddings_script', type=str,  # Changed from model-script
-                        default="./predict_embedding.py",
+                        default=os.path.join(project_root, "predict_embedding.py"),
                         help='Path to the embeddings generation script. Default: "./predict_embedding.py".')
 
     parser.add_argument('--benchmark-metadata', dest='benchmark_metadata_path', type=str,
-                        default='benchmark_datasets.json',
+                        default=os.path.join(project_root, 'data/benchmark_datasets/benchmark_datasets.json'),
                         help="Name of the JSON file containing benchmark dataset information (in --datasets-dir). Default: 'benchmarking_datasets.json'")
 
     parser.add_argument('--datasets-dir', dest='datasets_dir', type=str,
-                        default='data/benchmark_datasets',
+                        default=os.path.join(project_root, 'data/benchmark_datasets'),
                         help="Directory containing the benchmark metadata JSON, primary sampled datasets, and benchmark datasets. Default: './datasets'")
 
     parser.add_argument('--benchmark-datasets', dest='benchmark_datasets',
@@ -815,7 +847,7 @@ if __name__ == "__main__":
                         help="If set, embeddings will be saved. Ignored if --no-save is given.")
 
     parser.add_argument('--emb-output-path', dest='emb_output_path', type=str,
-                        default='benchmarking_results/embeddings',
+                        default=os.path.join(project_root, 'output/benchmarking_results/embeddings'),
                         help='Output path for embeddings if save_embeddings is set.')
 
     parser.add_argument('--structure-column-name', dest='structure_column_name', type=str,
@@ -825,7 +857,7 @@ if __name__ == "__main__":
                         help='Column number of the RNA secondary structures (0-indexed). If both name and num provided, name takes precedence.')
 
     parser.add_argument('--model-path', dest='model_path', type=str, 
-                        default='saved_model/ResNet-Secondary.pth',
+                        default=os.path.join(project_root, 'output/saved_model/ResNet-Secondary.pth'),
                         help='Path to the trained model file. Default: "saved_model/ResNet-Secondary.pth".')
 
     parser.add_argument('--header', type=str, default='True',
@@ -838,7 +870,7 @@ if __name__ == "__main__":
                         help='Skip generating the ROC curve.')
 
     parser.add_argument('--results-path', dest='results_path', type=str,
-                        default='./benchmarking_results',
+                        default=os.path.join(project_root, 'output/benchmarking_results'),
                         help='Path to save results. Time-stamp appended unless --no-save is specified. Default: "./benchmarking_results".')
 
     parser.add_argument('--save-distances', action='store_true', dest='save_distances',
@@ -862,6 +894,8 @@ if __name__ == "__main__":
     parser.add_argument('--distance-batch-size', dest='distance_batch_size', 
                        type=int, default=1000,
                        help='Batch size for distance calculations. Default: 1000')
+
+    parser.add_argument('--quiet', action='store_true', help='Suppress console output.')
 
     args = parser.parse_args()
 
@@ -910,5 +944,6 @@ if __name__ == "__main__":
         no_log=args.no_log,
         device=args.device,
         num_workers=args.num_workers,
-        distance_batch_size=args.distance_batch_size
+        distance_batch_size=args.distance_batch_size,
+        quiet=args.quiet
     )

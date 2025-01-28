@@ -168,7 +168,7 @@ def get_system_info():
 
     return system_info
 
-def log_setup(log_path):
+def log_setup(log_path, print_log=True):
     """
     Sets up and logs basic run information to a specified log file.
 
@@ -189,7 +189,7 @@ def log_setup(log_path):
     log_information(log_path, log_info, "Run Info", 'w')
 
     system_info = get_system_info()
-    log_information(log_path, system_info, "System Info", print_log = True)
+    log_information(log_path, system_info, "System Info", print_log = print_log)
 
 def log_information(log_path, info_dict, log_name = None, open_type='a', print_log = False):
     """
