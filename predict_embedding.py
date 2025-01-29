@@ -141,6 +141,7 @@ def generate_embeddings(
     # Check if the output file has been saved
     if not os.path.exists(output_path) and retries > 0:
         print(f"Output file not found. Retrying {retries} more times...")
+        retries -= 1
         generate_embeddings(
             input_df,
             output_path,
@@ -152,7 +153,7 @@ def generate_embeddings(
             L=L,
             keep_paired_neighbors=keep_paired_neighbors,
             num_workers=num_workers,
-            retries=retries - 1
+            retries=retries
         )
 
 def read_input_data(input, samples, structure_column_num, header):
