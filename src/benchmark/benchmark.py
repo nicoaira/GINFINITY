@@ -75,7 +75,8 @@ def get_embeddings(embeddings_script,
                    header,
                    device='cuda',
                    num_workers=4,
-                   quiet=False):
+                   quiet=False,
+                   retries=0):  # Add retries parameter
     """
     Generate embeddings by running the embeddings script as a subprocess.
 
@@ -101,6 +102,8 @@ def get_embeddings(embeddings_script,
         Number of worker processes for parallel processing
     quiet : bool
         If True, suppress console output.
+    retries : int
+        Number of retries if the output file is not saved.
 
     Raises
     ------
@@ -119,7 +122,8 @@ def get_embeddings(embeddings_script,
         "--model_path", model_weights_path,
         "--header", str(header),
         "--device", device,
-        "--num_workers", str(num_workers)
+        "--num_workers", str(num_workers),
+        "--retries", str(retries)  # Pass retries parameter
     ]
 
     if structure_column_name:
@@ -599,7 +603,8 @@ def run_benchmark(embeddings_script,
                   device='cuda',
                   num_workers=4,
                   distance_batch_size=1000,
-                  quiet=False):
+                  quiet=False,
+                  retries=0):  # Add retries parameter
     
     # Load model to get metadata
     model = GINModel.load_from_checkpoint(model_weights_path, device)
@@ -719,7 +724,8 @@ def run_benchmark(embeddings_script,
             header=header,
             device=device,
             num_workers=num_workers,
-            quiet=quiet
+            quiet=quiet,
+            retries=retries  # Pass retries parameter
         )
         emb_gen_end = time.time()
 
@@ -897,6 +903,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--quiet', action='store_true', help='Suppress console output.')
 
+    parser.add_argument('--retries', type=int, default=0, help='Number of retries if the output file is not saved (default: 0).')
     args = parser.parse_args()
 
     if args.header.lower() not in ['true', 'false']:
@@ -945,5 +952,6 @@ if __name__ == "__main__":
         device=args.device,
         num_workers=args.num_workers,
         distance_batch_size=args.distance_batch_size,
-        quiet=args.quiet
+        quiet=args.quiet,
+        retries=args.retries  # Pass retries argument
     )

@@ -21,3 +21,4 @@ src/ginfinity.egg-info/PKG-INFO
 src/ginfinity.egg-info/SOURCES.txt
 src/ginfinity.egg-info/top_level.txt
 src/ginfinity.egg-info/dependency_links.txt
+tmp/predict_embedding.log

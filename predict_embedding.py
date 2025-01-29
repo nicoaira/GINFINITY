@@ -97,7 +97,8 @@ def generate_embeddings(
         subgraphs=False,
         L=None,
         keep_paired_neighbors=False,
-        num_workers=4
+        num_workers=4,
+        retries=0  # Add retries parameter
 ):
     # Load the trained model once - simplified as parameters are loaded from checkpoint
     model = load_trained_model(model_path, device)
@@ -136,6 +137,23 @@ def generate_embeddings(
         "Embeddings saved path": output_path
     }
     log_information(log_path, save_log)
+
+    # Check if the output file has been saved
+    if not os.path.exists(output_path) and retries > 0:
+        print(f"Output file not found. Retrying {retries} more times...")
+        generate_embeddings(
+            input_df,
+            output_path,
+            model_path,
+            log_path,
+            structure_column,
+            device=device,
+            subgraphs=subgraphs,
+            L=L,
+            keep_paired_neighbors=keep_paired_neighbors,
+            num_workers=num_workers,
+            retries=retries - 1
+        )
 
 def read_input_data(input, samples, structure_column_num, header):
     delimiter = '\t' if input.endswith('.tsv') else ','
@@ -202,6 +220,7 @@ if __name__ == "__main__":
                         help='Window length for subgraph generation (required if --subgraphs).')
     parser.add_argument('--keep_paired_neighbors', action='store_true',
                         help='Include paired neighbors in subgraphs.')
+    parser.add_argument('--retries', type=int, default=0, help='Number of retries if the output file is not saved (default: 0).')
     args = parser.parse_args()
 
     # Validate the header argument
@@ -253,7 +272,8 @@ if __name__ == "__main__":
         subgraphs=args.subgraphs,
         L=args.L,
         keep_paired_neighbors=args.keep_paired_neighbors,
-        num_workers=args.num_workers
+        num_workers=args.num_workers,
+        retries=args.retries  # Pass the retries argument
     )
 
     end_time = time.time()
