@@ -924,7 +924,7 @@ def main():
     parser.add_argument('--quiet', action='store_true', help='Suppress console output.')
 
     parser.add_argument('--retries', type=int, default=0, help='Number of retries if the output file is not saved (default: 0).')
-    parser.add_argument('--rna_type', nargs='+', help='List of RNA types to include in the benchmark')
+    parser.add_argument('--rna_type', nargs='+', help='List of RNA types to include in the benchmark. Attention: the results of easy benchmarks could differe if rna_types are filter out, since the negative pairs with non selected rna_types could have different dificulty.')
     args = parser.parse_args()
 
     if args.header.lower() not in ['true', 'false']:
@@ -974,8 +974,8 @@ def main():
         num_workers=args.num_workers,
         distance_batch_size=args.distance_batch_size,
         quiet=args.quiet,
-        retries=args.retries,  # Pass retries argument
-        rna_types=args.rna_type if args.rna_type else None  # Use all RNA types if not provided
+        retries=args.retries,
+        rna_types=args.rna_type if args.rna_type else None
     )
 
 if __name__ == "__main__":

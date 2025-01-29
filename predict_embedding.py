@@ -131,6 +131,7 @@ def generate_embeddings(
         new_rows.append(this_row_dict)
 
     output_df = pd.DataFrame(new_rows)
+    log_information(log_path, output_df.head(), "Output DataFrame head")
     output_df.to_csv(output_path, sep='\t', index=False)
     print(f"Embeddings saved to {output_path}")
     save_log = {

@@ -228,9 +228,7 @@ def objective(trial, args):
         return sum(average_aucs) / len(average_aucs)
     except KeyboardInterrupt:
         raise
-    except FileNotFoundError as e:
-        print(f"File not found: {e}")
-        raise
+
     except Exception as e:
         print(f"Trial {trial.number} failed with exception: {e}")
         return None
@@ -295,6 +293,9 @@ def main():
 
         # Plot parameter importance
         optuna.visualization.plot_param_importances(study).write_html(os.path.join(args.output_dir, args.study_id, f"{args.study_id}_param_importances.html"))
+
+        # Plot timeline
+        optuna.visualization.plot_timeline(study).write_html(os.path.join(args.output_dir, args.study_id, f"{args.study_id}_timeline.html"))
 
         # Save best model
         best_trial = study.best_trial
