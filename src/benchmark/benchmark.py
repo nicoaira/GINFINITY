@@ -352,11 +352,11 @@ def get_roc_auc(benchmark_name, benchmark_version,
     dict
         A dictionary with AUC results and average AUC.
     """
-    unique_rna_types = benchmark_df['rna_type_1'].unique()
+    unique_rna_types = benchmark_df['analysis_rna_type'].unique()
     auc_results = {}
 
     for rna_type in unique_rna_types:
-        rna_type_df = benchmark_df[benchmark_df['rna_type_1'] == rna_type]
+        rna_type_df = benchmark_df[benchmark_df['analysis_rna_type'] == rna_type]
         y_true = rna_type_df[target]
         y_scores = -rna_type_df['square_distance']
 
@@ -409,7 +409,7 @@ def get_roc_auc(benchmark_name, benchmark_version,
 
         for idx, rna_type in enumerate(unique_rna_types):
             ax = axes[idx]
-            rna_type_df = benchmark_df[benchmark_df['rna_type_1'] == rna_type]
+            rna_type_df = benchmark_df[benchmark_df['analysis_rna_type'] == rna_type]
             y_true = rna_type_df[target]
             y_scores = -rna_type_df['square_distance']
 
@@ -582,6 +582,22 @@ def log_information(log_path, info_dict):
         for key, value in info_dict.items():
             f.write(f"{key}: {value}\n")
 
+def filter_rna_types(data, rna_types):
+    data = data.copy()
+    rna_types = [rt.lower() for rt in rna_types]
+    def pick_analysis_type(row):
+        t1 = row['rna_type_1'].lower()
+        t2 = row['rna_type_2'].lower()
+        if t1 in rna_types:
+            return row['rna_type_1']
+        elif t2 in rna_types:
+            return row['rna_type_2']
+        return None
+
+    data['analysis_rna_type'] = data.apply(pick_analysis_type, axis=1)
+    # Keep only rows with a known analysis_rna_type
+    return data[data['analysis_rna_type'].notna()]
+
 def run_benchmark(embeddings_script,
                   benchmark_datasets,
                   benchmark_metadata,
@@ -604,7 +620,8 @@ def run_benchmark(embeddings_script,
                   num_workers=4,
                   distance_batch_size=1000,
                   quiet=False,
-                  retries=0):  # Add retries parameter
+                  retries=0,
+                  rna_types=None):  # Add retries parameter
     
     # Load model to get metadata
     model = GINModel.load_from_checkpoint(model_weights_path, device)
@@ -785,6 +802,9 @@ def run_benchmark(embeddings_script,
         )
         dist_end = time.time()
 
+        if rna_types:
+            benchmark_df = filter_rna_types(benchmark_df, rna_types)
+
         n_pairs = benchmark_df.shape[0]
 
         # AUC calculation timing
@@ -829,7 +849,7 @@ def run_benchmark(embeddings_script,
 
     return average_aucs
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Generate embeddings from RNA secondary structures using a trained model and benchmark them.")
 
     parser.add_argument('--embeddings-script', dest='embeddings_script', type=str,  # Changed from model-script
@@ -904,6 +924,7 @@ if __name__ == "__main__":
     parser.add_argument('--quiet', action='store_true', help='Suppress console output.')
 
     parser.add_argument('--retries', type=int, default=0, help='Number of retries if the output file is not saved (default: 0).')
+    parser.add_argument('--rna_type', nargs='+', help='List of RNA types to include in the benchmark')
     args = parser.parse_args()
 
     if args.header.lower() not in ['true', 'false']:
@@ -953,5 +974,9 @@ if __name__ == "__main__":
         num_workers=args.num_workers,
         distance_batch_size=args.distance_batch_size,
         quiet=args.quiet,
-        retries=args.retries  # Pass retries argument
+        retries=args.retries,  # Pass retries argument
+        rna_types=args.rna_type if args.rna_type else None  # Use all RNA types if not provided
     )
+
+if __name__ == "__main__":
+    main()
