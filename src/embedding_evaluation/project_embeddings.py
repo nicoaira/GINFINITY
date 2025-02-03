@@ -194,11 +194,19 @@ if __name__ == "__main__":
     if args.sample_num:
         random_indices = random.sample(range(len(df)), args.sample_num)
         df = df.iloc[random_indices].copy()
+    
+    # Filter the DataFrame to exclude the specified rna_types
+    rna_types_to_remove = ['antisense_RNA', 'other', 'ribozyme', 'vault_RNA', 'vaultRNA', 'ncRNA', 'scaRNA', 'SRP_RNA', 'RNase_MRP_RNA', 'tRNA'] 
+    df = df[~df['rna_type'].isin(rna_types_to_remove)]
 
     embedding_tsne = project_embeddings(df)
 
     output_folder = f"output/{args.model_id}"
     os.makedirs(output_folder, exist_ok=True)
+
+    save_scatter_2d(output_folder, df, embedding_tsne, column = 'rfam')
+    save_scatter_2d(output_folder, df, embedding_tsne, column = 'rna_type')
+
     save_scatter_2d_3plots(output_folder, df, embedding_tsne, column = 'rfam')
     save_scatter_2d_3plots(output_folder, df, embedding_tsne, column = 'rna_type')
 
