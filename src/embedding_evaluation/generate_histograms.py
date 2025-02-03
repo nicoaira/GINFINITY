@@ -14,8 +14,6 @@ from tqdm import tqdm
 from src.embedding_evaluation.utils import square_dist
 from src.gin_rna_dataset import GINRNADataset
 from src.model.gin_model import GINModel
-from src.model.siamese_model import SiameseResNetLSTM
-from src.triplet_rna_dataset import TripletRNADataset
 from src.utils import is_valid_dot_bracket
 
 def remove_invalid_structures(df):
@@ -26,46 +24,16 @@ def remove_invalid_structures(df):
     )
     return df[valid_structures]
 
-def load_trained_model(
-        model_path,
-        model_type="siamese",
-        graph_encoding="standard",
-        hidden_dim=256,
-        output_dim=128,
-        gin_layers=1,
-        lstm_layers=1,
-        device='cpu'
-    ):
-    if model_type == "siamese":
-        model = SiameseResNetLSTM(
-            input_channels=1, hidden_dim=hidden_dim, lstm_layers=lstm_layers)
-    elif model_type == "gin":
-        model = GINModel(hidden_dim=hidden_dim, output_dim=output_dim, graph_encoding=graph_encoding, gin_layers = gin_layers)
-
-    # Load the checkpoint that contains multiple states (epoch, optimizer, and model state_dict)
-    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
-
-    # Load only the model's state_dict from the checkpoint
-    model.load_state_dict(checkpoint['model_state_dict'])
-
-    # Move model to the appropriate device (CPU or GPU)
-    model.to(device)
-    model.eval()  # Set the model to evaluation mode
+def load_trained_model(model_path, device='cpu'):
+    """Load trained model from checkpoint with metadata"""
+    model = GINModel.load_from_checkpoint(model_path, device)
+    model.to(device)  # Move model to the specified device
+    model.eval()
     return model
 
-def get_dataset_loader(model_type,val_df):
-    if model_type == "siamese":
-        max_len = max(
-            max(val_df['structure_A'].str.len()),
-            max(val_df['structure_P'].str.len()),
-            max(val_df['structure_N'].str.len())
-        )
-        val_dataset = TripletRNADataset(val_df, max_len=max_len)
-        val_loader = TorchDataLoader(val_dataset, batch_size=4, shuffle=False, pin_memory=True)
-
-    elif "gin_" in model_type:
-        val_dataset = GINRNADataset(val_df)
-        val_loader = GeoDataLoader(val_dataset, batch_size=4, shuffle=False, pin_memory=True)
+def get_dataset_loader(val_df):
+    val_dataset = GINRNADataset(val_df)
+    val_loader = GeoDataLoader(val_dataset, batch_size=4, shuffle=False, pin_memory=True)
 
     return val_loader
 
@@ -161,15 +129,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")
     parser.add_argument('--model_path', type=str)
     parser.add_argument('--model_id', default = "gin_2", type=str)
-    parser.add_argument('--model_type', type=str, choices=["siamese", "gin_1", "gin"])
     parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard',
                         help='Encoding to use for the transformation to graph. Only used in case of gin modeling')
-    parser.add_argument('--hidden_dim', type=int, default=256, help='Hidden dimension size for the model.')
-    parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model (ignored for siamese).')
     parser.add_argument('--val_dataset_path', default ="data/example_data/val_dataset.csv", type=str)
     parser.add_argument('--val_embeddings_path', type=str)
     parser.add_argument('--samples', type=int)
-    parser.add_argument('--gin_layers', type=int)
     parser.add_argument('--save_embeddings', type=bool, default=True)
     args = parser.parse_args()
 
@@ -184,25 +148,11 @@ if __name__ == "__main__":
             random_indices = random.sample(range(len(val_df)), args.samples)
             val_df = val_df.iloc[random_indices].copy()
 
-        if args.model_type == "siamese":
-            max_len = max(
-                max(val_df['structure_A'].str.len()),
-                max(val_df['structure_P'].str.len()),
-                max(val_df['structure_N'].str.len())
-            )
-            val_dataset = TripletRNADataset(val_df, max_len=max_len)
-            val_loader = TorchDataLoader(val_dataset, batch_size=4, shuffle=False, pin_memory=True)
-        else:
-            val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding)
-            val_loader = GeoDataLoader(val_dataset, batch_size=16, shuffle=False, pin_memory=True)
+        val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding)
+        val_loader = GeoDataLoader(val_dataset, batch_size=16, shuffle=False, pin_memory=True)
         
         model = load_trained_model(
             args.model_path,
-            args.model_type,
-            gin_layers=args.gin_layers,
-            graph_encoding=args.graph_encoding,
-            hidden_dim=args.hidden_dim,
-            output_dim=args.output_dim,
             device="cuda" if torch.cuda.is_available() else "cpu"
         )
         anchor_embeddings, positive_embeddings, negative_embeddings = generate_validation_embeddings(model, val_loader)
