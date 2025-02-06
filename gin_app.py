@@ -55,14 +55,23 @@ app.layout = html.Div([
 
 
 def extract_layerwise_embeddings(model, data):
-    """Extract node embeddings after each GIN layer."""
-    x, edge_index = data.x, data.edge_index
+    """
+    Extract node embeddings after each GINEConv layer.
+    This mirrors the logic in model.get_node_embeddings but returns
+    intermediate outputs for visualization.
+    """
+    # Unpack Data object
+    x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+    
+    # 1) Encode nodes from input_dim -> hidden_dims[0]
+    x = model.node_encoder(x)
+    
+    # 2) Pass through each GINEConv, storing the embedding after each layer
     layerwise_embeddings = []
-    
     for conv in model.convs:
-        x = conv(x, edge_index)
-        layerwise_embeddings.append(x.clone().detach())  # Store the embeddings
-    
+        x = conv(x, edge_index, edge_attr)
+        layerwise_embeddings.append(x.clone().detach())  # store the intermediate embedding
+        
     return layerwise_embeddings
 
 
