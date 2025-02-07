@@ -52,7 +52,7 @@ python optimize_hyperparameters.py --input_path <path_to_input_file> --model_typ
 ```
 
 #### **Required Arguments**
-- `--input_path`: Path to the input CSV/TSV file containing RNA secondary structures with `structure_A`, `structure_P`, and `structure_N` columns.
+- `--input_path`: Path to the input CSV/TSV file containing RNA secondary structures with `anchor_structure`, `positive_structure`, and `negative_structure` columns.
 - `--model_type`: Model type to use (`gin`).
 
 #### **Optional Arguments**
@@ -71,11 +71,11 @@ python optimize_hyperparameters.py --input_path <path_to_input_file> --model_typ
 
 ## Input Data Format
 
-The input file must be a CSV/TSV with columns `structure_A`, `structure_P`, and `structure_N` containing RNA secondary structures in dot-bracket notation.
+The input file must be a CSV/TSV with columns `anchor_structure`, `positive_structure`, and `negative_structure` containing RNA secondary structures in dot-bracket notation.
 
 ### Example File
 
-| ID  | structure_A       | structure_P       | structure_N       |
+| ID  | anchor_structure       | positive_structure       | negative_structure       |
 |-----|-------------------|-------------------|-------------------|
 | 1   | ..((..))..        | ..((..))..        | ..(((...)))..     |
 | 2   | ..(((...)))..     | ..(((...)))..     | ..((..))..        |

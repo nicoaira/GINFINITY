@@ -60,7 +60,7 @@ python train_script.py --input_path <path_to_csv> [options]
 ```
 
 #### Required Arguments
-- `--input_path`: Path to the CSV/TSV file containing RNA secondary structures with `structure_A`, `structure_P`, and `structure_N` columns.
+- `--input_path`: Path to the CSV/TSV file containing RNA secondary structures with `anchor_structure`, `positive_structure`, and `negative_structure` columns.
 
 #### Optional Arguments
 - `--model_id`: Identifier for the model (default: `gin_model`).
@@ -82,9 +82,9 @@ python train_script.py --input_path <path_to_csv> [options]
 ## Input Data Format
 
 The input file should be a CSV/TSV with the following columns:
-- `structure_A`: Dot-bracket notation for anchor structure.
-- `structure_P`: Dot-bracket notation for positive structure.
-- `structure_N`: Dot-bracket notation for negative structure.
+- `anchor_structure`: Dot-bracket notation for anchor structure.
+- `positive_structure`: Dot-bracket notation for positive structure.
+- `negative_structure`: Dot-bracket notation for negative structure.
 
 ---
 

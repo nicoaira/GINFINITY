@@ -10,9 +10,9 @@ class GINRNADataset(Dataset):
         return len(self.dataframe)
 
     def __getitem__(self, idx):
-        anchor_structure = self.dataframe.iloc[idx]["structure_A"]
-        positive_structure = self.dataframe.iloc[idx]["structure_P"]
-        negative_structure = self.dataframe.iloc[idx]["structure_N"]
+        anchor_structure = self.dataframe.iloc[idx]["anchor_structure"]
+        positive_structure = self.dataframe.iloc[idx]["positive_structure"]
+        negative_structure = self.dataframe.iloc[idx]["negative_structure"]
 
         if self.graph_encoding == "standard":
             g_anchor = dotbracket_to_graph(anchor_structure)
