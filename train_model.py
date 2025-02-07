@@ -179,7 +179,7 @@ def main():
 
     # Load data
     dataset_path = args.input_path
-    df = pd.read_csv(dataset_path)
+    df = pd.read_csv(dataset_path, comment='#')  # Add comment parameter to skip lines starting with #
     df = remove_invalid_structures(df)
     train_df, val_df = train_test_split(df, test_size=args.val_fraction, random_state=args.seed)
 
