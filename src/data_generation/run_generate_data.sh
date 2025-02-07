@@ -1,5 +1,5 @@
 python generate_data.py \
-  --num_structures 300000 \
+  --num_structures 100 \
   --seq_min_len 50 \
   --seq_max_len 900 \
   --seq_len_distribution norm \

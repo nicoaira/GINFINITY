@@ -76,6 +76,8 @@ def choose_action(current_size, min_size, max_size):
     else:
         return random.choice(["insert", "delete"])
 
+# --- Stem Modification Functions ---
+
 def modify_stem_insert(seq, structure):
     mapping = get_node_mapping(structure, seq)
     stem_nodes = [node for node in mapping if node.startswith("s")]
@@ -153,6 +155,8 @@ def modify_stem(seq, structure, min_size, max_size, max_modifications, mod_count
     mod_counts[node] = mod_counts.get(node, 0) + 1
     return result
 
+# --- Hairpin Loop Modification ---
+
 def modify_hairpin(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
     mapping = get_node_mapping(structure, seq)
     eligible = [node for node in mapping if node.startswith("h") and 
@@ -187,6 +191,8 @@ def modify_hairpin(seq, structure, action=None, min_size=None, max_size=None, ma
     new_mapping = get_node_mapping(new_structure, new_seq)
     mod_counts[node] = mod_counts.get(node, 0) + 1
     return new_seq, new_structure, new_mapping
+
+# --- Internal Loop Modification ---
 
 def modify_internal_loop(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
     mapping = get_node_mapping(structure, seq)
@@ -223,6 +229,8 @@ def modify_internal_loop(seq, structure, action=None, min_size=None, max_size=No
     mod_counts[node] = mod_counts.get(node, 0) + 1
     return new_seq, new_structure, new_mapping
 
+# --- Multiloop Modification ---
+
 def modify_multiloop(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
     mapping = get_node_mapping(structure, seq)
     eligible = [node for node in mapping if node.startswith("m") and 
@@ -258,6 +266,8 @@ def modify_multiloop(seq, structure, action=None, min_size=None, max_size=None, 
     mod_counts[node] = mod_counts.get(node, 0) + 1
     return new_seq, new_structure, new_mapping
 
+# --- Bulge Modification ---
+
 def modify_bulge(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
     mapping = get_node_mapping(structure, seq)
     eligible = [node for node in mapping if node.startswith("i") and len(mapping[node]) == 1 and
@@ -285,6 +295,8 @@ def modify_bulge(seq, structure, action=None, min_size=None, max_size=None, max_
     new_mapping = get_node_mapping(new_structure, new_seq)
     mod_counts[node] = mod_counts.get(node, 0) + 1
     return new_seq, new_structure, new_mapping
+
+# --- Dinucleotide Shuffling and Negative Sample ---
 
 def dinuc_shuffle(seq):
     """Return a new sequence that preserves the original dinucleotide frequencies."""
@@ -334,6 +346,8 @@ def generate_negative_sample(seq, allowed_variation=0):
     logger.debug("Generated negative sample: %s with structure %s", shuffled_seq, neg_structure)
     return shuffled_seq, neg_structure
 
+# --- Plotting ---
+
 def plot_rna_structure(seq, structure, ax=None):
     """
     Plot the RNA secondary structure using forgi’s matplotlib tools.
@@ -350,19 +364,25 @@ def plot_rna_structure(seq, structure, ax=None):
     except Exception as e:
         logger.exception("Error while plotting RNA structure: %s", e)
 
+# --- Triplet Generation Pipeline ---
+
 def generate_triplet(seq_min_len, seq_max_len, seq_len_distribution, seq_len_mean, seq_len_sd,
                      neg_len_variation,
                      n_stem_indels, stem_min_size, stem_max_size, stem_max_n_modifications,
                      n_hloop_indels, hloop_min_size, hloop_max_size, hloop_max_n_modifications,
                      n_iloop_indels, iloop_min_size, iloop_max_size, iloop_max_n_modifications,
                      n_bulge_indels, bulge_min_size, bulge_max_size, bulge_max_n_modifications,
-                     n_mloop_indels, mloop_min_size, mloop_max_size, mloop_max_n_modifications):
+                     n_mloop_indels, mloop_min_size, mloop_max_size, mloop_max_n_modifications,
+                     appending_event_probability, both_sides_appending_probability,
+                     linker_min, linker_max, appending_size_factor):
+    # Choose sequence length.
     if seq_len_distribution == "unif":
         length = random.randint(seq_min_len, seq_max_len)
     else:
         length = int(random.gauss(seq_len_mean, seq_len_sd))
         length = max(seq_min_len, min(seq_max_len, length))
     logger.debug("Selected sequence length: %d", length)
+    # Generate anchor.
     anchor_seq = generate_random_rna(length)
     anchor_structure = predict_structure(anchor_seq)
     anchor_mapping = get_node_mapping(anchor_structure, anchor_seq)
@@ -402,6 +422,52 @@ def generate_triplet(seq_min_len, seq_max_len, seq_len_distribution, seq_len_mea
                                                                max_modifications=mloop_max_n_modifications,
                                                                mod_counts=mod_counts)
     neg_seq, neg_structure = generate_negative_sample(anchor_seq, neg_len_variation)
+    
+    # --- Appending Event ---
+    if random.random() < appending_event_probability:
+        r = random.random()
+        p_both = both_sides_appending_probability
+        p_left = (1 - p_both) / 2
+        p_right = p_left
+        # Mean length for appended RNA (multiplied by appending_size_factor)
+        mean_append = len(anchor_seq) * appending_size_factor
+        sigma_append = mean_append / 2
+        def sample_append_length():
+            L_app = int(random.gauss(mean_append, sigma_append))
+            return max(1, L_app)
+        linker_length = random.randint(linker_min, linker_max)
+        linker_seq = generate_random_rna(linker_length)
+        linker_structure = '.' * linker_length
+        if r < p_left:
+            # Append to left only.
+            L_app = sample_append_length()
+            appended_seq = generate_random_rna(L_app)
+            appended_structure = predict_structure(appended_seq)
+            pos_seq = appended_seq + linker_seq + pos_seq
+            pos_structure = appended_structure + linker_structure + pos_structure
+            neg_seq = appended_seq + linker_seq + neg_seq
+            neg_structure = appended_structure + linker_structure + neg_structure
+        elif r < p_left + p_right:
+            # Append to right only.
+            L_app = sample_append_length()
+            appended_seq = generate_random_rna(L_app)
+            appended_structure = predict_structure(appended_seq)
+            pos_seq = pos_seq + linker_seq + appended_seq
+            pos_structure = pos_structure + linker_structure + appended_structure
+            neg_seq = neg_seq + linker_seq + appended_seq
+            neg_structure = neg_structure + linker_structure + appended_structure
+        else:
+            # Append to both sides (use independent appended RNAs).
+            L_app_left = sample_append_length()
+            appended_seq_left = generate_random_rna(L_app_left)
+            appended_structure_left = predict_structure(appended_seq_left)
+            L_app_right = sample_append_length()
+            appended_seq_right = generate_random_rna(L_app_right)
+            appended_structure_right = predict_structure(appended_seq_right)
+            pos_seq = appended_seq_left + linker_seq + pos_seq + linker_seq + appended_seq_right
+            pos_structure = appended_structure_left + linker_structure + pos_structure + linker_structure + appended_structure_right
+            neg_seq = appended_seq_left + linker_seq + neg_seq + linker_seq + appended_seq_right
+            neg_structure = appended_structure_left + linker_structure + neg_structure + linker_structure + appended_structure_right
     
     triplet = {
         "anchor_seq": anchor_seq,

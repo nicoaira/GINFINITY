@@ -4,11 +4,11 @@ generate_data.py
 
 Main script for RNA triplet dataset generation.
 
-This script parses command‐line arguments (including the new parameters for sequence generation and modifications),
-generates run metadata, calls the triplet-generation pipeline in parallel (with each worker generating a vector
-of triplets concurrently), saves the dataset (with sequential IDs), optionally splits the dataset, and if requested,
-creates plots for a subset of triplets (each triplet plotted as one figure with three subplots for the anchor,
-positive, and negative structures).
+This script parses command‐line arguments (including parameters for sequence generation, modifications,
+and appending events), generates run metadata, calls the triplet‐generation pipeline in parallel
+(with each worker generating a “thread” of triplets concurrently), saves the dataset (with sequential IDs),
+optionally splits the dataset, and if requested, creates plots for a subset of triplets (each plotted
+as one figure with three subplots for the anchor, positive, and negative structures).
 """
 
 import argparse
@@ -21,7 +21,6 @@ import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-import math
 
 from data_generation_utils import (
     generate_triplet_thread,
@@ -43,7 +42,7 @@ def parse_arguments():
     # Stem Modifications
     parser.add_argument("--n_stem_indels", type=int, default=1, help="Number of stem modification cycles")
     parser.add_argument("--stem_min_size", type=int, default=2, help="Minimum stem size")
-    parser.add_argument("--stem_max_size", type=int, default=10, help="Maximum stem size")  # <-- New parameter
+    parser.add_argument("--stem_max_size", type=int, default=10, help="Maximum stem size")
     parser.add_argument("--stem_max_n_modifications", type=int, default=1, help="Maximum modifications per stem")
     
     # Loop Modifications
@@ -67,6 +66,18 @@ def parse_arguments():
     parser.add_argument("--iloop_max_n_modifications", type=int, default=1, help="Maximum modifications per internal loop")
     parser.add_argument("--bulge_max_n_modifications", type=int, default=1, help="Maximum modifications per bulge loop")
     parser.add_argument("--mloop_max_n_modifications", type=int, default=1, help="Maximum modifications per multi loop")
+    
+    # Appending Parameters
+    parser.add_argument("--appending_event_probability", type=float, default=0.3,
+                        help="Probability that an appending event will occur for a triplet (default 0.3)")
+    parser.add_argument("--both_sides_appending_probability", type=float, default=0.33,
+                        help="Within appending events, probability to append on both sides (the remaining events are equally divided between left and right)")
+    parser.add_argument("--linker_min", type=int, default=2,
+                        help="Minimum linker length (in bases) for appending event")
+    parser.add_argument("--linker_max", type=int, default=8,
+                        help="Maximum linker length (in bases) for appending event")
+    parser.add_argument("--appending_size_factor", type=float, default=1.0,
+                        help="Factor to multiply the anchor length to obtain the mean for the normal distribution from which the appended RNA length is sampled. For example, if set to 0.5 and the anchor length is 100, the mean appended RNA length will be 50")
     
     # Performance
     parser.add_argument("--num_workers", type=int, default=4, help="Number of parallel workers")
@@ -95,12 +106,10 @@ def setup_logging(output_dir, debug_flag):
     level = logging.DEBUG if debug_flag else logging.ERROR
     logger.setLevel(level)
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    # Console handler
     ch = logging.StreamHandler()
     ch.setLevel(level)
     ch.setFormatter(formatter)
     logger.addHandler(ch)
-    # File handler
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_filename = os.path.join(output_dir, f"debug_{timestamp}.log")
     fh = logging.FileHandler(log_filename)
@@ -142,47 +151,45 @@ def main():
         json.dump(metadata, f, indent=4)
     logging.info("Metadata saved to %s", metadata_file)
     
-    # --- Vectorized Generation using Threads ---
     total = args.num_structures
     batch_size = args.batch_size
-    # Compute number of tasks (threads) required.
     num_tasks = (total + batch_size - 1) // batch_size  # ceiling division
     task_sizes = [batch_size] * num_tasks
-    # Adjust last task if needed.
     if total % batch_size != 0:
         task_sizes[-1] = total % batch_size
 
     triplets = []
+    from data_generation_utils import generate_triplet_thread  # Ensure the new function is imported
     with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
         futures = [
             executor.submit(
-                data_generation_utils.generate_triplet_thread,
+                generate_triplet_thread,
                 ts,
                 args.seq_min_len, args.seq_max_len, args.seq_len_distribution, args.seq_len_mean, args.seq_len_sd,
                 args.neg_len_variation,
-                args.n_stem_indels, args.stem_min_size, args.stem_max_size, args.stem_max_n_modifications,  # Updated order
+                args.n_stem_indels, args.stem_min_size, args.stem_max_size, args.stem_max_n_modifications,
                 args.n_hloop_indels, args.hloop_min_size, args.hloop_max_size, args.hloop_max_n_modifications,
                 args.n_iloop_indels, args.iloop_min_size, args.iloop_max_size, args.iloop_max_n_modifications,
                 args.n_bulge_indels, args.bulge_min_size, args.bulge_max_size, args.bulge_max_n_modifications,
-                args.n_mloop_indels, args.mloop_min_size, args.mloop_max_size, args.mloop_max_n_modifications
+                args.n_mloop_indels, args.mloop_min_size, args.mloop_max_size, args.mloop_max_n_modifications,
+                args.appending_event_probability, args.both_sides_appending_probability,
+                args.linker_min, args.linker_max, args.appending_size_factor
             )
             for ts in task_sizes
         ]
-        pbar = tqdm(total=args.num_structures, desc="Generating triplets")
+        pbar = tqdm(total=total, desc="Generating triplets")
         for future in as_completed(futures):
             try:
-                thread_triplets = future.result()  # each task returns a list of triplets
+                thread_triplets = future.result()
                 triplets.extend(thread_triplets)
                 pbar.update(len(thread_triplets))
             except Exception:
                 logging.exception("Error generating triplet thread:")
         pbar.close()
 
-    # Ensure we have exactly the requested number.
     triplets = triplets[:total]
     
     df = pd.DataFrame(triplets)
-    # Assign sequential IDs.
     df["triplet_id"] = list(range(len(df)))
     
     output_csv = os.path.join(args.output_dir, "rna_triplets.csv")
@@ -207,7 +214,6 @@ def main():
         plot_dir = os.path.join(args.output_dir, "plots")
         os.makedirs(plot_dir, exist_ok=True)
         dpi = 100  # adjust as needed
-        # Plot a random subset of the triplets.
         for idx, row in df.sample(n=min(args.num_plots, len(df)), random_state=42).iterrows():
             L = len(row["anchor_seq"])
             subplot_size_px = 500 + 8 * max(0, L - 130)
