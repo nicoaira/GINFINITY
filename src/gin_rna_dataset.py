@@ -1,9 +1,13 @@
 from torch.utils.data import Dataset
 from src.utils import dotbracket_to_forgi_graph, dotbracket_to_graph, forgi_graph_to_tensor, graph_to_tensor
+import pandas as pd
 
 class GINRNADataset(Dataset):
     def __init__(self, dataframe, graph_encoding = "standard"):
-        self.dataframe = dataframe
+        if isinstance(dataframe, str):  # Check if the input is a file path
+            self.dataframe = pd.read_csv(dataframe, comment='#')
+        else:
+            self.dataframe = dataframe
         self.graph_encoding = graph_encoding
 
     def __len__(self):
