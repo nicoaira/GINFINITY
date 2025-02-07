@@ -15,9 +15,9 @@ import time
 
 def remove_invalid_structures(df):
     valid_structures = (
-        df["structure_A"].apply(is_valid_dot_bracket) & 
-        df["structure_P"].apply(is_valid_dot_bracket) & 
-        df["structure_N"].apply(is_valid_dot_bracket)
+        df["anchor_structure"].apply(is_valid_dot_bracket) & 
+        df["positive_structure"].apply(is_valid_dot_bracket) & 
+        df["negative_structure"].apply(is_valid_dot_bracket)
     )
     return df[valid_structures]
 

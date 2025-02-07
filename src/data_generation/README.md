@@ -120,7 +120,7 @@ Results directory contains:
 
 ### CSV Format
 ```csv
-structure_A,structure_P,structure_N,sequence_A,sequence_P,sequence_N
+anchor_structure,positive_structure,negative_structure,sequence_A,sequence_P,sequence_N
 (((...))),.((....)),........,AUGCUAGC,AUGCUAGC,GCUAGCAU
 ```
 
