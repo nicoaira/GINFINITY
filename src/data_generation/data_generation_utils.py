@@ -13,13 +13,12 @@ Detailed logging is provided to help with debugging.
 import random
 import logging
 import matplotlib.pyplot as plt
+import time
 
 import forgi.graph.bulge_graph as fgb
 from ViennaRNA import fold  # Assume the ViennaRNA Python binding is installed
 
 logger = logging.getLogger(__name__)
-
-# --- Basic Functions ---
 
 def generate_random_rna(length):
     """Return a random RNA sequence of the given length."""
@@ -34,10 +33,6 @@ def predict_structure(seq):
     return structure
 
 def get_node_mapping(structure, seq):
-    """
-    Create a BulgeGraph from the dot‐bracket structure.
-    If possible, pass the actual sequence to forgi.
-    """
     try:
         bg = fgb.BulgeGraph.from_dotbracket(structure, seq)
     except TypeError:
@@ -68,8 +63,6 @@ def get_base_pairing(structure):
     logger.debug("Base pairing for structure %s: %s", structure, pairing)
     return pairing
 
-# --- Modification Helper ---
-
 def choose_action(current_size, min_size, max_size):
     """
     Return 'insert' if current_size is at or below min_size,
@@ -83,35 +76,28 @@ def choose_action(current_size, min_size, max_size):
     else:
         return random.choice(["insert", "delete"])
 
-# --- Stem Modification Functions ---
-
 def modify_stem_insert(seq, structure):
-    """
-    Insert a base pair in a stem.
-    (Assumes that the stem node is valid for insertion.)
-    """
     mapping = get_node_mapping(structure, seq)
     stem_nodes = [node for node in mapping if node.startswith("s")]
     if not stem_nodes:
-        logger.warning("No stem nodes available for modification.")
+        logging.warning("No stem nodes available for modification.")
         return seq, structure, mapping
     node = random.choice(stem_nodes)
     indices = sorted(mapping[node])
     if len(indices) < 2:
-        logger.warning("Stem node %s is too short to insert.", node)
+        logging.warning("Stem node %s is too short to insert.", node)
         return seq, structure, mapping
     insertion_index = indices[len(indices) // 2]
     pairing = get_base_pairing(structure)
     partner_index = pairing[insertion_index - 1]
     if partner_index is None:
-        logger.warning("No pairing found for stem base at position %d", insertion_index)
+        logging.warning("No pairing found for stem base at position %d", insertion_index)
         return seq, structure, mapping
     partner_index = partner_index + 1
     if insertion_index > partner_index:
         insertion_index, partner_index = partner_index, insertion_index
     pair_options = [("A", "U"), ("U", "A"), ("G", "C"), ("C", "G")]
     base1, base2 = random.choice(pair_options)
-    logger.debug("Inserting stem base pair (%s, %s) at positions %d and %d in stem %s", base1, base2, insertion_index, partner_index, node)
     seq_list = list(seq)
     struct_list = list(structure)
     seq_list.insert(insertion_index - 1, base1)
@@ -124,15 +110,11 @@ def modify_stem_insert(seq, structure):
     return new_seq, new_structure, new_mapping
 
 def modify_stem_delete(seq, structure):
-    """
-    Delete one base pair from a stem.
-    (Assumes that the stem node is valid for deletion.)
-    """
     mapping = get_node_mapping(structure, seq)
     pairing = get_base_pairing(structure)
     stem_nodes = [node for node in mapping if node.startswith("s")]
     if not stem_nodes:
-        logger.warning("No stem nodes available for deletion.")
+        logging.warning("No stem nodes available for deletion.")
         return seq, structure, mapping
     node = random.choice(stem_nodes)
     indices = mapping[node]
@@ -142,47 +124,43 @@ def modify_stem_delete(seq, structure):
         if partner is not None and (partner + 1) in indices and idx < (partner + 1):
             base_pairs.append((idx, partner + 1))
     if not base_pairs:
-        logger.warning("No base pairs found in stem %s for deletion.", node)
+        logging.warning("No base pairs found in stem %s for deletion.", node)
         return seq, structure, mapping
     pair_to_delete = random.choice(base_pairs)
-    logger.debug("Deleting stem base pair at positions %s in stem %s", pair_to_delete, node)
     seq_list = [base for i, base in enumerate(seq, start=1) if i not in pair_to_delete]
-    # Also remove the corresponding characters in the dot-bracket structure
     struct_list = [char for i, char in enumerate(structure, start=1) if i not in pair_to_delete]
     new_seq = "".join(seq_list)
     new_structure = "".join(struct_list)
     new_mapping = get_node_mapping(new_structure, new_seq)
     return new_seq, new_structure, new_mapping
 
-def modify_stem(seq, structure, min_size, max_modifications):
-    """
-    Modify a stem by randomly choosing to insert or delete.
-    Only consider stem nodes with size >= min_size.
-    (The parameter max_modifications is not used to track per-node modifications in this simple version.)
-    """
+def modify_stem(seq, structure, min_size, max_size, max_modifications, mod_counts):
     mapping = get_node_mapping(structure, seq)
-    eligible = [node for node in mapping if node.startswith("s") and len(mapping[node]) >= min_size]
+    eligible = [node for node in mapping if node.startswith("s") and len(mapping[node]) >= min_size 
+                and mod_counts.get(node, 0) < max_modifications]
     if not eligible:
-        logger.warning("No eligible stem nodes (min size %d) for modification.", min_size)
+        logging.warning("No eligible stem nodes (min size %d and < %d modifications) for modification.", min_size, max_modifications)
         return seq, structure, mapping
     node = random.choice(eligible)
     current_size = len(mapping[node])
-    action = choose_action(current_size, min_size, current_size+5)  # For stems, assume an upper bound arbitrarily current+5
-    logger.debug("Modifying stem node %s (current size %d) with action: %s", node, current_size, action)
+    action = choose_action(current_size, min_size, max_size)
+    logging.debug("Modifying stem node %s (current size %d, modifications %d) with action: %s",
+                  node, current_size, mod_counts.get(node, 0), action)
     if action == "insert":
-        return modify_stem_insert(seq, structure)
+        result = modify_stem_insert(seq, structure)
     else:
-        return modify_stem_delete(seq, structure)
+        result = modify_stem_delete(seq, structure)
+    mod_counts[node] = mod_counts.get(node, 0) + 1
+    return result
 
-# --- Hairpin Loop Modification ---
-
-def modify_hairpin(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None):
+def modify_hairpin(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
     mapping = get_node_mapping(structure, seq)
     eligible = [node for node in mapping if node.startswith("h") and 
                 (min_size is None or len(mapping[node]) >= min_size) and 
-                (max_size is None or len(mapping[node]) <= max_size)]
+                (max_size is None or len(mapping[node]) <= max_size) and 
+                (max_modifications is None or mod_counts.get(node, 0) < max_modifications)]
     if not eligible:
-        logger.warning("No eligible hairpin nodes for modification.")
+        logging.warning("No eligible hairpin nodes for modification.")
         return seq, structure, mapping
     node = random.choice(eligible)
     indices = mapping[node]
@@ -195,31 +173,29 @@ def modify_hairpin(seq, structure, action=None, min_size=None, max_size=None, ma
     if action == "insert":
         insertion_position = random.choice(indices)
         nucleotide = random.choice(["A", "C", "G", "U"])
-        logger.debug("Inserting nucleotide %s at hairpin position %d (node %s)", nucleotide, insertion_position, node)
         seq_list.insert(insertion_position - 1, nucleotide)
         struct_list.insert(insertion_position - 1, '.')
     elif action == "delete":
         if current_size <= (min_size if min_size is not None else 1):
-            logger.warning("Hairpin node %s is at minimum size; cannot delete.", node)
+            logging.warning("Hairpin node %s is at minimum size; cannot delete.", node)
             return seq, structure, mapping
         deletion_position = random.choice(indices)
-        logger.debug("Deleting nucleotide at hairpin position %d (node %s)", deletion_position, node)
         del seq_list[deletion_position - 1]
         del struct_list[deletion_position - 1]
     new_seq = "".join(seq_list)
     new_structure = "".join(struct_list)
     new_mapping = get_node_mapping(new_structure, new_seq)
+    mod_counts[node] = mod_counts.get(node, 0) + 1
     return new_seq, new_structure, new_mapping
 
-# --- Internal Loop Modification ---
-
-def modify_internal_loop(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None):
+def modify_internal_loop(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
     mapping = get_node_mapping(structure, seq)
     eligible = [node for node in mapping if node.startswith("i") and 
                 (min_size is None or len(mapping[node]) >= min_size) and 
-                (max_size is None or len(mapping[node]) <= max_size)]
+                (max_size is None or len(mapping[node]) <= max_size) and
+                (max_modifications is None or mod_counts.get(node, 0) < max_modifications)]
     if not eligible:
-        logger.warning("No eligible internal loop nodes for modification.")
+        logging.warning("No eligible internal loop nodes for modification.")
         return seq, structure, mapping
     node = random.choice(eligible)
     indices = mapping[node]
@@ -232,31 +208,29 @@ def modify_internal_loop(seq, structure, action=None, min_size=None, max_size=No
     if action == "insert":
         insertion_position = random.choice(indices)
         nucleotide = random.choice(["A", "C", "G", "U"])
-        logger.debug("Inserting nucleotide %s at internal loop position %d (node %s)", nucleotide, insertion_position, node)
         seq_list.insert(insertion_position - 1, nucleotide)
         struct_list.insert(insertion_position - 1, '.')
     elif action == "delete":
         if current_size <= (min_size if min_size is not None else 1):
-            logger.warning("Internal loop node %s is at minimum size; cannot delete.", node)
+            logging.warning("Internal loop node %s is at minimum size; cannot delete.", node)
             return seq, structure, mapping
         deletion_position = random.choice(indices)
-        logger.debug("Deleting nucleotide at internal loop position %d (node %s)", deletion_position, node)
         del seq_list[deletion_position - 1]
         del struct_list[deletion_position - 1]
     new_seq = "".join(seq_list)
     new_structure = "".join(struct_list)
     new_mapping = get_node_mapping(new_structure, new_seq)
+    mod_counts[node] = mod_counts.get(node, 0) + 1
     return new_seq, new_structure, new_mapping
 
-# --- Multiloop Modification ---
-
-def modify_multiloop(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None):
+def modify_multiloop(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
     mapping = get_node_mapping(structure, seq)
     eligible = [node for node in mapping if node.startswith("m") and 
                 (min_size is None or len(mapping[node]) >= min_size) and 
-                (max_size is None or len(mapping[node]) <= max_size)]
+                (max_size is None or len(mapping[node]) <= max_size) and 
+                (max_modifications is None or mod_counts.get(node, 0) < max_modifications)]
     if not eligible:
-        logger.warning("No eligible multiloop nodes for modification.")
+        logging.warning("No eligible multiloop nodes for modification.")
         return seq, structure, mapping
     node = random.choice(eligible)
     indices = mapping[node]
@@ -269,56 +243,48 @@ def modify_multiloop(seq, structure, action=None, min_size=None, max_size=None, 
     if action == "insert":
         insertion_position = random.choice(indices)
         nucleotide = random.choice(["A", "C", "G", "U"])
-        logger.debug("Inserting nucleotide %s at multiloop position %d (node %s)", nucleotide, insertion_position, node)
         seq_list.insert(insertion_position - 1, nucleotide)
         struct_list.insert(insertion_position - 1, '.')
     elif action == "delete":
         if current_size <= (min_size if min_size is not None else 1):
-            logger.warning("Multiloop node %s is at minimum size; cannot delete.", node)
+            logging.warning("Multiloop node %s is at minimum size; cannot delete.", node)
             return seq, structure, mapping
         deletion_position = random.choice(indices)
-        logger.debug("Deleting nucleotide at multiloop position %d (node %s)", deletion_position, node)
         del seq_list[deletion_position - 1]
         del struct_list[deletion_position - 1]
     new_seq = "".join(seq_list)
     new_structure = "".join(struct_list)
     new_mapping = get_node_mapping(new_structure, new_seq)
+    mod_counts[node] = mod_counts.get(node, 0) + 1
     return new_seq, new_structure, new_mapping
 
-# --- Bulge Modification ---
-def modify_bulge(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None):
-    """
-    We assume eligible bulges are internal loops of size exactly 1.
-    """
+def modify_bulge(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
     mapping = get_node_mapping(structure, seq)
     eligible = [node for node in mapping if node.startswith("i") and len(mapping[node]) == 1 and
                 (min_size is None or len(mapping[node]) >= min_size) and 
-                (max_size is None or len(mapping[node]) <= max_size)]
+                (max_size is None or len(mapping[node]) <= max_size) and
+                (max_modifications is None or mod_counts.get(node, 0) < max_modifications)]
     if not eligible:
-        logger.warning("No eligible bulge nodes for modification.")
+        logging.warning("No eligible bulge nodes for modification.")
         return seq, structure, mapping
     node = random.choice(eligible)
     indices = mapping[node]
-    # For bulge, current_size is 1.
-    action = action if action is not None else "insert"  # With size 1, deletion may not be allowed.
+    action = action if action is not None else "insert"
     seq_list = list(seq)
     struct_list = list(structure)
     if action == "insert":
         insertion_position = indices[0]
         nucleotide = random.choice(["A", "C", "G", "U"])
-        logger.debug("Inserting nucleotide %s at bulge position %d (node %s)", nucleotide, insertion_position, node)
         seq_list.insert(insertion_position - 1, nucleotide)
         struct_list.insert(insertion_position - 1, '.')
     elif action == "delete":
-        # Deletion from a bulge of size 1 is not permitted.
-        logger.warning("Bulge node %s is of minimal size; cannot delete.", node)
+        logging.warning("Bulge node %s is of minimal size; cannot delete.", node)
         return seq, structure, mapping
     new_seq = "".join(seq_list)
     new_structure = "".join(struct_list)
     new_mapping = get_node_mapping(new_structure, new_seq)
+    mod_counts[node] = mod_counts.get(node, 0) + 1
     return new_seq, new_structure, new_mapping
-
-# --- Dinucleotide Shuffling and Negative Sample ---
 
 def dinuc_shuffle(seq):
     """Return a new sequence that preserves the original dinucleotide frequencies."""
@@ -368,8 +334,6 @@ def generate_negative_sample(seq, allowed_variation=0):
     logger.debug("Generated negative sample: %s with structure %s", shuffled_seq, neg_structure)
     return shuffled_seq, neg_structure
 
-# --- Plotting ---
-
 def plot_rna_structure(seq, structure, ax=None):
     """
     Plot the RNA secondary structure using forgi’s matplotlib tools.
@@ -386,23 +350,19 @@ def plot_rna_structure(seq, structure, ax=None):
     except Exception as e:
         logger.exception("Error while plotting RNA structure: %s", e)
 
-# --- Triplet Generation Pipeline ---
-
 def generate_triplet(seq_min_len, seq_max_len, seq_len_distribution, seq_len_mean, seq_len_sd,
                      neg_len_variation,
-                     n_stem_indels, stem_min_size, stem_max_n_modifications,
+                     n_stem_indels, stem_min_size, stem_max_size, stem_max_n_modifications,
                      n_hloop_indels, hloop_min_size, hloop_max_size, hloop_max_n_modifications,
                      n_iloop_indels, iloop_min_size, iloop_max_size, iloop_max_n_modifications,
                      n_bulge_indels, bulge_min_size, bulge_max_size, bulge_max_n_modifications,
                      n_mloop_indels, mloop_min_size, mloop_max_size, mloop_max_n_modifications):
-    # Choose sequence length.
     if seq_len_distribution == "unif":
         length = random.randint(seq_min_len, seq_max_len)
     else:
         length = int(random.gauss(seq_len_mean, seq_len_sd))
         length = max(seq_min_len, min(seq_max_len, length))
     logger.debug("Selected sequence length: %d", length)
-    # Generate anchor.
     anchor_seq = generate_random_rna(length)
     anchor_structure = predict_structure(anchor_seq)
     anchor_mapping = get_node_mapping(anchor_structure, anchor_seq)
@@ -410,31 +370,37 @@ def generate_triplet(seq_min_len, seq_max_len, seq_len_distribution, seq_len_mea
     
     pos_seq, pos_structure, pos_mapping = anchor_seq, anchor_structure, anchor_mapping
     
-    # Stem modifications.
-    for _ in range(n_stem_indels):
-        pos_seq, pos_structure, pos_mapping = modify_stem(pos_seq, pos_structure, stem_min_size, stem_max_n_modifications)
+    mod_counts = {}
     
-    # Hairpin loop modifications.
+    for _ in range(n_stem_indels):
+        pos_seq, pos_structure, pos_mapping = modify_stem(pos_seq, pos_structure,
+                                                          stem_min_size, stem_max_size, stem_max_n_modifications,
+                                                          mod_counts)
+    
     for _ in range(n_hloop_indels):
         pos_seq, pos_structure, pos_mapping = modify_hairpin(pos_seq, pos_structure,
-                                                              min_size=hloop_min_size,
-                                                              max_size=hloop_max_size)
-    # Internal loop modifications.
+                                                             min_size=hloop_min_size,
+                                                             max_size=hloop_max_size,
+                                                             max_modifications=hloop_max_n_modifications,
+                                                             mod_counts=mod_counts)
     for _ in range(n_iloop_indels):
         pos_seq, pos_structure, pos_mapping = modify_internal_loop(pos_seq, pos_structure,
                                                                    min_size=iloop_min_size,
-                                                                   max_size=iloop_max_size)
-    # Bulge modifications.
+                                                                   max_size=iloop_max_size,
+                                                                   max_modifications=iloop_max_n_modifications,
+                                                                   mod_counts=mod_counts)
     for _ in range(n_bulge_indels):
         pos_seq, pos_structure, pos_mapping = modify_bulge(pos_seq, pos_structure,
                                                            min_size=bulge_min_size,
-                                                           max_size=bulge_max_size)
-    # Multiloop modifications.
+                                                           max_size=bulge_max_size,
+                                                           max_modifications=bulge_max_n_modifications,
+                                                           mod_counts=mod_counts)
     for _ in range(n_mloop_indels):
         pos_seq, pos_structure, pos_mapping = modify_multiloop(pos_seq, pos_structure,
                                                                min_size=mloop_min_size,
-                                                               max_size=mloop_max_size)
-    # Generate negative sample.
+                                                               max_size=mloop_max_size,
+                                                               max_modifications=mloop_max_n_modifications,
+                                                               mod_counts=mod_counts)
     neg_seq, neg_structure = generate_negative_sample(anchor_seq, neg_len_variation)
     
     triplet = {
@@ -448,8 +414,10 @@ def generate_triplet(seq_min_len, seq_max_len, seq_len_distribution, seq_len_mea
     logger.info("Triplet generated.")
     return triplet
 
+def generate_triplet_thread(thread_size, *args, **kwargs):
+    return [generate_triplet(*args, **kwargs) for _ in range(thread_size)]
+
 def split_dataset(df, train_fraction):
-    """Split the DataFrame into training and validation sets."""
     train_df = df.sample(frac=train_fraction, random_state=42)
     val_df = df.drop(train_df.index)
     logger.debug("Dataset split: %d training, %d validation samples", len(train_df), len(val_df))

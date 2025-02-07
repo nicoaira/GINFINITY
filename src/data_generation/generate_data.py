@@ -5,9 +5,10 @@ generate_data.py
 Main script for RNA triplet dataset generation.
 
 This script parses command‐line arguments (including the new parameters for sequence generation and modifications),
-generates run metadata, calls the triplet-generation pipeline in parallel, saves the dataset (with sequential IDs),
-optionally splits the dataset, and if requested, creates plots for a subset of triplets (each triplet plotted
-as one figure with three subplots for the anchor, positive, and negative structures).
+generates run metadata, calls the triplet-generation pipeline in parallel (with each worker generating a vector
+of triplets concurrently), saves the dataset (with sequential IDs), optionally splits the dataset, and if requested,
+creates plots for a subset of triplets (each triplet plotted as one figure with three subplots for the anchor,
+positive, and negative structures).
 """
 
 import argparse
@@ -20,9 +21,10 @@ import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import math
 
 from data_generation_utils import (
-    generate_triplet,
+    generate_triplet_thread,
     plot_rna_structure,
     split_dataset,
 )
@@ -41,6 +43,7 @@ def parse_arguments():
     # Stem Modifications
     parser.add_argument("--n_stem_indels", type=int, default=1, help="Number of stem modification cycles")
     parser.add_argument("--stem_min_size", type=int, default=2, help="Minimum stem size")
+    parser.add_argument("--stem_max_size", type=int, default=10, help="Maximum stem size")  # <-- New parameter
     parser.add_argument("--stem_max_n_modifications", type=int, default=1, help="Maximum modifications per stem")
     
     # Loop Modifications
@@ -68,6 +71,7 @@ def parse_arguments():
     # Performance
     parser.add_argument("--num_workers", type=int, default=4, help="Number of parallel workers")
     parser.add_argument("--output_dir", type=str, default="output", help="Directory to save output CSV, plots, and metadata")
+    parser.add_argument("--batch_size", type=int, default=64, help="Number of triplets to generate per thread (vectorized block)")
     
     # Visualization
     parser.add_argument("--plot", action="store_true", help="Generate structure plots")
@@ -80,6 +84,7 @@ def parse_arguments():
     
     # Debug option
     parser.add_argument("--debug", action="store_true", help="Enable debug logging for detailed output")
+    parser.add_argument("--timing-log", action="store_true", help="Enable detailed timing logs for structure modifications")
     
     return parser.parse_args()
 
@@ -137,30 +142,47 @@ def main():
         json.dump(metadata, f, indent=4)
     logging.info("Metadata saved to %s", metadata_file)
     
+    # --- Vectorized Generation using Threads ---
+    total = args.num_structures
+    batch_size = args.batch_size
+    # Compute number of tasks (threads) required.
+    num_tasks = (total + batch_size - 1) // batch_size  # ceiling division
+    task_sizes = [batch_size] * num_tasks
+    # Adjust last task if needed.
+    if total % batch_size != 0:
+        task_sizes[-1] = total % batch_size
+
     triplets = []
     with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
         futures = [
             executor.submit(
-                generate_triplet,
+                data_generation_utils.generate_triplet_thread,
+                ts,
                 args.seq_min_len, args.seq_max_len, args.seq_len_distribution, args.seq_len_mean, args.seq_len_sd,
                 args.neg_len_variation,
-                args.n_stem_indels, args.stem_min_size, args.stem_max_n_modifications,
+                args.n_stem_indels, args.stem_min_size, args.stem_max_size, args.stem_max_n_modifications,  # Updated order
                 args.n_hloop_indels, args.hloop_min_size, args.hloop_max_size, args.hloop_max_n_modifications,
                 args.n_iloop_indels, args.iloop_min_size, args.iloop_max_size, args.iloop_max_n_modifications,
                 args.n_bulge_indels, args.bulge_min_size, args.bulge_max_size, args.bulge_max_n_modifications,
                 args.n_mloop_indels, args.mloop_min_size, args.mloop_max_size, args.mloop_max_n_modifications
             )
-            for _ in range(args.num_structures)
+            for ts in task_sizes
         ]
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Generating triplets"):
+        pbar = tqdm(total=args.num_structures, desc="Generating triplets")
+        for future in as_completed(futures):
             try:
-                triplet = future.result()
-                triplets.append(triplet)
+                thread_triplets = future.result()  # each task returns a list of triplets
+                triplets.extend(thread_triplets)
+                pbar.update(len(thread_triplets))
             except Exception:
-                logging.exception("Error generating triplet:")
+                logging.exception("Error generating triplet thread:")
+        pbar.close()
 
+    # Ensure we have exactly the requested number.
+    triplets = triplets[:total]
+    
     df = pd.DataFrame(triplets)
-    # Assign sequential IDs
+    # Assign sequential IDs.
     df["triplet_id"] = list(range(len(df)))
     
     output_csv = os.path.join(args.output_dir, "rna_triplets.csv")
@@ -184,66 +206,30 @@ def main():
     if args.plot:
         plot_dir = os.path.join(args.output_dir, "plots")
         os.makedirs(plot_dir, exist_ok=True)
-        new_func(args, plot_dir, df)
-
+        dpi = 100  # adjust as needed
+        # Plot a random subset of the triplets.
+        for idx, row in df.sample(n=min(args.num_plots, len(df)), random_state=42).iterrows():
+            L = len(row["anchor_seq"])
+            subplot_size_px = 500 + 8 * max(0, L - 130)
+            width_in = (3 * subplot_size_px) / dpi
+            height_in = subplot_size_px / dpi
+            logging.debug("Plotting Triplet %d: Anchor length=%d, subplot size=%d px, figure size=(%.1f in x %.1f in)",
+                          idx, L, subplot_size_px, width_in, height_in)
+            fig, axs = plt.subplots(1, 3, figsize=(width_in, height_in), dpi=dpi)
+            plot_rna_structure(row["anchor_seq"], row["anchor_structure"], ax=axs[0])
+            axs[0].set_title("Anchor")
+            plot_rna_structure(row["positive_seq"], row["positive_structure"], ax=axs[1])
+            axs[1].set_title("Positive")
+            plot_rna_structure(row["negative_seq"], row["negative_structure"], ax=axs[2])
+            axs[2].set_title("Negative")
+            fig.suptitle(f"Triplet {idx}")
+            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+            output_plot = os.path.join(plot_dir, f"triplet_{idx}.png")
+            plt.savefig(output_plot)
+            plt.close(fig)
+            logging.debug("Saved triplet plot to %s", output_plot)
+    
     logging.info("Data generation complete. Output saved in: %s", args.output_dir)
-
-def new_func(args, plot_dir, df):
-    dpi = 100  # adjust as needed
-    plotted_indices = set()
-    remaining_df = df.copy()
-
-    for target_idx in range(args.num_plots):
-        if len(remaining_df) == 0:
-            logging.warning(f"No more triplets available to plot after {len(plotted_indices)} successful plots")
-            break
-
-        success = False
-        while not success and len(remaining_df) > 0:
-            row = remaining_df.sample(n=1).iloc[0]
-            idx = row.name
-            
-            if idx in plotted_indices:
-                continue
-
-            try:
-                L = len(row["anchor_seq"])
-                subplot_size_px = 500 + 5 * max(0, L - 130)
-                width_in = (3 * subplot_size_px) / dpi
-                height_in = subplot_size_px / dpi
-
-                logging.debug("Trying to plot Triplet %d: Anchor length=%d, subplot size=%d px, figure size=(%.1f in x %.1f in)", 
-                            idx, L, subplot_size_px, width_in, height_in)
-
-                fig, axs = plt.subplots(1, 3, figsize=(width_in, height_in), dpi=dpi)
-                plot_rna_structure(row["anchor_seq"], row["anchor_structure"], ax=axs[0])
-                axs[0].set_title("Anchor")
-                plot_rna_structure(row["positive_seq"], row["positive_structure"], ax=axs[1])
-                axs[1].set_title("Positive")
-                plot_rna_structure(row["negative_seq"], row["negative_structure"], ax=axs[2])
-                axs[2].set_title("Negative")
-                fig.suptitle(f"Triplet {idx}")
-                plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-                output_plot = os.path.join(plot_dir, f"triplet_{idx}.png")
-                plt.savefig(output_plot)
-                plt.close(fig)
-                
-                logging.debug("Successfully saved triplet plot to %s", output_plot)
-                plotted_indices.add(idx)
-                success = True
-                
-            except StopIteration:
-                plt.close('all')  # Clean up any partially created figures
-                logging.warning(f"StopIteration error when plotting triplet {idx}, trying another triplet...")
-                remaining_df = remaining_df.drop(idx)
-                
-            except Exception as e:
-                plt.close('all')
-                logging.error(f"Unexpected error when plotting triplet {idx}: {str(e)}")
-                remaining_df = remaining_df.drop(idx)
-
-    if len(plotted_indices) < args.num_plots:
-        logging.warning(f"Could only plot {len(plotted_indices)} triplets out of {args.num_plots} requested")
 
 if __name__ == "__main__":
     main()
