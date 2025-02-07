@@ -1,978 +1,424 @@
-import numpy as np
-import forgi
-from ViennaRNA import fold
-import math
-import igraph as ig
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from tqdm import tqdm
-import tempfile
+#!/usr/bin/env python
+"""
+data_generation_utils.py
+
+Utility functions for RNA triplet generation.
+This module uses forgi and ViennaRNA to load and handle RNA secondary structures.
+It includes functions to apply local modifications to stems and loops (hairpin, internal, bulge, multiloop)
+subject to size constraints. For each eligible node the modification action (insertion vs deletion)
+is chosen at random (with restrictions if the current size is at or near a boundary).
+Detailed logging is provided to help with debugging.
+"""
+
 import random
+import logging
 import matplotlib.pyplot as plt
-import forgi.visual.mplotlib as fvm
-import os
+import time
 
-def update_nodes_dict(dot_bracket_mapper, nodes_dict):
+import forgi.graph.bulge_graph as fgb
+from ViennaRNA import fold  # Assume the ViennaRNA Python binding is installed
 
-    ''' This functions updates the nodes dict, which helps to map the range
-    of each element of the strucutre, using the dot_bracket_mapper.
-    There is a for loop that advances through the dot_bracket_mapper.
-    In each step, it analyze whether
-    '''
+logger = logging.getLogger(__name__)
 
-    updated_nodes_dict = {key : [] for key in nodes_dict.keys()}
+def generate_random_rna(length):
+    """Return a random RNA sequence of the given length."""
+    seq = ''.join(random.choices("ACGU", k=length))
+    logger.debug("Generated random RNA (length %d): %s", length, seq)
+    return seq
 
-    prev_element = 'START'
+def predict_structure(seq):
+    """Predict the MFE secondary structure for the RNA sequence using ViennaRNA."""
+    structure, mfe = fold(seq)
+    logger.debug("Predicted structure for sequence %s: %s (MFE: %s)", seq, structure, mfe)
+    return structure
 
-    for pos, element in enumerate(dot_bracket_mapper):
-
-      if pos < len(dot_bracket_mapper) - 1:
-        next_element = dot_bracket_mapper[pos+1]
-      else:
-        next_element = 'END'
-
-      if element != prev_element:
-        updated_nodes_dict[element].append(pos + 1)
-
-      if element != next_element:
-        updated_nodes_dict[element].append(pos + 1)
-
-      prev_element = element
-
-
-    for node, range in updated_nodes_dict.items():
-      if range == []:
-        updated_nodes_dict[node] = ''
-
-    return updated_nodes_dict
-
-
-def structure_transformation(structure,
-                            case_found,
-                            node_A_internals = None,
-                            node_A_externals = None,
-                            node_B_internals = None,
-                            node_B_externals = None,
-                            ):
-
-    if case_found == 1 or case_found == 2:
-
-        connector_1_range = ( node_A_internals[0] + 1 , node_B_externals[0] - 1 )
-        connector_2_range = ( node_B_externals[1] + 1 , node_A_internals[1] - 1 )
-
-        structure_temp  = structure[ :node_A_internals[0]]
-        structure_temp += structure[connector_2_range[0] - 1 : connector_2_range[1]]
-        structure_temp += structure[node_B_externals[0] - 1 : node_B_externals[1]]
-        structure_temp += structure[connector_1_range[0] - 1 : connector_1_range[1]]
-        structure_temp += structure[node_A_internals[1] - 1 : ]
-
-    elif case_found == 3 or case_found == 4:
-
-        connector_range = ( node_A_externals[1] + 1 , node_B_externals[0] - 1 )
-
-        structure_temp  = structure[:node_A_externals[0] - 1]
-        structure_temp += structure[node_B_externals[0] - 1 : node_B_externals[1]]
-        structure_temp += structure[connector_range[0] - 1 : connector_range[1]]
-        structure_temp += structure[node_A_externals[0] - 1 : node_A_externals[1]]
-        structure_temp += structure[node_B_externals[1]:]
-
-    return structure_temp
-
-
-def structure_shuffle(pos_structure, pos_sequence, node1, node2, graph,
-                      nodes_dict, dot_bracket_mapper):
-
-
-
-    node_1_name = graph.vs['name'][node1]
-
-    node_2_name = graph.vs['name'][node2]
-
-    node_1_internals = ( nodes_dict[node_1_name][1] , nodes_dict[node_1_name][2] )
-    node_1_externals = ( nodes_dict[node_1_name][0] , nodes_dict[node_1_name][3] )
-
-    node_2_internals = ( nodes_dict[node_2_name][1] , nodes_dict[node_2_name][2] )
-    node_2_externals = ( nodes_dict[node_2_name][0] , nodes_dict[node_2_name][3] )
-
-    ## Two possible scenarios for the swapping:
-    ## 1 -  Both structures to swap are independent, i.e., node_1 and node_2 ranges are not overlapping
-    ## 2 -  One of the structures is inside the range of the other one. This is, the
-    ##      structure_2_start
-
-
-    if node_1_externals[0] < node_2_externals[0] and node_1_externals[1] > node_2_externals[1]:
-
-        case_found = 1
-
-        # node_1 = A
-        # node_2 = B
-
-        node_A_internals = node_1_internals
-        node_A_externals = node_1_externals
-
-        node_B_internals = node_2_internals
-        node_B_externals = node_2_externals
-
-    elif node_2_externals[0] < node_1_externals[0] and node_2_externals[1] > node_1_externals[1]:
-
-        case_found = 2
-
-        # node_2 = A
-        # node_1 = B
-
-        node_A_internals = node_2_internals
-        node_A_externals = node_2_externals
-
-        node_B_internals = node_1_internals
-        node_B_externals = node_1_externals
-
-    elif node_1_externals[1] < node_2_externals[0]:
-
-        case_found = 3
-
-        # node_1 = A
-        # node_2 = B
-
-        node_A_internals = node_1_internals
-        node_A_externals = node_1_externals
-
-        node_B_internals = node_2_internals
-        node_B_externals = node_2_externals
-
-
-    elif node_2_externals[1] < node_1_externals[0]:
-
-        case_found = 4
-
-        # node_2 = A
-        # node_1 = B
-
-        node_A_internals = node_2_internals
-        node_A_externals = node_2_externals
-
-        node_B_internals = node_1_internals
-        node_B_externals = node_1_externals
-
-
-
-    pos_structure = structure_transformation(pos_structure,
-                                             case_found,
-                                             node_A_internals,
-                                             node_A_externals,
-                                             node_B_internals,
-                                             node_B_externals)
-
-
-
-
-    dot_bracket_mapper = structure_transformation(dot_bracket_mapper,
-                                                  case_found,
-                                                  node_A_internals,
-                                                  node_A_externals,
-                                                  node_B_internals,
-                                                  node_B_externals)
-
-
-    pos_sequence = structure_transformation(pos_sequence,
-                                            case_found,
-                                            node_A_internals,
-                                            node_A_externals,
-                                            node_B_internals,
-                                            node_B_externals)
-
-    return pos_structure, pos_sequence, dot_bracket_mapper
-
-
-def stem_indels(dot_bracket_mapper,
-                structure,
-                sequence,
-                modifications_counter,
-                min_size = 3,
-                max_modifications=np.inf):
-
-  ''' Takes a stucture and a dot_bracket_mapper and randomly makes an insertion
-  or deletion in one the stems of the structure. The chance of selection of a
-  stem is proportional of to its size. There is a possibility to set a min size
-  of a stem to be modified.
-  '''
-
-  elements_sizes = {key : 0 for key in dot_bracket_mapper}
-
-  for element in elements_sizes.keys():
-      elements_sizes[element] = dot_bracket_mapper.count(element)
-
-  stem_sizes = {key : value for key, value in elements_sizes.items() if (key.startswith('s') and min_size < value/2 )}
-
-  # If there are no stems with size > min_size, then return the unaffected structure
-
-  if not stem_sizes:
-    return dot_bracket_mapper, structure, sequence, modifications_counter
-
-  total_value = sum(stem_sizes.values())
-
-  ## Randomly select an stem with a probability proportional to its size
-
-  random_num = random.randint(0, total_value - 1)
-
-  # Iterate through the dictionary to find the key corresponding to the random number
-  for stem, size in stem_sizes.items():
-      random_num -= size
-      if random_num < 0:
-          selected_stem = stem
-          break
-
-  # If the selected stem already suffered the max number of modifications, then
-  # it returns the unaffected structure
-  if modifications_counter[selected_stem] == max_modifications:
-      return dot_bracket_mapper, structure, sequence, modifications_counter
-
-  else:
-      pass
-
-  modifications_counter[selected_stem] += 1
-
-  options = ['insert', 'delete']
-  selected_option = random.choice(options)
-
-  if selected_option == 'delete':
-    # Find the index of the first occurrence of the element
-
-    #####
-    # ESTO DELECIONA/INTRODUCE LA BASE SIEMPRE AL PRINCIPIO DEL STEM (BIAS?)
-    #####
-
-    first_index = dot_bracket_mapper.index(selected_stem)
-
-    # Find the index of the last occurrence of the element
-    last_index = len(dot_bracket_mapper) - dot_bracket_mapper[::-1].index(selected_stem) - 1
-
-    # Remove the first base of the stem
-    dot_bracket_mapper.pop(first_index)
-    structure = structure[:first_index] + structure[first_index+1:]
-    sequence = sequence[:first_index] + sequence[first_index+1:]
-
-    # we need to modify the last_index since the structure has been shorten in 1
-    last_index -= 1
-
-    # Remove the last base of the stem (the one basepaired with the first one)
-    dot_bracket_mapper.pop(last_index)
-    structure = structure[:last_index] + structure[last_index+1:]
-    sequence = sequence[:last_index] + sequence[last_index+1:]
-
-
-  if selected_option == 'insert':
-
-    # Define bases to insert
-
-    selected_base_1 = random.choice(['C', 'G', 'A', 'U'])
-
-    ####
-    # NO G:U ?
-    ####
-
-    if selected_base_1 == 'C':
-        selected_base_2 = 'G'
-    elif selected_base_1 == 'G':
-        selected_base_2 = 'C'
-    elif selected_base_1 == 'A':
-        selected_base_2 = 'U'
-    elif selected_base_1 == 'U':
-        selected_base_2 = 'A'
-
-
-    # Find the index of the first occurrence of the element
-    first_index = dot_bracket_mapper.index(selected_stem)
-
-    # Find the index of the last occurrence of the element
-    last_index = len(dot_bracket_mapper) - dot_bracket_mapper[::-1].index(selected_stem) - 1
-
-    dot_bracket_mapper.insert(first_index, selected_stem)
-    structure = structure[:first_index] + '(' + structure[first_index:]
-    sequence = sequence[:first_index] + selected_base_1 + sequence[first_index:]
-
-    # we need to modify the last_index since the structure has been enlargen in 1
-    last_index += 1
-    dot_bracket_mapper.insert(last_index+1, selected_stem)
-    structure = structure[:last_index] + ')' + structure[last_index:]
-    sequence = sequence[:last_index] + selected_base_2 + sequence[last_index:]
-
-
-  return dot_bracket_mapper, structure, sequence, modifications_counter
-
-
-def hairpin_loop_indels(dot_bracket_mapper,
-                        structure,
-                        sequence,
-                        modifications_counter,
-                        min_size = 4,
-                        max_size = 8,
-                        max_modifications=np.inf):
-
-  ''' Takes a stucture and a dot_bracket_mapper and randomly makes an insertion
-  or deletion in one the hairpin loops of the structure.
-  There is a possibility to set a min and max size of a hairpin to be modified.
-  '''
-
-  elements_sizes = {key : 0 for key in dot_bracket_mapper}
-
-  for element in elements_sizes.keys():
-      elements_sizes[element] = dot_bracket_mapper.count(element)
-
-  loops_sizes = {key : value for key, value in elements_sizes.items() if (key.startswith('h') and min_size <= value <= max_size)}
-
-  # If there are no loops with min_size < size < max_size, then return the
-  # unaffected structure
-
-  if not loops_sizes:
-    return dot_bracket_mapper, structure, sequence, modifications_counter
-
-  selected_loop = random.choice(list(loops_sizes.keys()))
-
-  # If the selected loop already suffered the max number of modifications, then
-  # it returns the unaffected structure
-  if modifications_counter[selected_loop] == max_modifications:
-      return dot_bracket_mapper, structure, sequence, modifications_counter
-  else:
-      pass
-
-  options = ['insert', 'delete']
-  selected_option = random.choice(options)
-
-  modifications_counter[selected_loop] += 1
-
-  # Make sure the modification does not make the loop to pass the limits
-  if (loops_sizes[selected_loop] == min_size and selected_option == 'delete') \
-   or (loops_sizes[selected_loop] == max_size and selected_option == 'insert'):
-    return dot_bracket_mapper, structure, sequence, modifications_counter
-  else:
-    pass
-
-  if selected_option == 'delete':
-    # Find the index of the first occurrence of the element
-    first_index = dot_bracket_mapper.index(selected_loop)
-
-    dot_bracket_mapper.pop(first_index)
-    structure = structure[:first_index] + structure[first_index+1:]
-    sequence = sequence[:first_index] + sequence[first_index+1:]
-
-  if selected_option == 'insert':
-
-    # Select base to insert
-
-    selected_base = random.choice(['C', 'G', 'A', 'U'])
-
-    # Find the index of the first occurrence of the element
-    first_index = dot_bracket_mapper.index(selected_loop)
-
-    dot_bracket_mapper.insert(first_index, selected_loop)
-    structure = structure[:first_index] + '.' + structure[first_index:]
-    sequence = sequence[:first_index] + selected_base + sequence[first_index:]
-
-
-  return dot_bracket_mapper, structure, sequence, modifications_counter
-
-
-def internal_loop_indels(dot_bracket_mapper,
-                         structure,
-                         sequence,
-                         modifications_counter,
-                         nodes_dict,
-                         internal_loops_list,
-                         min_size = 1,
-                         max_size = 8,
-                         max_modifications=np.inf):
-
-  ''' Takes a stucture and a dot_bracket_mapper and randomly makes an insertion
-  or deletion in one the internal loops of the structure.
-  There is a possibility to set a min and max size of a loop to be modified.
-  '''
-
-  loop_sizes = {}
-  # this dictionary will store the size of all the loop that are within the
-  # range for modifications. It will diffirenciate both sides of the loop
-  for loop in internal_loops_list:
-
-    loop_ranges = nodes_dict[loop]
-    loop_A = loop_ranges[:2] # range of the loop at the 5' side
-    loop_A_size = loop_A[1] - loop_A[0] + 1
-    if min_size <= loop_A_size <= max_size:
-      loop_sizes[loop+'-A'] = loop_A_size
-
-    loop_B = loop_ranges[2:] # range of the loop at the 3' side
-    loop_B_size = loop_B[1] - loop_B[0] + 1
-    if min_size <= loop_B_size <= max_size:
-      loop_sizes[loop+'-B'] = loop_B_size
-
-
-  # If there are no loops with min_size < size < max_size, then return the
-  # unaffected structure
-
-  if not loop_sizes:
-    return dot_bracket_mapper, structure, sequence, modifications_counter
-
-  selected_loop = random.choice(list(loop_sizes.keys()))
-
-  selected_side = selected_loop.split('-')[1] # A or B (5' or 3' side of the loop)
-
-  selected_loop_code = selected_loop.split('-')[0] # the element code (e.g. i3)
-
-  # If the selected loop already suffered the max number of modifications, then
-  # it returns the unaffected structure
-
-  if modifications_counter[selected_loop] == max_modifications:
-      return dot_bracket_mapper, structure, sequence, modifications_counter
-  else:
-      pass
-
-  options = ['insert', 'delete']
-  selected_option = random.choice(options)
-
-  modifications_counter[selected_loop] += 1
-
-  # Make sure the modification does not make the loop to pass the limits
-  if (loop_sizes[selected_loop] == min_size and selected_option == 'delete') \
-   or (loop_sizes[selected_loop] == max_size and selected_option == 'insert'):
-    return dot_bracket_mapper, structure, sequence, modifications_counter
-  else:
-    pass
-
-
-  if selected_option == 'delete':
-    if selected_side == 'A':
-      # Find the index of the first occurrence of the element
-      first_index = dot_bracket_mapper.index(selected_loop_code)
-
-      dot_bracket_mapper.pop(first_index)
-      structure = structure[:first_index] + structure[first_index+1:]
-      sequence = sequence[:first_index] + sequence[first_index+1:]
-
-    elif selected_side == 'B':
-      # Find the index of the last occurrence of the element
-      last_index = dot_bracket_mapper[::-1].index(selected_loop_code)  # Reverse the list and find the index
-      last_index = len(dot_bracket_mapper) - last_index - 1  # Adjust the index to the original list
-
-      dot_bracket_mapper.pop(last_index)
-      structure = structure[:last_index] + structure[last_index+1:]
-      sequence = sequence[:last_index] + sequence[last_index+1:]
-
-
-  elif selected_option == 'insert':
-
-    selected_base = random.choice(['C', 'G', 'A', 'U'])
-
-    if selected_side == 'A':
-      # Find the index of the first occurrence of the element
-      first_index = dot_bracket_mapper.index(selected_loop_code)
-
-      dot_bracket_mapper.insert(first_index, selected_loop_code)
-      structure = structure[:first_index] + '.' + structure[first_index:]
-      sequence = sequence[:first_index] + selected_base + sequence[first_index:]
-
-    elif selected_side == 'B':
-      # Find the index of the last occurrence of the element
-      last_index = dot_bracket_mapper[::-1].index(selected_loop_code)  # Reverse the list and find the index
-      last_index = len(dot_bracket_mapper) - last_index - 1  # Adjust the index to the original list
-
-      dot_bracket_mapper.insert(last_index, selected_loop_code)
-
-      structure = structure[:last_index] + '.' + structure[last_index:]
-      sequence = sequence[:last_index] + selected_base + sequence[last_index:]
-
-  return dot_bracket_mapper, structure, sequence, modifications_counter
-
-
-def bulge_indels(dot_bracket_mapper,
-                 structure,
-                 sequence,
-                 modifications_counter,
-                 bulges_list,
-                 min_size = 1,
-                 max_size = 8,
-                 max_modifications=np.inf):
-
-  ''' Takes a stucture and a dot_bracket_mapper and randomly makes an insertion
-  or deletion in one the bulges of the structure.
-  There is a possibility to set a min and max size of a hairpin to be modified.
-  '''
-
-  elements_sizes = {key : 0 for key in dot_bracket_mapper}
-
-  for element in elements_sizes.keys():
-      elements_sizes[element] = dot_bracket_mapper.count(element)
-
-  bulges_sizes = {key : value for key, value in elements_sizes.items() if (key in bulges_list and min_size <= value <= max_size)}
-
-  # If there are no bulges with min_size < size < max_size, then return the
-  # unaffected structure
-
-
-  if not bulges_sizes:
-    return dot_bracket_mapper, structure, sequence, modifications_counter
-
-  selected_bulge = random.choice(list(bulges_sizes.keys()))
-
-  # If the selected bluge already suffered the max number of modifications, then
-  # it returns the unaffected structure
-
-  if modifications_counter[selected_bulge] == max_modifications:
-      return dot_bracket_mapper, structure, sequence, modifications_counter
-  else:
-      pass
-
-  options = ['insert', 'delete']
-  selected_option = random.choice(options)
-
-  modifications_counter[selected_bulge] += 1
-
-  # Make sure the modification does not make the loop to pass the limits
-  if (bulges_sizes[selected_bulge] == min_size and selected_option == 'delete') \
-   or (bulges_sizes[selected_bulge] == max_size and selected_option == 'insert'):
-    return dot_bracket_mapper, structure, sequence, modifications_counter
-  else:
-    pass
-
-  if selected_option == 'delete':
-    # Find the index of the first occurrence of the element
-    first_index = dot_bracket_mapper.index(selected_bulge)
-
-    dot_bracket_mapper.pop(first_index)
-    structure = structure[:first_index] + structure[first_index+1:]
-    sequence = sequence[:first_index] + sequence[first_index+1:]
-
-  if selected_option == 'insert':
-
-    selected_base = random.choice(['C', 'G', 'A', 'U'])
-
-    # Find the index of the first occurrence of the element
-    first_index = dot_bracket_mapper.index(selected_bulge)
-
-    dot_bracket_mapper.insert(first_index, selected_bulge)
-    structure = structure[:first_index] + '.' + structure[first_index:]
-    sequence = sequence[:first_index] + selected_base + sequence[first_index:]
-
-
-  return dot_bracket_mapper, structure, sequence, modifications_counter
-
-
-def multi_loop_indels(dot_bracket_mapper,
-                      structure,
-                      sequence,
-                      modifications_counter,
-                      min_size = 0,
-                      max_size = 10,
-                      max_modifications=np.inf):
-
-  ''' Takes a stucture and a dot_bracket_mapper and randomly makes an insertion
-  or deletion in one the multisegment loops of the structure.
-  There is a possibility to set a min and max size of a  multisegment loops
-  to be modified.
-  '''
-
-  elements_sizes = {key : 0 for key in dot_bracket_mapper}
-
-  for element in elements_sizes.keys():
-      elements_sizes[element] = dot_bracket_mapper.count(element)
-
-  mloops_sizes = {key : value for key, value in elements_sizes.items() if (key.startswith('m') and min_size <= value <= max_size)}
-
-  # If there are no mloops with min_size < size < max_size, then return the
-  # unaffected structure
-
-  if not mloops_sizes:
-    return dot_bracket_mapper, structure, sequence, modifications_counter
-
-  selected_mloop = random.choice(list(mloops_sizes.keys()))
-
-  # If the selected loop already suffered the max number of modifications, then
-  # it returns the unaffected structure
-  if modifications_counter[selected_mloop] == max_modifications:
-      return dot_bracket_mapper, structure, sequence,  modifications_counter
-  else:
-      pass
-
-  options = ['insert', 'delete']
-  selected_option = random.choice(options)
-
-  modifications_counter[selected_mloop] += 1
-
-  # Make sure the modification does not make the loop to pass the limits
-  if (mloops_sizes[selected_mloop] == min_size and selected_option == 'delete') \
-   or (mloops_sizes[selected_mloop] == max_size and selected_option == 'insert'):
-    return dot_bracket_mapper, structure, sequence, modifications_counter
-  else:
-    pass
-
-  first_index = dot_bracket_mapper.index(selected_mloop)
-  if structure[first_index] != '.':
-    return dot_bracket_mapper, structure, sequence, modifications_counter
-
-  if selected_option == 'delete':
-    # Find the index of the first occurrence of the element
-
-    dot_bracket_mapper.pop(first_index)
-    structure = structure[:first_index] + structure[first_index+1:]
-    sequence = sequence[:first_index] + sequence[first_index+1:]
-
-  if selected_option == 'insert':
-
-    selected_base = random.choice(['C', 'G', 'A', 'U'])
-
-    # Find the index of the first occurrence of the element
-
-    dot_bracket_mapper.insert(first_index, selected_mloop)
-    structure = structure[:first_index] + '.' + structure[first_index:]
-    sequence = sequence[:first_index] + selected_base + sequence[first_index:]
-
-  return dot_bracket_mapper, structure, sequence, modifications_counter
-
-
-### Functions for dinucleotide shuffling based on Altschul-Erickson algorithm
-
-import random
-from collections import Counter
-
-def extract_dinucleotides(seq):
-    """Extract dinucleotides from the sequence and count their occurrences."""
-    dinucleotides = [seq[i:i+2] for i in range(len(seq) - 1)]
-    return Counter(dinucleotides)
-
-def generate_dinucleotide_list(dinucleotide_counts):
-    """Generate a list of dinucleotides based on their counts."""
-    dinucleotides = list(dinucleotide_counts.keys())
-    counts = list(dinucleotide_counts.values())
-    flattened_list = [dinuc for dinuc, count in zip(dinucleotides, counts) for _ in range(count)]
-    return flattened_list
-
-def adjust_dinucleotide_list(dinucleotide_list, target_length):
-    """Adjust the dinucleotide list to match the target length."""
-    current_length = len(dinucleotide_list) + 1  # Original length includes one extra nucleotide
-    adjustment = target_length - current_length
-
-    if adjustment > 0:
-        # Extend the list with random dinucleotides
-        dinucleotides = list(set(dinucleotide_list))  # Unique dinucleotides
-        extension = random.choices(dinucleotides, k=adjustment)
-        dinucleotide_list.extend(extension)
-    elif adjustment < 0:
-        # Truncate the list
-        dinucleotide_list = dinucleotide_list[:adjustment + len(dinucleotide_list)]
-
-    return dinucleotide_list
-
-def shuffle_and_reconstruct_sequence(dinucleotide_list):
-    """Shuffle the dinucleotide list and reconstruct the sequence."""
-    random.shuffle(dinucleotide_list)
-    if not dinucleotide_list:
-        return ""
-
-    shuffled_seq = dinucleotide_list[0]
-    for dinuc in dinucleotide_list[1:]:
-        shuffled_seq += dinuc[1]
-
-    return shuffled_seq
-
-def generate_negative(anchor_sequence, neg_len_variation=.1):
-    '''This function takes the random sequence to
-    be used as anchor during triplets training and
-    generate a random negative structure thas has
-    the dinucleotide frequency as the anchor,
-    to prevent bias.
-    As the positive strucutre can have some variation in length,
-    we allow some degree of length variation in the negative structure
-    also.'''
-
-    original_length = len(anchor_sequence)
-    target_length = int(original_length * random.uniform(1-neg_len_variation,
-                                                         1+neg_len_variation))  # Length within ±5%
-
-    dinucleotide_counts = extract_dinucleotides(anchor_sequence)
-    dinucleotide_list = generate_dinucleotide_list(dinucleotide_counts)
-
-    adjusted_dinucleotide_list = adjust_dinucleotide_list(dinucleotide_list, target_length)
-    shuffled_seq = shuffle_and_reconstruct_sequence(adjusted_dinucleotide_list)
-
-    negative_structure, _ = fold(shuffled_seq)
-
-    return shuffled_seq, negative_structure
-
-
-# The function that performs the triplet generation
-def generate_triplet(seq_min_len, seq_max_len, seq_len_distribution, seq_len_mean, seq_len_sd,
-                     variable_rearrangements, norm_nt, num_rearrangements,
-                     n_stem_indels, n_hloop_indels, n_iloop_indels, n_bulge_indels, n_mloop_indels,
-                     neg_len_variation, stem_min_size, stem_max_n_modifications, hloop_min_size,
-                     hloop_max_size, iloop_min_size, iloop_max_size, bulge_min_size, bulge_max_size,
-                     mloop_min_size, mloop_max_size, hloop_max_n_modifications, iloop_max_n_modifications,
-                     bulge_max_n_modifications, mloop_max_n_modifications):
-
-    # Set the size distribution of anchor RNAs
-    if seq_len_distribution == 'unif':
-        seq_len = random.randint(seq_min_len, seq_max_len)
-    elif seq_len_distribution == 'norm':
-        while True:
-            seq_len = int(np.random.normal(seq_len_mean, seq_len_sd))
-            if seq_min_len <= seq_len <= seq_max_len:
-                break
-
-    # Generate a random RNA sequence
-    anchor_sequence = ''.join(random.choice("ACGU") for _ in range(seq_len))
-
-    # Predict the minimum free energy (MFE) secondary structure
-    anchor_structure, _ = fold(anchor_sequence)
-
-    # Check if the structure is valid
-    if anchor_structure == '.' * len(anchor_structure) or anchor_structure.count(')') < 5:
-        return None, None
-
-    # Create the RNA object and perform graph analysis
-    cg = forgi.load_rna(anchor_structure, allow_many=False)
-    graph_description = cg.to_bg_string()
-
-    nodes_dict = {}
-    edges_list = []
-
-    lines = graph_description.splitlines()
-    for line in lines:
-        if line.startswith('define'):
-            node_list = line.strip('define').split()
-            if len(node_list) > 1:
-                nodes_dict[node_list[0]] = [int(str_base) for str_base in node_list[1:]]
-            else:
-                nodes_dict[node_list[0]] = ''
-
+def get_node_mapping(structure, seq):
     try:
-        neato_rna = cg.to_neato_string()
-    except:
-        return None, None
+        bg = fgb.BulgeGraph.from_dotbracket(structure, seq)
+    except TypeError:
+        bg = fgb.BulgeGraph.from_dotbracket(structure)
+    bg_str = bg.to_bg_string()
+    mapping = {}
+    for line in bg_str.splitlines():
+        if line.startswith("define"):
+            parts = line.split()
+            node_name = parts[1]
+            indices = [int(x) for x in parts[2:]]
+            mapping[node_name] = indices
+    logger.debug("Node mapping for structure %s with sequence %s: %s", structure, seq, mapping)
+    return mapping
 
-    lines = neato_rna.splitlines()
-    for line in lines:
-        if '--' in line:
-            edge = line.strip(';').strip().split(' -- ')
-            edges_list.append(edge)
+def get_base_pairing(structure):
+    """Compute and return a list with the base pairing (0-indexed) for the dot-bracket structure."""
+    stack = []
+    pairing = [None] * len(structure)
+    for i, char in enumerate(structure):
+        if char == '(':
+            stack.append(i)
+        elif char == ')':
+            if stack:
+                j = stack.pop()
+                pairing[i] = j
+                pairing[j] = i
+    logger.debug("Base pairing for structure %s: %s", structure, pairing)
+    return pairing
 
-    dot_bracket_mapper = [0 for _ in anchor_structure]
-    for node_name, node_range in nodes_dict.items():
-        if len(node_range) == 2:
-            range_start = node_range[0] - 1
-            range_end = node_range[1] - 1
-            for ix in range(range_start, range_end + 1):
-                dot_bracket_mapper[ix] = node_name
-        elif len(node_range) == 4:
-            left_range_start = node_range[0] - 1
-            left_range_end = node_range[1] - 1
-            for ix in range(left_range_start, left_range_end + 1):
-                dot_bracket_mapper[ix] = node_name
-            right_range_start = node_range[2] - 1
-            right_range_end = node_range[3] - 1
-            for ix in range(right_range_start, right_range_end + 1):
-                dot_bracket_mapper[ix] = node_name
+def choose_action(current_size, min_size, max_size):
+    """
+    Return 'insert' if current_size is at or below min_size,
+    'delete' if current_size is at or above max_size,
+    otherwise randomly choose between "insert" and "delete".
+    """
+    if current_size <= min_size:
+        return "insert"
+    elif current_size >= max_size:
+        return "delete"
+    else:
+        return random.choice(["insert", "delete"])
 
-    edges_dict = {edge[0]: [] for edge in edges_list}
-    for edge in edges_list:
-        edges_dict[edge[0]].append(edge[1])
+def modify_stem_insert(seq, structure):
+    mapping = get_node_mapping(structure, seq)
+    stem_nodes = [node for node in mapping if node.startswith("s")]
+    if not stem_nodes:
+        logging.warning("No stem nodes available for modification.")
+        return seq, structure, mapping
+    node = random.choice(stem_nodes)
+    indices = sorted(mapping[node])
+    if len(indices) < 2:
+        logging.warning("Stem node %s is too short to insert.", node)
+        return seq, structure, mapping
+    insertion_index = indices[len(indices) // 2]
+    pairing = get_base_pairing(structure)
+    partner_index = pairing[insertion_index - 1]
+    if partner_index is None:
+        logging.warning("No pairing found for stem base at position %d", insertion_index)
+        return seq, structure, mapping
+    partner_index = partner_index + 1
+    if insertion_index > partner_index:
+        insertion_index, partner_index = partner_index, insertion_index
+    pair_options = [("A", "U"), ("U", "A"), ("G", "C"), ("C", "G")]
+    base1, base2 = random.choice(pair_options)
+    seq_list = list(seq)
+    struct_list = list(structure)
+    seq_list.insert(insertion_index - 1, base1)
+    struct_list.insert(insertion_index - 1, '(')
+    seq_list.insert(partner_index, base2)
+    struct_list.insert(partner_index, ')')
+    new_seq = "".join(seq_list)
+    new_structure = "".join(struct_list)
+    new_mapping = get_node_mapping(new_structure, new_seq)
+    return new_seq, new_structure, new_mapping
 
-    g = ig.Graph.ListDict(edges_dict, directed=False)
-    pos_structure = anchor_structure
-    g2 = g.copy()
+def modify_stem_delete(seq, structure):
+    mapping = get_node_mapping(structure, seq)
+    pairing = get_base_pairing(structure)
+    stem_nodes = [node for node in mapping if node.startswith("s")]
+    if not stem_nodes:
+        logging.warning("No stem nodes available for deletion.")
+        return seq, structure, mapping
+    node = random.choice(stem_nodes)
+    indices = mapping[node]
+    base_pairs = []
+    for idx in indices:
+        partner = pairing[idx - 1]
+        if partner is not None and (partner + 1) in indices and idx < (partner + 1):
+            base_pairs.append((idx, partner + 1))
+    if not base_pairs:
+        logging.warning("No base pairs found in stem %s for deletion.", node)
+        return seq, structure, mapping
+    pair_to_delete = random.choice(base_pairs)
+    seq_list = [base for i, base in enumerate(seq, start=1) if i not in pair_to_delete]
+    struct_list = [char for i, char in enumerate(structure, start=1) if i not in pair_to_delete]
+    new_seq = "".join(seq_list)
+    new_structure = "".join(struct_list)
+    new_mapping = get_node_mapping(new_structure, new_seq)
+    return new_seq, new_structure, new_mapping
 
-    multiloops = [multiloop for multiloop in cg.junctions if all(element.startswith('m') for element in multiloop) and len(multiloop) > 1]
+def modify_stem(seq, structure, min_size, max_size, max_modifications, mod_counts):
+    mapping = get_node_mapping(structure, seq)
+    eligible = [node for node in mapping if node.startswith("s") and len(mapping[node]) >= min_size 
+                and mod_counts.get(node, 0) < max_modifications]
+    if not eligible:
+        logging.warning("No eligible stem nodes (min size %d and < %d modifications) for modification.", min_size, max_modifications)
+        return seq, structure, mapping
+    node = random.choice(eligible)
+    current_size = len(mapping[node])
+    action = choose_action(current_size, min_size, max_size)
+    logging.debug("Modifying stem node %s (current size %d, modifications %d) with action: %s",
+                  node, current_size, mod_counts.get(node, 0), action)
+    if action == "insert":
+        result = modify_stem_insert(seq, structure)
+    else:
+        result = modify_stem_delete(seq, structure)
+    mod_counts[node] = mod_counts.get(node, 0) + 1
+    return result
 
+def modify_hairpin(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
+    mapping = get_node_mapping(structure, seq)
+    eligible = [node for node in mapping if node.startswith("h") and 
+                (min_size is None or len(mapping[node]) >= min_size) and 
+                (max_size is None or len(mapping[node]) <= max_size) and 
+                (max_modifications is None or mod_counts.get(node, 0) < max_modifications)]
+    if not eligible:
+        logging.warning("No eligible hairpin nodes for modification.")
+        return seq, structure, mapping
+    node = random.choice(eligible)
+    indices = mapping[node]
+    current_size = len(indices)
+    if action is None:
+        action = choose_action(current_size, min_size if min_size is not None else 0,
+                               max_size if max_size is not None else current_size+5)
+    seq_list = list(seq)
+    struct_list = list(structure)
+    if action == "insert":
+        insertion_position = random.choice(indices)
+        nucleotide = random.choice(["A", "C", "G", "U"])
+        seq_list.insert(insertion_position - 1, nucleotide)
+        struct_list.insert(insertion_position - 1, '.')
+    elif action == "delete":
+        if current_size <= (min_size if min_size is not None else 1):
+            logging.warning("Hairpin node %s is at minimum size; cannot delete.", node)
+            return seq, structure, mapping
+        deletion_position = random.choice(indices)
+        del seq_list[deletion_position - 1]
+        del struct_list[deletion_position - 1]
+    new_seq = "".join(seq_list)
+    new_structure = "".join(struct_list)
+    new_mapping = get_node_mapping(new_structure, new_seq)
+    mod_counts[node] = mod_counts.get(node, 0) + 1
+    return new_seq, new_structure, new_mapping
 
-    rearrangements = math.ceil(seq_len/norm_nt) if variable_rearrangements else num_rearrangements
+def modify_internal_loop(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
+    mapping = get_node_mapping(structure, seq)
+    eligible = [node for node in mapping if node.startswith("i") and 
+                (min_size is None or len(mapping[node]) >= min_size) and 
+                (max_size is None or len(mapping[node]) <= max_size) and
+                (max_modifications is None or mod_counts.get(node, 0) < max_modifications)]
+    if not eligible:
+        logging.warning("No eligible internal loop nodes for modification.")
+        return seq, structure, mapping
+    node = random.choice(eligible)
+    indices = mapping[node]
+    current_size = len(indices)
+    if action is None:
+        action = choose_action(current_size, min_size if min_size is not None else 0,
+                               max_size if max_size is not None else current_size+5)
+    seq_list = list(seq)
+    struct_list = list(structure)
+    if action == "insert":
+        insertion_position = random.choice(indices)
+        nucleotide = random.choice(["A", "C", "G", "U"])
+        seq_list.insert(insertion_position - 1, nucleotide)
+        struct_list.insert(insertion_position - 1, '.')
+    elif action == "delete":
+        if current_size <= (min_size if min_size is not None else 1):
+            logging.warning("Internal loop node %s is at minimum size; cannot delete.", node)
+            return seq, structure, mapping
+        deletion_position = random.choice(indices)
+        del seq_list[deletion_position - 1]
+        del struct_list[deletion_position - 1]
+    new_seq = "".join(seq_list)
+    new_structure = "".join(struct_list)
+    new_mapping = get_node_mapping(new_structure, new_seq)
+    mod_counts[node] = mod_counts.get(node, 0) + 1
+    return new_seq, new_structure, new_mapping
 
-    shuffled = rearrangements > 0
-    pos_sequence = anchor_sequence
+def modify_multiloop(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
+    mapping = get_node_mapping(structure, seq)
+    eligible = [node for node in mapping if node.startswith("m") and 
+                (min_size is None or len(mapping[node]) >= min_size) and 
+                (max_size is None or len(mapping[node]) <= max_size) and 
+                (max_modifications is None or mod_counts.get(node, 0) < max_modifications)]
+    if not eligible:
+        logging.warning("No eligible multiloop nodes for modification.")
+        return seq, structure, mapping
+    node = random.choice(eligible)
+    indices = mapping[node]
+    current_size = len(indices)
+    if action is None:
+        action = choose_action(current_size, min_size if min_size is not None else 0,
+                               max_size if max_size is not None else current_size+5)
+    seq_list = list(seq)
+    struct_list = list(structure)
+    if action == "insert":
+        insertion_position = random.choice(indices)
+        nucleotide = random.choice(["A", "C", "G", "U"])
+        seq_list.insert(insertion_position - 1, nucleotide)
+        struct_list.insert(insertion_position - 1, '.')
+    elif action == "delete":
+        if current_size <= (min_size if min_size is not None else 1):
+            logging.warning("Multiloop node %s is at minimum size; cannot delete.", node)
+            return seq, structure, mapping
+        deletion_position = random.choice(indices)
+        del seq_list[deletion_position - 1]
+        del struct_list[deletion_position - 1]
+    new_seq = "".join(seq_list)
+    new_structure = "".join(struct_list)
+    new_mapping = get_node_mapping(new_structure, new_seq)
+    mod_counts[node] = mod_counts.get(node, 0) + 1
+    return new_seq, new_structure, new_mapping
 
-    for shuffle_step in range(rearrangements):
-        # print('multiloops',multiloops)
-        if len(multiloops) < 1:
-            # print('breaking')
-            break
+def modify_bulge(seq, structure, action=None, min_size=None, max_size=None, max_modifications=None, mod_counts=None):
+    mapping = get_node_mapping(structure, seq)
+    eligible = [node for node in mapping if node.startswith("i") and len(mapping[node]) == 1 and
+                (min_size is None or len(mapping[node]) >= min_size) and 
+                (max_size is None or len(mapping[node]) <= max_size) and
+                (max_modifications is None or mod_counts.get(node, 0) < max_modifications)]
+    if not eligible:
+        logging.warning("No eligible bulge nodes for modification.")
+        return seq, structure, mapping
+    node = random.choice(eligible)
+    indices = mapping[node]
+    action = action if action is not None else "insert"
+    seq_list = list(seq)
+    struct_list = list(structure)
+    if action == "insert":
+        insertion_position = indices[0]
+        nucleotide = random.choice(["A", "C", "G", "U"])
+        seq_list.insert(insertion_position - 1, nucleotide)
+        struct_list.insert(insertion_position - 1, '.')
+    elif action == "delete":
+        logging.warning("Bulge node %s is of minimal size; cannot delete.", node)
+        return seq, structure, mapping
+    new_seq = "".join(seq_list)
+    new_structure = "".join(struct_list)
+    new_mapping = get_node_mapping(new_structure, new_seq)
+    mod_counts[node] = mod_counts.get(node, 0) + 1
+    return new_seq, new_structure, new_mapping
 
-        random_multiloop = random.choice(multiloops)
-        random_loop = random.choice(random_multiloop)
-        m_neighbors = g2.neighbors(random_loop)
+def dinuc_shuffle(seq):
+    """Return a new sequence that preserves the original dinucleotide frequencies."""
+    if len(seq) <= 1:
+        logger.warning("Sequence length <= 1. Returning sequence unchanged.")
+        return seq
+    graph = {}
+    for i in range(len(seq)-1):
+        src = seq[i]
+        dst = seq[i+1]
+        graph.setdefault(src, []).append(dst)
+    for src in graph:
+        random.shuffle(graph[src])
+    trail = []
+    stack = [seq[0]]
+    while stack:
+        current = stack[-1]
+        if current in graph and graph[current]:
+            next_node = graph[current].pop()
+            stack.append(next_node)
+        else:
+            trail.append(stack.pop())
+    trail.reverse()
+    if len(trail) != len(seq):
+        logger.error("Eulerian trail length (%d) != sequence length (%d). Returning original sequence.", len(trail), len(seq))
+        return seq
+    new_seq = "".join(trail)
+    logger.debug("Dinucleotide shuffled sequence: %s", new_seq)
+    return new_seq
 
-        try:
+def generate_negative_sample(seq, allowed_variation=0):
+    """Generate a negative sample by dinucleotide shuffling and optional length variation, then folding."""
+    shuffled_seq = dinuc_shuffle(seq)
+    if allowed_variation > 0:
+        variation = random.choice(range(-allowed_variation, allowed_variation+1))
+        if variation > 0:
+            logger.debug("Increasing negative sample length by %d", variation)
+            for _ in range(variation):
+                pos = random.randint(1, len(shuffled_seq)+1)
+                shuffled_seq = shuffled_seq[:pos-1] + random.choice("ACGU") + shuffled_seq[pos-1:]
+        elif variation < 0 and len(shuffled_seq) + variation > 0:
+            logger.debug("Decreasing negative sample length by %d", abs(variation))
+            for _ in range(abs(variation)):
+                pos = random.randint(1, len(shuffled_seq))
+                shuffled_seq = shuffled_seq[:pos-1] + shuffled_seq[pos:]
+    neg_structure = predict_structure(shuffled_seq)
+    logger.debug("Generated negative sample: %s with structure %s", shuffled_seq, neg_structure)
+    return shuffled_seq, neg_structure
 
-            node_1 = m_neighbors[0]
-            node_1_neighbors = g2.neighbors(node_1)
-            node_1_loop_neighbors = [g2.vs['name'][ix] for ix in node_1_neighbors if g2.vs['name'][ix] in random_multiloop]
-
-            node_2 = m_neighbors[1]
-            node_2_neighbors = g2.neighbors(node_2)
-            node_2_loop_neighbors = [g2.vs['name'][ix] for ix in node_2_neighbors if g2.vs['name'][ix] in random_multiloop]
-
-            g2.delete_edges([(node_1, node_1_loop_neighbors[0]), (node_1, node_1_loop_neighbors[1])])
-            g2.delete_edges([(node_2, node_2_loop_neighbors[0]), (node_2, node_2_loop_neighbors[1])])
-            g2.add_edge(node_1, node_2_loop_neighbors[0])
-            g2.add_edge(node_1, node_2_loop_neighbors[1])
-            g2.add_edge(node_2, node_1_loop_neighbors[0])
-            g2.add_edge(node_2, node_1_loop_neighbors[1])
-
-            pos_structure, pos_sequence, dot_bracket_mapper = structure_shuffle(pos_structure, pos_sequence, node_1, node_2, g2, nodes_dict, dot_bracket_mapper)
-
-            nodes_dict = update_nodes_dict(dot_bracket_mapper, nodes_dict)
-
-            assert(len(pos_structure) == len(anchor_structure))
-
-        except IndexError:
-            shuffled = False
-
-
-    if shuffled:
-        bulges_list = [node for node in nodes_dict if node.startswith('i') and len(nodes_dict[node]) == 2]
-        internal_loops_list = [node for node in nodes_dict if node.startswith('i') and len(nodes_dict[node]) == 4]
-
-        modifications_counter = {key: 0 for key in dot_bracket_mapper}
-
-        for internal_loop in internal_loops_list:
-            modifications_counter[internal_loop+'-A'] = 0
-            modifications_counter[internal_loop+'-B'] = 0
-            modifications_counter.pop(internal_loop, None)
-
-        for _ in range(n_stem_indels):
-            dot_bracket_mapper, pos_structure, pos_sequence, modifications_counter = stem_indels(
-                dot_bracket_mapper, pos_structure, pos_sequence, modifications_counter,
-                min_size=stem_min_size, max_modifications=stem_max_n_modifications)
-
-        for _ in range(n_hloop_indels):
-            dot_bracket_mapper, pos_structure, pos_sequence, modifications_counter = hairpin_loop_indels(
-                dot_bracket_mapper, pos_structure, pos_sequence, modifications_counter,
-                min_size=hloop_min_size, max_size=hloop_max_size,
-                max_modifications=hloop_max_n_modifications)
-
-        for _ in range(n_iloop_indels):
-            dot_bracket_mapper, pos_structure, pos_sequence, modifications_counter = internal_loop_indels(
-                dot_bracket_mapper, pos_structure, pos_sequence, modifications_counter, nodes_dict,
-                internal_loops_list, min_size=iloop_min_size, max_size=iloop_max_size,
-                max_modifications=iloop_max_n_modifications)
-
-        for _ in range(n_bulge_indels):
-            dot_bracket_mapper, pos_structure, pos_sequence, modifications_counter = bulge_indels(
-                dot_bracket_mapper, pos_structure, pos_sequence, modifications_counter, bulges_list,
-                min_size=bulge_min_size, max_size=bulge_max_size,
-                max_modifications=bulge_max_n_modifications)
-
-        for _ in range(n_mloop_indels):
-            dot_bracket_mapper, pos_structure, pos_sequence, modifications_counter = multi_loop_indels(
-                dot_bracket_mapper, pos_structure, pos_sequence, modifications_counter,
-                min_size=mloop_min_size, max_size=mloop_max_size,
-                max_modifications=mloop_max_n_modifications)
-
-    # Generate negative structure
-    neg_sequence, neg_structure = generate_negative(anchor_sequence, neg_len_variation)
-
-    return (anchor_structure, pos_structure, neg_structure), (anchor_sequence, pos_sequence, neg_sequence)
-
-
-# Main function to run the process pool
-def parallel_structure_generation(num_structures, num_workers, seq_min_len, seq_max_len, seq_len_distribution,
-                                  seq_len_mean, seq_len_sd, variable_rearrangements, norm_nt, num_rearrangements,
-                                  n_stem_indels, n_hloop_indels, n_iloop_indels, n_bulge_indels,
-                                  n_mloop_indels, neg_len_variation, stem_min_size, stem_max_n_modifications,
-                                  hloop_min_size, hloop_max_size, iloop_min_size, iloop_max_size,
-                                  bulge_min_size, bulge_max_size, mloop_min_size, mloop_max_size,
-                                  hloop_max_n_modifications, iloop_max_n_modifications,
-                                  bulge_max_n_modifications, mloop_max_n_modifications):
-
-
-    structure_triplets = []
-    sequence_triplets = []
-
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        futures = [
-            executor.submit(generate_triplet, seq_min_len, seq_max_len, seq_len_distribution, seq_len_mean,
-                            seq_len_sd, variable_rearrangements, norm_nt, num_rearrangements,
-                            n_stem_indels, n_hloop_indels, n_iloop_indels,
-                            n_bulge_indels, n_mloop_indels, neg_len_variation, stem_min_size,
-                            stem_max_n_modifications, hloop_min_size, hloop_max_size, iloop_min_size,
-                            iloop_max_size, bulge_min_size, bulge_max_size, mloop_min_size, mloop_max_size,
-                            hloop_max_n_modifications, iloop_max_n_modifications,
-                            bulge_max_n_modifications, mloop_max_n_modifications)
-            for _ in range(num_structures)
-        ]
-
-        with tqdm(total=num_structures, desc="Processing") as pbar:
-            for future in as_completed(futures):
-                triplet_result, sequence_result = future.result()
-
-                if triplet_result is not None and sequence_result is not None:
-                    structure_triplets.append(triplet_result)
-                    sequence_triplets.append(sequence_result)
-
-                pbar.update(1)
-
-    print(f'\n{num_structures} structure pairs generated')
-    return structure_triplets, sequence_triplets
-
-def plot_rna_structure(ax, sequence, structure, structure_name):
-    """Plot single RNA structure on given axis"""
+def plot_rna_structure(seq, structure, ax=None):
+    """
+    Plot the RNA secondary structure using forgi’s matplotlib tools.
+    If an Axes object is provided, plot into it; otherwise, use the current Axes.
+    """
     try:
-        with tempfile.NamedTemporaryFile(mode='w+t', delete=False) as temp_file:
-            temp_file.write('>' + structure_name + '\n')
-            temp_file.write(sequence + '\n')
-            temp_file.write(structure + '\n')
-            temp_file.flush()
-            temp_file.seek(0)
-
-            cg = forgi.load_rna(temp_file.name, allow_many=False)
-            
-            fvm.plot_rna(cg, text_kwargs={"fontweight":"black"}, lighten=0.7,
-                        backbone_kwargs={"linewidth":3}, ax=ax)
-            ax.set_title(structure_name)
-            return True
+        import forgi.visual.mplotlib as fvm
+        bg = fgb.BulgeGraph.from_dotbracket(structure, seq)
+        if ax is None:
+            ax = plt.gca()
+        fvm.plot_rna(bg, ax=ax)
+        ax.set_title(f"Sequence: {seq}")
+        ax.axis("off")
     except Exception as e:
-        print(f"Warning: Failed to plot structure {structure_name}: {str(e)}")
-        return False
+        logger.exception("Error while plotting RNA structure: %s", e)
 
-def plot_triplets(df, plot_dir, num_samples=5):
-    """Generate plots for structure triplets with error handling and retries"""
-    successful_plots = 0
-    attempted_indices = set()
-    max_attempts = min(df.shape[0], num_samples * 3)  # Limit attempts
+def generate_triplet(seq_min_len, seq_max_len, seq_len_distribution, seq_len_mean, seq_len_sd,
+                     neg_len_variation,
+                     n_stem_indels, stem_min_size, stem_max_size, stem_max_n_modifications,
+                     n_hloop_indels, hloop_min_size, hloop_max_size, hloop_max_n_modifications,
+                     n_iloop_indels, iloop_min_size, iloop_max_size, iloop_max_n_modifications,
+                     n_bulge_indels, bulge_min_size, bulge_max_size, bulge_max_n_modifications,
+                     n_mloop_indels, mloop_min_size, mloop_max_size, mloop_max_n_modifications):
+    if seq_len_distribution == "unif":
+        length = random.randint(seq_min_len, seq_max_len)
+    else:
+        length = int(random.gauss(seq_len_mean, seq_len_sd))
+        length = max(seq_min_len, min(seq_max_len, length))
+    logger.debug("Selected sequence length: %d", length)
+    anchor_seq = generate_random_rna(length)
+    anchor_structure = predict_structure(anchor_seq)
+    anchor_mapping = get_node_mapping(anchor_structure, anchor_seq)
+    logger.info("Generated anchor sequence and structure.")
     
-    with tqdm(total=num_samples, desc="Plotting triplets") as pbar:
-        while successful_plots < num_samples and len(attempted_indices) < max_attempts:
-            # Get random index that hasn't been tried yet
-            available_indices = set(range(df.shape[0])) - attempted_indices
-            if not available_indices:
-                print("Ran out of triplets to try plotting")
-                break
-                
-            sample_idx = random.choice(list(available_indices))
-            attempted_indices.add(sample_idx)
-            
-            # Try to plot all three structures in triplet
-            try:
-                fig, axs = plt.subplots(1, 3, figsize=(24, 8))
-                success_A = plot_rna_structure(axs[0], df.iloc[sample_idx]['sequence_A'], df.iloc[sample_idx]['structure_A'], "Anchor")
-                success_P = plot_rna_structure(axs[1], df.iloc[sample_idx]['sequence_P'], df.iloc[sample_idx]['structure_P'], "Positive")
-                success_N = plot_rna_structure(axs[2], df.iloc[sample_idx]['sequence_N'], df.iloc[sample_idx]['structure_N'], "Negative")
-                
-                if success_A and success_P and success_N:
-                    unique_id = df.iloc[sample_idx]['id']
-                    out_file = os.path.join(plot_dir, f'triplet_{unique_id}.png')
-                    plt.savefig(out_file)
-                    plt.close()
-                    successful_plots += 1
-                    pbar.update(1)
-                else:
-                    plt.close()
-            except Exception as e:
-                plt.close()
-                continue
-            
-    if successful_plots < num_samples:
-        print(f"Warning: Only managed to plot {successful_plots}/{num_samples} requested triplets")
+    pos_seq, pos_structure, pos_mapping = anchor_seq, anchor_structure, anchor_mapping
+    
+    mod_counts = {}
+    
+    for _ in range(n_stem_indels):
+        pos_seq, pos_structure, pos_mapping = modify_stem(pos_seq, pos_structure,
+                                                          stem_min_size, stem_max_size, stem_max_n_modifications,
+                                                          mod_counts)
+    
+    for _ in range(n_hloop_indels):
+        pos_seq, pos_structure, pos_mapping = modify_hairpin(pos_seq, pos_structure,
+                                                             min_size=hloop_min_size,
+                                                             max_size=hloop_max_size,
+                                                             max_modifications=hloop_max_n_modifications,
+                                                             mod_counts=mod_counts)
+    for _ in range(n_iloop_indels):
+        pos_seq, pos_structure, pos_mapping = modify_internal_loop(pos_seq, pos_structure,
+                                                                   min_size=iloop_min_size,
+                                                                   max_size=iloop_max_size,
+                                                                   max_modifications=iloop_max_n_modifications,
+                                                                   mod_counts=mod_counts)
+    for _ in range(n_bulge_indels):
+        pos_seq, pos_structure, pos_mapping = modify_bulge(pos_seq, pos_structure,
+                                                           min_size=bulge_min_size,
+                                                           max_size=bulge_max_size,
+                                                           max_modifications=bulge_max_n_modifications,
+                                                           mod_counts=mod_counts)
+    for _ in range(n_mloop_indels):
+        pos_seq, pos_structure, pos_mapping = modify_multiloop(pos_seq, pos_structure,
+                                                               min_size=mloop_min_size,
+                                                               max_size=mloop_max_size,
+                                                               max_modifications=mloop_max_n_modifications,
+                                                               mod_counts=mod_counts)
+    neg_seq, neg_structure = generate_negative_sample(anchor_seq, neg_len_variation)
+    
+    triplet = {
+        "anchor_seq": anchor_seq,
+        "anchor_structure": anchor_structure,
+        "positive_seq": pos_seq,
+        "positive_structure": pos_structure,
+        "negative_seq": neg_seq,
+        "negative_structure": neg_structure
+    }
+    logger.info("Triplet generated.")
+    return triplet
 
-def split_dataset(df, train_fraction, val_fraction):
-    """Split the dataset into training and validation sets."""
-    if train_fraction + val_fraction != 1.0:
-        raise ValueError("Train and validation fractions must sum to 1.0")
-    
-    train_size = int(len(df) * train_fraction)
-    train_df = df.sample(train_size, random_state=42)
+def generate_triplet_thread(thread_size, *args, **kwargs):
+    return [generate_triplet(*args, **kwargs) for _ in range(thread_size)]
+
+def split_dataset(df, train_fraction):
+    train_df = df.sample(frac=train_fraction, random_state=42)
     val_df = df.drop(train_df.index)
-    
+    logger.debug("Dataset split: %d training, %d validation samples", len(train_df), len(val_df))
     return train_df, val_df
