@@ -161,6 +161,8 @@ def main():
     parser.add_argument('--decay_rate', type=float, default=0.01, help='Decay rate for the learning rate.')
     parser.add_argument('--pooling_type', type=str, choices=['global_add_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the GIN model.')
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate for the GIN model (default: 0.0).')
+    parser.add_argument('--val_fraction', type=float, default=0.2, help='Fraction of data for validation (default: 0.2)')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for data splitting (default: 42)')
     args = parser.parse_args()
     
     # Process hidden_dim argument
@@ -179,7 +181,7 @@ def main():
     dataset_path = args.input_path
     df = pd.read_csv(dataset_path)
     df = remove_invalid_structures(df)
-    train_df, val_df = train_test_split(df, test_size=0.2, random_state=42)
+    train_df, val_df = train_test_split(df, test_size=args.val_fraction, random_state=args.seed)
 
     device = args.device
 
