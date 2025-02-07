@@ -1,5 +1,5 @@
 python generate_data.py \
-  --num_structures 1000 \
+  --num_structures 300000 \
   --seq_min_len 50 \
   --seq_max_len 900 \
   --seq_len_distribution norm \
@@ -7,29 +7,31 @@ python generate_data.py \
   --seq_len_sd 100 \
   --neg_len_variation 20 \
   --n_stem_indels 20 \
+  --stem_max_size 14 \
   --stem_min_size 3 \
-  --stem_max_n_modifications 4 \
+  --stem_max_n_modifications 2 \
   --n_hloop_indels 10 \
   --hloop_min_size 3 \
   --hloop_max_size 10 \
-  --hloop_max_n_modifications 3 \
+  --hloop_max_n_modifications 2 \
   --n_iloop_indels 10 \
   --iloop_min_size 2 \
   --iloop_max_size 10 \
-  --iloop_max_n_modifications 4 \
+  --iloop_max_n_modifications 1 \
   --n_bulge_indels 10 \
   --bulge_min_size 1 \
-  --bulge_max_size 1 \
-  --bulge_max_n_modifications 4 \
+  --bulge_max_size 8 \
+  --bulge_max_n_modifications 1 \
   --n_mloop_indels 10 \
   --mloop_min_size 2 \
   --mloop_max_size 15 \
-  --mloop_max_n_modifications 3 \
+  --mloop_max_n_modifications 1 \
   --num_workers 12 \
-  --output_dir output \
+  --output_dir output_0702 \
   --split \
-  --train_fraction 0.8 \
-  --val_fraction 0.2 \
+  --train_fraction 0.97 \
+  --val_fraction 0.03 \
   --plot \
   --num_plots 50 \
+  --batch_size 32
   # --debug \
