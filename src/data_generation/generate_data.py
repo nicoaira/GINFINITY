@@ -5,7 +5,7 @@ generate_data.py
 Main script for RNA triplet dataset generation.
 
 This script parses command‐line arguments (including parameters for sequence generation, modifications,
-and appending events), generates run metadata, calls the triplet‐generation pipeline in parallel
+and appending events), generates run metadata, calls the triplet–generation pipeline in parallel
 (with each worker generating a “thread” of triplets concurrently), saves the dataset (with sequential IDs),
 optionally splits the dataset, and if requested, creates plots for a subset of triplets (each plotted
 as one figure with three subplots for the anchor, positive, and negative structures).
@@ -78,6 +78,12 @@ def parse_arguments():
                         help="Maximum linker length (in bases) for appending event")
     parser.add_argument("--appending_size_factor", type=float, default=1.0,
                         help="Factor to multiply the anchor length to obtain the mean for the normal distribution from which the appended RNA length is sampled. For example, if set to 0.5 and the anchor length is 100, the mean appended RNA length will be 50")
+    
+    # Modification normalization parameters
+    parser.add_argument("--mod_normalization", action="store_true",
+                        help="Enable normalization of modification counts based on the anchor length")
+    parser.add_argument("--normalization_len", type=int, default=100,
+                        help="Normalization length to scale modifications (default: 100)")
     
     # Performance
     parser.add_argument("--num_workers", type=int, default=4, help="Number of parallel workers")
@@ -159,7 +165,7 @@ def main():
         task_sizes[-1] = total % batch_size
 
     triplets = []
-    from data_generation_utils import generate_triplet_thread  # Ensure the new function is imported
+    from data_generation_utils import generate_triplet_thread
     with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
         futures = [
             executor.submit(
@@ -173,7 +179,8 @@ def main():
                 args.n_bulge_indels, args.bulge_min_size, args.bulge_max_size, args.bulge_max_n_modifications,
                 args.n_mloop_indels, args.mloop_min_size, args.mloop_max_size, args.mloop_max_n_modifications,
                 args.appending_event_probability, args.both_sides_appending_probability,
-                args.linker_min, args.linker_max, args.appending_size_factor
+                args.linker_min, args.linker_max, args.appending_size_factor,
+                args.mod_normalization, args.normalization_len
             )
             for ts in task_sizes
         ]

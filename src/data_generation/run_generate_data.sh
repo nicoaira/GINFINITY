@@ -1,37 +1,39 @@
 python generate_data.py \
-  --num_structures 100 \
-  --seq_min_len 50 \
-  --seq_max_len 900 \
+  --num_structures 1 \
+  --seq_min_len 80 \
+  --seq_max_len 120 \
   --seq_len_distribution norm \
-  --seq_len_mean 200 \
-  --seq_len_sd 100 \
+  --seq_len_mean 100 \
+  --seq_len_sd 30 \
+  --mod_normalization \
+  --normalization_len 20 \
   --neg_len_variation 20 \
-  --n_stem_indels 20 \
+  --n_stem_indels 2 \
   --stem_max_size 14 \
   --stem_min_size 3 \
-  --stem_max_n_modifications 2 \
-  --n_hloop_indels 10 \
-  --hloop_min_size 3 \
+  --stem_max_n_modifications 1 \
+  --n_hloop_indels 2 \
+  --hloop_min_size 1 \
   --hloop_max_size 10 \
-  --hloop_max_n_modifications 2 \
-  --n_iloop_indels 10 \
+  --hloop_max_n_modifications 1 \
+  --n_iloop_indels 2 \
   --iloop_min_size 2 \
   --iloop_max_size 10 \
   --iloop_max_n_modifications 1 \
-  --n_bulge_indels 10 \
+  --n_bulge_indels 2 \
   --bulge_min_size 1 \
   --bulge_max_size 8 \
   --bulge_max_n_modifications 1 \
-  --n_mloop_indels 10 \
+  --n_mloop_indels 2 \
   --mloop_min_size 2 \
   --mloop_max_size 15 \
   --mloop_max_n_modifications 1 \
-  --num_workers 12 \
+  --num_workers 1 \
   --output_dir output_0702 \
   --split \
   --train_fraction 0.97 \
   --val_fraction 0.03 \
   --plot \
   --num_plots 50 \
-  --batch_size 32
-  # --debug \
+  --batch_size 1 \
+  --debug \
