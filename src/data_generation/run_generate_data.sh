@@ -1,5 +1,5 @@
 python generate_data.py \
-  --num_structures 1 \
+  --num_structures 100 \
   --seq_min_len 80 \
   --seq_max_len 120 \
   --seq_len_distribution norm \
@@ -29,11 +29,11 @@ python generate_data.py \
   --mloop_max_size 15 \
   --mloop_max_n_modifications 1 \
   --num_workers 1 \
-  --output_dir output_0702 \
+  --output_dir output_2102 \
   --split \
   --train_fraction 0.97 \
   --val_fraction 0.03 \
   --plot \
   --num_plots 50 \
   --batch_size 1 \
-  --debug \
+  # --debug \

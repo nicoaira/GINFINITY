@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 
 from data_generation_utils import (
     generate_triplet_thread,
+    generate_anchor,  # NEW import
     plot_rna_structure,
     split_dataset,
 )
@@ -160,18 +161,22 @@ def main():
     total = args.num_structures
     batch_size = args.batch_size
     num_tasks = (total + batch_size - 1) // batch_size  # ceiling division
-    task_sizes = [batch_size] * num_tasks
-    if total % batch_size != 0:
-        task_sizes[-1] = total % batch_size
 
+    # Generate anchors (store sequence and structure only)
+    anchors = []
+    for _ in range(total):
+        a_seq, a_struct, _ = generate_anchor(args.seq_min_len, args.seq_max_len,
+                                             args.seq_len_distribution, args.seq_len_mean, args.seq_len_sd)
+        anchors.append((a_seq, a_struct, None))
+    
+    # Process anchors in parallel
+    anchor_batches = [anchors[i*batch_size:(i+1)*batch_size] for i in range(num_tasks)]
     triplets = []
-    from data_generation_utils import generate_triplet_thread
     with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
         futures = [
             executor.submit(
                 generate_triplet_thread,
-                ts,
-                args.seq_min_len, args.seq_max_len, args.seq_len_distribution, args.seq_len_mean, args.seq_len_sd,
+                batch,
                 args.neg_len_variation,
                 args.n_stem_indels, args.stem_min_size, args.stem_max_size, args.stem_max_n_modifications,
                 args.n_hloop_indels, args.hloop_min_size, args.hloop_max_size, args.hloop_max_n_modifications,
@@ -182,7 +187,7 @@ def main():
                 args.linker_min, args.linker_max, args.appending_size_factor,
                 args.mod_normalization, args.normalization_len
             )
-            for ts in task_sizes
+            for batch in anchor_batches
         ]
         pbar = tqdm(total=total, desc="Generating triplets")
         for future in as_completed(futures):

@@ -537,8 +537,148 @@ def generate_triplet(seq_min_len, seq_max_len, seq_len_distribution, seq_len_mea
     logger.info("Triplet generated (anchor length %d).", len(anchor_seq))
     return triplet
 
-def generate_triplet_thread(thread_size, *args, **kwargs):
-    return [generate_triplet(*args, **kwargs) for _ in range(thread_size)]
+# NEW: Function to generate an anchor sequence and structure.
+def generate_anchor(seq_min_len, seq_max_len, seq_len_distribution, seq_len_mean, seq_len_sd):
+    if seq_len_distribution == "unif":
+        length = random.randint(seq_min_len, seq_max_len)
+    else:
+        length = int(random.gauss(seq_len_mean, seq_len_sd))
+        length = max(seq_min_len, min(seq_max_len, length))
+    anchor_seq = generate_random_rna(length)
+    anchor_structure = predict_structure(anchor_seq)
+    anchor_mapping = get_node_mapping(anchor_structure, anchor_seq)
+    logger.debug("Generated anchor (length %d)", len(anchor_seq))
+    return anchor_seq, anchor_structure, anchor_mapping
+
+# NEW: Function to generate a triplet from a pre-created anchor.
+def generate_triplet_from_anchor(anchor_seq, anchor_structure,
+                                 neg_len_variation,
+                                 n_stem_indels, stem_min_size, stem_max_size, stem_max_n_modifications,
+                                 n_hloop_indels, hloop_min_size, hloop_max_size, hloop_max_n_modifications,
+                                 n_iloop_indels, iloop_min_size, iloop_max_size, iloop_max_n_modifications,
+                                 n_bulge_indels, bulge_min_size, bulge_max_size, bulge_max_n_modifications,
+                                 n_mloop_indels, mloop_min_size, mloop_max_size, mloop_max_n_modifications,
+                                 appending_event_probability, both_sides_appending_probability,
+                                 linker_min, linker_max, appending_size_factor,
+                                 mod_normalization, normalization_len):
+    pos_seq, pos_structure = anchor_seq, anchor_structure
+    # Modification normalization.
+    if mod_normalization:
+        factor = len(anchor_seq) / normalization_len
+        if factor < 1:
+            factor = 1
+        if n_stem_indels > 1:
+            n_stem_indels = max(1, round(n_stem_indels * factor))
+        if n_hloop_indels > 1:
+            n_hloop_indels = max(1, round(n_hloop_indels * factor))
+        if n_iloop_indels > 1:
+            n_iloop_indels = max(1, round(n_iloop_indels * factor))
+        if n_bulge_indels > 1:
+            n_bulge_indels = max(1, round(n_bulge_indels * factor))
+        if n_mloop_indels > 1:
+            n_mloop_indels = max(1, round(n_mloop_indels * factor))
+        logger.debug("Normalized mod counts with factor %.2f", factor)
+    mod_counts = {}
+    # Apply Stem Modifications.
+    for i in range(n_stem_indels):
+        logger.debug("Stem modification cycle %d", i+1)
+        pos_seq, pos_structure, _ = modify_stem(pos_seq, pos_structure,
+                                                stem_min_size, stem_max_size, stem_max_n_modifications,
+                                                mod_counts)
+    # Apply Hairpin Loop Modifications.
+    for i in range(n_hloop_indels):
+        logger.debug("Hairpin loop modification cycle %d", i+1)
+        pos_seq, pos_structure, _ = modify_hairpin(pos_seq, pos_structure,
+                                                   min_size=hloop_min_size,
+                                                   max_size=hloop_max_size,
+                                                   max_modifications=hloop_max_n_modifications,
+                                                   mod_counts=mod_counts)
+    # Apply Internal Loop Modifications.
+    for i in range(n_iloop_indels):
+        logger.debug("Internal loop modification cycle %d", i+1)
+        pos_seq, pos_structure, _ = modify_internal_loop(pos_seq, pos_structure,
+                                                         min_size=iloop_min_size,
+                                                         max_size=iloop_max_size,
+                                                         max_modifications=iloop_max_n_modifications,
+                                                         mod_counts=mod_counts)
+    # Apply Bulge Modifications.
+    for i in range(n_bulge_indels):
+        logger.debug("Bulge modification cycle %d", i+1)
+        pos_seq, pos_structure, _ = modify_bulge(pos_seq, pos_structure,
+                                                 min_size=bulge_min_size,
+                                                 max_size=bulge_max_size,
+                                                 max_modifications=bulge_max_n_modifications,
+                                                 mod_counts=mod_counts)
+    # Apply Multiloop Modifications.
+    for i in range(n_mloop_indels):
+        logger.debug("Multiloop modification cycle %d", i+1)
+        pos_seq, pos_structure, _ = modify_multiloop(pos_seq, pos_structure,
+                                                     min_size=mloop_min_size,
+                                                     max_size=mloop_max_size,
+                                                     max_modifications=mloop_max_n_modifications,
+                                                     mod_counts=mod_counts)
+    neg_seq, neg_structure = generate_negative_sample(anchor_seq, neg_len_variation)
+    # Appending Event.
+    if random.random() < appending_event_probability:
+        logger.debug("Appending event triggered.")
+        r = random.random()
+        p_both = both_sides_appending_probability
+        p_left = (1 - p_both) / 2
+        p_right = p_left
+        mean_append = len(anchor_seq) * appending_size_factor
+        sigma_append = mean_append / 2
+        def sample_append_length():
+            L_app = int(random.gauss(mean_append, sigma_append))
+            return max(1, L_app)
+        linker_length = random.randint(linker_min, linker_max)
+        linker_seq = generate_random_rna(linker_length)
+        linker_structure = '.' * linker_length
+        logger.debug("Linker: length=%d", linker_length)
+        if r < p_left:
+            logger.debug("Appending to left only.")
+            L_app = sample_append_length()
+            appended_seq = generate_random_rna(L_app)
+            appended_structure = predict_structure(appended_seq)
+            pos_seq = appended_seq + linker_seq + pos_seq
+            pos_structure = appended_structure + linker_structure + pos_structure
+            neg_seq = appended_seq + linker_seq + neg_seq
+            neg_structure = appended_structure + linker_structure + neg_structure
+        elif r < p_left + p_right:
+            logger.debug("Appending to right only.")
+            L_app = sample_append_length()
+            appended_seq = generate_random_rna(L_app)
+            appended_structure = predict_structure(appended_seq)
+            pos_seq = pos_seq + linker_seq + appended_seq
+            pos_structure = pos_structure + linker_structure + appended_structure
+            neg_seq = neg_seq + linker_seq + appended_seq
+            neg_structure = neg_structure + linker_structure + appended_structure
+        else:
+            logger.debug("Appending to both sides.")
+            L_app_left = sample_append_length()
+            appended_seq_left = generate_random_rna(L_app_left)
+            appended_structure_left = predict_structure(appended_seq_left)
+            L_app_right = sample_append_length()
+            appended_seq_right = generate_random_rna(L_app_right)
+            appended_structure_right = predict_structure(appended_seq_right)
+            pos_seq = appended_seq_left + linker_seq + pos_seq + linker_seq + appended_seq_right
+            pos_structure = appended_structure_left + linker_structure + pos_structure + linker_structure + appended_structure_right
+            neg_seq = appended_seq_left + linker_seq + neg_seq + linker_seq + appended_seq_right
+            neg_structure = appended_structure_left + linker_structure + neg_structure + linker_structure + appended_structure_right
+    triplet = {
+        "anchor_seq": anchor_seq,
+        "anchor_structure": anchor_structure,
+        "positive_seq": pos_seq,
+        "positive_structure": pos_structure,
+        "negative_seq": neg_seq,
+        "negative_structure": neg_structure
+    }
+    logger.info("Triplet generated from anchor (anchor length %d)", len(anchor_seq))
+    return triplet
+
+# NEW: Update to process a batch of anchors.
+def generate_triplet_thread(anchors, *args, **kwargs):
+    # 'anchors' is a list of tuples (anchor_seq, anchor_structure, anchor_mapping)
+    return [generate_triplet_from_anchor(a_seq, a_struct, *args, **kwargs) for a_seq, a_struct, _ in anchors]
 
 def split_dataset(df, train_fraction):
     train_df = df.sample(frac=train_fraction, random_state=42)
