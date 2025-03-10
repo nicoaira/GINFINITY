@@ -252,7 +252,8 @@ def get_distances(embedding_dict,
                   no_save=False,
                   batch_size=1000,
                   num_workers=4,
-                  quiet=False):
+                  quiet=False,
+                  id_colname='rnacentral_id'):  # Add id_colname parameter
     """
     Calculate the square distances between embeddings for all pairs in the benchmark dataset,
     and optionally save the results.
@@ -279,16 +280,13 @@ def get_distances(embedding_dict,
         Number of pairs to process in each batch.
     num_workers : int
         Number of worker processes for parallel processing.
-
-    Returns
-    -------
-    pd.DataFrame
-        Benchmark dataframe with 'square_distance' column.
+    id_colname : str
+        Name of the column containing unique identifiers. Default: 'rnacentral_id'
     """
     benchmark_df = load_benchmark_dataset(benchmark_path, expected_id)
 
     # Prepare pairs for batch processing
-    pairs = list(zip(benchmark_df['rnacentral_id_1'], benchmark_df['rnacentral_id_2']))
+    pairs = list(zip(benchmark_df[f'{id_colname}_1'], benchmark_df[f'{id_colname}_2']))
     
     # Split pairs into batches
     batches = [pairs[i:i + batch_size] for i in range(0, len(pairs), batch_size)]
@@ -313,7 +311,7 @@ def get_distances(embedding_dict,
     
     # Add distances to the benchmark dataframe
     benchmark_df['square_distance'] = benchmark_df.apply(
-        lambda row: distance_dict.get((row['rnacentral_id_1'], row['rnacentral_id_2']), np.nan),
+        lambda row: distance_dict.get((row[f'{id_colname}_1'], row[f'{id_colname}_2']), np.nan),
         axis=1
     )
 
@@ -621,7 +619,8 @@ def run_benchmark(embeddings_script,
                   distance_batch_size=1000,
                   quiet=False,
                   retries=0,
-                  rna_types=None):  # Add retries parameter
+                  rna_types=None,
+                  id_colname='rnacentral_id'):  # Add id_colname parameter
     
     # Load model to get metadata
     model = GINModel.load_from_checkpoint(model_weights_path, device)
@@ -653,8 +652,8 @@ def run_benchmark(embeddings_script,
             benchmark_path = os.path.join(datasets_dir, benchmark_filename)
             bm_df = load_benchmark_dataset(benchmark_path, benchmark_id)
             pid = bm["primary_sampled_dataset_id"]
-            primary_datasets_needed_ids[pid].update(bm_df['rnacentral_id_1'].unique())
-            primary_datasets_needed_ids[pid].update(bm_df['rnacentral_id_2'].unique())
+            primary_datasets_needed_ids[pid].update(bm_df[f'{id_colname}_1'].unique())
+            primary_datasets_needed_ids[pid].update(bm_df[f'{id_colname}_2'].unique())
 
     if not no_save:
         benchmarking_results_path = results_path
@@ -711,20 +710,20 @@ def run_benchmark(embeddings_script,
         if only_needed_embeddings:
             needed_ids = primary_datasets_needed_ids[pid]
             primary_df = pd.read_csv(primary_path, sep='\t', header=0 if header else None, skiprows=skiprows)
-            if 'rnacentral_id' not in primary_df.columns:
-                raise ValueError("Primary dataset does not have 'rnacentral_id' column.")
-            filtered_df = primary_df[primary_df['rnacentral_id'].isin(needed_ids)]
+            if id_colname not in primary_df.columns:
+                raise ValueError(f"Primary dataset does not have '{id_colname}' column.")
+            filtered_df = primary_df[primary_df[id_colname].isin(needed_ids)]
             temp_filtered_path = os.path.join(emb_output_dir, primary_info["name"] + '_filtered' + bm_start_time + '.tsv')
             filtered_df.to_csv(temp_filtered_path, sep='\t', index=False)
             embedding_input_path = temp_filtered_path
-            expected_ids = set(filtered_df['rnacentral_id'].unique())
+            expected_ids = set(filtered_df[id_colname].unique())
             n_rows = filtered_df.shape[0]
         else:
             full_df = pd.read_csv(primary_path, sep='\t', header=0 if header else None, skiprows=skiprows)
-            if 'rnacentral_id' not in full_df.columns:
-                raise ValueError("Primary dataset does not have 'rnacentral_id' column.")
+            if id_colname not in full_df.columns:
+                raise ValueError(f"Primary dataset does not have '{id_colname}' column.")
             embedding_input_path = primary_path
-            expected_ids = set(full_df['rnacentral_id'].unique())
+            expected_ids = set(full_df[id_colname].unique())
             n_rows = full_df.shape[0]
 
         emb_filename = '/' + primary_info["name"] + '_w_emb' + bm_start_time + '.tsv'
@@ -750,7 +749,7 @@ def run_benchmark(embeddings_script,
         embeddings_df['embedding_vector'] = embeddings_df['embedding_vector'].apply(
             lambda x: np.array(list(map(float, x.split(',')))) if isinstance(x, str) else np.nan
         )
-        embedding_dict = dict(zip(embeddings_df['rnacentral_id'], embeddings_df['embedding_vector']))
+        embedding_dict = dict(zip(embeddings_df[id_colname], embeddings_df['embedding_vector']))
 
         if save_embeddings:
             for rid in expected_ids:
@@ -798,7 +797,8 @@ def run_benchmark(embeddings_script,
             no_save=no_save,
             num_workers=num_workers,
             batch_size=distance_batch_size,
-            quiet=quiet
+            quiet=quiet,
+            id_colname=id_colname  # Pass id_colname parameter
         )
         dist_end = time.time()
 
@@ -925,6 +925,9 @@ def main():
 
     parser.add_argument('--retries', type=int, default=0, help='Number of retries if the output file is not saved (default: 0).')
     parser.add_argument('--rna_type', nargs='+', help='List of RNA types to include in the benchmark. Attention: the results of easy benchmarks could differe if rna_types are filter out, since the negative pairs with non selected rna_types could have different dificulty.')
+    parser.add_argument('--id-column', dest='id_colname', type=str,
+                        default='rnacentral_id',
+                        help='Name of the column containing unique identifiers. Default: "rnacentral_id"')
     args = parser.parse_args()
 
     if args.header.lower() not in ['true', 'false']:
@@ -975,7 +978,8 @@ def main():
         distance_batch_size=args.distance_batch_size,
         quiet=args.quiet,
         retries=args.retries,
-        rna_types=args.rna_type if args.rna_type else None
+        rna_types=args.rna_type if args.rna_type else None,
+        id_colname=args.id_colname
     )
 
 if __name__ == "__main__":

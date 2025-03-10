@@ -23,3 +23,6 @@ src/ginfinity.egg-info/top_level.txt
 src/ginfinity.egg-info/dependency_links.txt
 tmp/predict_embedding.log
 troubleshoot/*
+src/data_generation/rnafold_prueba.fa
+src/data_generation/forgi_graph/test_structures.txt
+src/data_generation/output_*
