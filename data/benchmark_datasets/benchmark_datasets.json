@@ -8,6 +8,42 @@
             "filename": "unpaired_rnas_rfam_benchmark-v1.tsv",
             "unique_id": "c508458a",
             "version": 1
+        },
+        {
+            "name": "sampled_artificial_structures",
+            "created_at": "2025-02-26 11:43:54",
+            "rows_sampled": 2000,
+            "random_seed": 42,
+            "filename": "sampled_artificial_structures-v1.tsv",
+            "unique_id": "ebb09ff3",
+            "version": 1
+        },
+        {
+            "name": "sampled_artificial_structures",
+            "created_at": "2025-02-26 16:08:42",
+            "rows_sampled": 4000,
+            "random_seed": 42,
+            "filename": "sampled_artificial_structures-v2.tsv",
+            "unique_id": "2b9057ef",
+            "version": 2
+        },
+        {
+            "name": "sampled_artificial_structures_evo",
+            "created_at": "2025-02-26 17:15:31",
+            "rows_sampled": 5000,
+            "random_seed": 42,
+            "filename": "sampled_artificial_structures_evo-v1.tsv",
+            "unique_id": "08200261",
+            "version": 1
+        },
+        {
+            "name": "sampled_artificial_structures_evo_3",
+            "created_at": "2025-02-26 18:13:12",
+            "rows_sampled": 4000,
+            "random_seed": 42,
+            "filename": "sampled_artificial_structures_evo_3-v1.tsv",
+            "unique_id": "afff628e",
+            "version": 1
         }
     ],
     "benchmark_datasets": [
@@ -109,6 +145,61 @@
             "description": "Big benchmark dataset for hard RFAM classification. Negative pairs correspond to same RNA Types.",
             "created_at": "2024-12-23 18:32:31",
             "primary_sampled_dataset_id": "c508458a"
+        },
+        {
+            "name": "rna_artificial_clusters_benchmark",
+            "id": "d9f94063",
+            "filename": "rna_artificial_clusters_benchmark-v2.tsv",
+            "target": "same_rfam",
+            "n_pairs": 30000,
+            "version": 2,
+            "description": "Benchmark dataset with artificial structure clusters.",
+            "created_at": "2025-02-26 11:44:12",
+            "primary_sampled_dataset_id": "ebb09ff3"
+        },
+        {
+            "name": "rna_artificial_clusters_benchmark",
+            "id": "8c461bf9",
+            "filename": "rna_artificial_clusters_benchmark-v3.tsv",
+            "target": "same_rfam",
+            "n_pairs": 500000,
+            "version": 3,
+            "description": "Benchmark dataset with artificial structure clusters.",
+            "created_at": "2025-02-26 16:09:10",
+            "primary_sampled_dataset_id": "2b9057ef"
+        },
+        {
+            "name": "rna_artificial_clusters_benchmark-big",
+            "id": "8491194b",
+            "filename": "rna_artificial_clusters_benchmark-big-v1.tsv",
+            "target": "same_rfam",
+            "n_pairs": 5000000,
+            "version": 1,
+            "description": "Benchmark dataset with artificial structure clusters.",
+            "created_at": "2025-02-26 16:22:02",
+            "primary_sampled_dataset_id": "2b9057ef"
+        },
+        {
+            "name": "rna_artificial_clusters_benchmark-evo",
+            "id": "1ce3b466",
+            "filename": "rna_artificial_clusters_benchmark-evo-v1.tsv",
+            "target": "same_rfam",
+            "n_pairs": 300000,
+            "version": 1,
+            "description": "Benchmark dataset with artificial structure clusters.",
+            "created_at": "2025-02-26 17:16:03",
+            "primary_sampled_dataset_id": "08200261"
+        },
+        {
+            "name": "rna_artificial_clusters_benchmark-evo-3",
+            "id": "31f3d3b6",
+            "filename": "rna_artificial_clusters_benchmark-evo-3-v1.tsv",
+            "target": "same_rfam",
+            "n_pairs": 300000,
+            "version": 1,
+            "description": "Benchmark dataset with artificial structure clusters.",
+            "created_at": "2025-02-26 18:13:30",
+            "primary_sampled_dataset_id": "afff628e"
         }
     ]
 }
