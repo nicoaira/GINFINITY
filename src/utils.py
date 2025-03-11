@@ -131,8 +131,7 @@ def get_system_info():
     # CPU Info
     cpu = platform.processor()
     physical_cores = psutil.cpu_count(logical=False)
-    total_cores = psutil.cpu_count(logical(True))
-
+    total_cores = psutil.cpu_count(logical=True)
     # Memory Info
     svmem = psutil.virtual_memory()
     total_memory = svmem.total / (1024 ** 3)  # Convert to GB
