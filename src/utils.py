@@ -9,6 +9,8 @@ import networkx as nx
 import os
 from torch_geometric.data import Data
 import forgi.graph.bulge_graph as fgb
+from multiprocessing import Pool
+from tqdm import tqdm
 
 def is_valid_dot_bracket(structure):
     """
@@ -129,7 +131,7 @@ def get_system_info():
     # CPU Info
     cpu = platform.processor()
     physical_cores = psutil.cpu_count(logical=False)
-    total_cores = psutil.cpu_count(logical=True)
+    total_cores = psutil.cpu_count(logical(True)
 
     # Memory Info
     svmem = psutil.virtual_memory()
@@ -240,3 +242,36 @@ def get_project_root(marker=".git"):
         if current_dir == parent_dir:
             raise FileNotFoundError(f"Project root marker '{marker}' not found.")
         current_dir = parent_dir
+
+def calculate_distance_batch(args):
+    # Moved from sample_and_pair.py
+    batch, embeddings_tensor, metric = args
+    results = []
+    for i, j in batch:
+        if metric == 'cosine':
+            distance = 1 - torch.nn.functional.cosine_similarity(embeddings_tensor[i], embeddings_tensor[j], dim=0).item()
+        else:  # squared distance
+            distance = torch.sum((embeddings_tensor[i] - embeddings_tensor[j]) ** 2).item()
+        results.append((i, j, distance))
+    return results
+
+def calculate_distances(embeddings, metric='squared', num_workers=1, batch_size=1000):
+    # Moved from sample_and_pair.py
+    embeddings_tensor = torch.tensor(np.array(embeddings), dtype=torch.float32)
+    num_embeddings = embeddings_tensor.shape[0]
+    
+    total_pairs = num_embeddings * (num_embeddings - 1) // 2
+    pairs = [(i, j) for i in range(num_embeddings) for j in range(i + 1, num_embeddings)]
+    
+    # Split pairs into batches
+    batches = [pairs[i:i + batch_size] for i in range(0, len(pairs), batch_size)]
+    args_list = [(batch, embeddings_tensor, metric) for batch in batches]
+    
+    distances = []
+    with Pool(num_workers) as pool:
+        with tqdm(total=total_pairs, desc="Calculating distances") as pbar:
+            for result in pool.imap_unordered(calculate_distance_batch, args_list):
+                distances.extend(result)
+                pbar.update(len(result))
+    
+    return distances

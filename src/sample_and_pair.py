@@ -4,43 +4,15 @@ import torch
 from tqdm import tqdm
 import argparse
 import os
-from multiprocessing import Pool, cpu_count
+from multiprocessing import cpu_count
+from utils import calculate_distances  # Added import
 
 def sample_rows(input_path, n=1000):
     df = pd.read_csv(input_path, sep='\t')
     sampled_df = df.sample(n=n, random_state=42).reset_index(drop=True)
     return sampled_df
 
-def calculate_distance_batch(args):
-    batch, embeddings_tensor, metric = args
-    results = []
-    for i, j in batch:
-        if metric == 'cosine':
-            distance = 1 - torch.nn.functional.cosine_similarity(embeddings_tensor[i], embeddings_tensor[j], dim=0).item()
-        else:  # squared distance
-            distance = torch.sum((embeddings_tensor[i] - embeddings_tensor[j]) ** 2).item()
-        results.append((i, j, distance))
-    return results
-
-def calculate_distances(embeddings, metric='squared', num_workers=1, batch_size=1000):
-    embeddings_tensor = torch.tensor(np.array(embeddings), dtype=torch.float32)
-    num_embeddings = embeddings_tensor.shape[0]
-    
-    total_pairs = num_embeddings * (num_embeddings - 1) // 2
-    pairs = [(i, j) for i in range(num_embeddings) for j in range(i + 1, num_embeddings)]
-    
-    # Split pairs into batches
-    batches = [pairs[i:i + batch_size] for i in range(0, len(pairs), batch_size)]
-    args_list = [(batch, embeddings_tensor, metric) for batch in batches]
-    
-    distances = []
-    with Pool(num_workers) as pool:
-        with tqdm(total=total_pairs, desc="Calculating distances") as pbar:
-            for result in pool.imap_unordered(calculate_distance_batch, args_list):
-                distances.extend(result)
-                pbar.update(len(result))
-    
-    return distances
+# Removed: calculate_distance_batch and calculate_distances functions
 
 def generate_pairs(sampled_df, distances):
     pairs = []
