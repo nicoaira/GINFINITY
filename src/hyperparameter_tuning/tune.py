@@ -19,27 +19,6 @@ from src.benchmark.benchmark import run_benchmark
 # Get the project root directory
 project_root = get_project_root()
 
-parser = argparse.ArgumentParser(description="Hyperparameter tuning for GIN model using Optuna.")
-parser.add_argument('--input_path', type=str, required=True, help='Path to the input CSV/TSV file containing RNA secondary structures.')
-parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard', help='Encoding to use for the transformation to graph')
-parser.add_argument('--batch_size', type=int, default=100, help='Batch size for training and validation.')
-parser.add_argument('--num_epochs', type=int, default=10, help='Number of epochs to train the model.')
-parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping.')
-parser.add_argument('--num_workers', type=int, default=None, help='Number of worker threads for data loading.')
-parser.add_argument('--save_best_weights', type=bool, default=True, help='Save the best model weights during early stopping.')
-parser.add_argument('--device', type=str, choices=['cuda', 'cpu'], default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training.')
-parser.add_argument('--min_delta', type=float, default=0.001, help='Minimum validation loss decrease to qualify as improvement (default: 0.001)')
-parser.add_argument('--pooling_type', type=str, choices=['global_add_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the GIN model.')
-parser.add_argument('--storage', type=str, default=f'sqlite:///{os.path.join(project_root, "src/hyperparameter_tuning/db/optuna_studies.db")}', help='Storage URL for Optuna study.')
-parser.add_argument('--n_trials', type=int, default=100, help='Number of trials for hyperparameter optimization.')
-parser.add_argument('--json_config', type=str, default=os.path.join(project_root, 'src/hyperparameter_tuning/config.json'), help='Path to the JSON configuration file for hyperparameter search space.')
-parser.add_argument('--study_id', type=str, default=f"tuning_{datetime.now().strftime('%y%m%d_%H%M')}", help='Study ID for this run.')
-parser.add_argument('--output_dir', type=str, default=os.path.join(project_root, 'output/hyperparameter_tuning'), help='Directory to save the results.')
-parser.add_argument('--benchmark_datasets', type=str, default='hard_rfam_benchmark_big', help='Benchmark datasets to use for evaluation.')
-parser.add_argument('--quiet_benchmark', action='store_true', help='Suppress benchmark output.')
-parser.add_argument('--finish_now', action='store_true', help='Force finish the study and output final results.')
-parser.add_argument('--parameters_cache', type=str, help='Path to the parameters cache file.')
-parser.add_argument('--retries', type=int, default=0, help='Number of retries if the output file is not saved (default: 0).')
 
 def remove_invalid_structures(df):
     valid_structures = (
@@ -266,6 +245,27 @@ def load_parameters_cache(cache_path):
         return json.load(f)
 
 def main():
+    parser = argparse.ArgumentParser(description="Hyperparameter tuning for GIN model using Optuna.")
+    parser.add_argument('--input_path', type=str, required=True, help='Path to the input CSV/TSV file containing RNA secondary structures.')
+    parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard', help='Encoding to use for the transformation to graph')
+    parser.add_argument('--batch_size', type=int, default=100, help='Batch size for training and validation.')
+    parser.add_argument('--num_epochs', type=int, default=10, help='Number of epochs to train the model.')
+    parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping.')
+    parser.add_argument('--num_workers', type=int, default=None, help='Number of worker threads for data loading.')
+    parser.add_argument('--save_best_weights', type=bool, default=True, help='Save the best model weights during early stopping.')
+    parser.add_argument('--device', type=str, choices=['cuda', 'cpu'], default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training.')
+    parser.add_argument('--min_delta', type=float, default=0.001, help='Minimum validation loss decrease to qualify as improvement (default: 0.001)')
+    parser.add_argument('--pooling_type', type=str, choices=['global_add_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the GIN model.')
+    parser.add_argument('--storage', type=str, default=f'sqlite:///{os.path.join(project_root, "src/hyperparameter_tuning/db/optuna_studies.db")}', help='Storage URL for Optuna study.')
+    parser.add_argument('--n_trials', type=int, default=100, help='Number of trials for hyperparameter optimization.')
+    parser.add_argument('--json_config', type=str, default=os.path.join(project_root, 'src/hyperparameter_tuning/config.json'), help='Path to the JSON configuration file for hyperparameter search space.')
+    parser.add_argument('--study_id', type=str, default=f"tuning_{datetime.now().strftime('%y%m%d_%H%M')}", help='Study ID for this run.')
+    parser.add_argument('--output_dir', type=str, default=os.path.join(project_root, 'output/hyperparameter_tuning'), help='Directory to save the results.')
+    parser.add_argument('--benchmark_datasets', type=str, default='hard_rfam_benchmark_big', help='Benchmark datasets to use for evaluation.')
+    parser.add_argument('--quiet_benchmark', action='store_true', help='Suppress benchmark output.')
+    parser.add_argument('--finish_now', action='store_true', help='Force finish the study and output final results.')
+    parser.add_argument('--parameters_cache', type=str, help='Path to the parameters cache file.')
+    parser.add_argument('--retries', type=int, default=0, help='Number of retries if the output file is not saved (default: 0).')
     args = parser.parse_args()
 
     if args.finish_now:
