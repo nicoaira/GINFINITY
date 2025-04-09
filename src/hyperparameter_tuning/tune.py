@@ -221,6 +221,7 @@ def objective(trial, args):
             device=device,
             num_workers=args.num_workers,
             distance_batch_size=1000,
+            rna_types=["artificial"],
             quiet=args.quiet_benchmark,
             retries=args.retries  # Pass retries argument
         )
