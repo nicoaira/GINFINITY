@@ -12,13 +12,13 @@ from src.triplet_loss import TripletLoss
 from src.early_stopping import EarlyStopping
 from src.gin_rna_dataset import GINRNADataset
 from src.utils import is_valid_dot_bracket, log_information, log_setup, get_project_root
-from optuna.integration import PyTorchLightningPruningCallback
 import time
 from datetime import datetime
 from src.benchmark.benchmark import run_benchmark
 
 # Get the project root directory
 project_root = get_project_root()
+
 
 def remove_invalid_structures(df):
     valid_structures = (
@@ -55,8 +55,9 @@ def objective(trial, args):
 
         hidden_dim = []
         if "hidden_dim" in config and not hasattr(args, "hidden_dim"):
+            hidden_dim_val = trial.suggest_categorical(f"hidden_dim", config["hidden_dim"])
             for i in range(gin_layers):
-                hidden_dim.append(trial.suggest_categorical(f"hidden_dim_{i}", config["hidden_dim"]))
+                hidden_dim.append(hidden_dim_val)
         else:
             for i in range(gin_layers):
                 hidden_dim_val = getattr(args, f"hidden_dim_{i}", getattr(args, "hidden_dim", 128))
@@ -220,6 +221,7 @@ def objective(trial, args):
             device=device,
             num_workers=args.num_workers,
             distance_batch_size=1000,
+            rna_types=["artificial"],
             quiet=args.quiet_benchmark,
             retries=args.retries  # Pass retries argument
         )
