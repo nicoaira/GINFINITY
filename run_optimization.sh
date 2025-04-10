@@ -10,7 +10,7 @@
 #SBATCH --partition=gpu          # Nodo con GPU T4
 
 # Activar entorno Conda
-conda activate strusi_env
+# conda activate strusi_env
 
 # Leer combinación desde el grid
 GRID="src/hp/grid.csv"
@@ -18,7 +18,7 @@ combo=$(sed -n "$((SLURM_ARRAY_TASK_ID + 2))p" $GRID)
 IFS=',' read lr hidden_dim gin_layers <<< "$combo"
 
 # Ejecutar entrenamiento
-python src/hp/train_combination.py \
+python -m src.hp.train_combination \
     --lr $lr \
     --hidden_dim $hidden_dim \
     --gin_layers $gin_layers \

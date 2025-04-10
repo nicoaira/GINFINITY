@@ -20,15 +20,15 @@ def parse_args():
     parser.add_argument("--lr", type=float, required=True)
     parser.add_argument("--hidden_dim", type=int, required=True)
     parser.add_argument("--gin_layers", type=int, required=True)
-    parser.add_argument("--input_path", type=str, required=True)
-    parser.add_argument("--val_path", type=str, required=True)
+    parser.add_argument("--input_path", type=str, required=True, default="example_data/train.csv")
+    parser.add_argument("--val_path", type=str, required=True, default="example_data/val_dataset.csv")
     parser.add_argument("--output_dim", type=int, default=128)
     parser.add_argument("--batch_size", type=int, default=100)
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--patience", type=int, default=2)
     parser.add_argument("--min_delta", type=float, default=0.005)
     parser.add_argument("--graph_encoding", type=str, default="standard")
-    parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument("--dropout", type=float, default=0.05)
     parser.add_argument("--pooling_type", type=str, default="global_add_pool")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--decay_rate", type=float, default=0.01)
@@ -45,7 +45,7 @@ def main():
     log_path = f"{output_dir}/train.log"
     log_setup(log_path)
 
-    log_information(log_path, vars(args), section_title="Combo Parameters")
+    log_information(log_path, vars(args), log_name="Combo Parameters")
 
     # Cargar datos
     train_df = pd.read_csv(args.input_path)
