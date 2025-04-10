@@ -3,21 +3,11 @@
 #SBATCH --output=logs/%A_%a.out
 #SBATCH --error=logs/%A_%a.err
 #SBATCH --array=0-59
-
-# 🕒 Tiempo máximo por job
-#SBATCH --time=01:00:00    # 1 hora por combinación
-
-# 🧠 Memoria RAM total (por job, no por CPU)
-#SBATCH --mem=8G           # Ajustalo según lo que necesites
-
-# 🧮 Núcleos de CPU
-#SBATCH --cpus-per-task=2  # Suficiente para modelos ligeros
-
-# 🎮 GPU (si usás CUDA)
-#SBATCH --gres=gpu:1
-
-# 📦 Partición del cluster
-#SBATCH --partition=gpu    # O consulta qué particiones están disponibles
+#SBATCH --time=04:00:00          # Hasta 4 horas por combinación
+#SBATCH --mem=20G                # 20 GB de RAM
+#SBATCH --cpus-per-task=4        # 4 núcleos
+#SBATCH --gres=gpu:1             # 1 GPU
+#SBATCH --partition=gpu          # Nodo con GPU T4
 
 # Activar entorno Conda
 conda activate strusi_env
@@ -32,5 +22,5 @@ python src/hp/train_combination.py \
     --lr $lr \
     --hidden_dim $hidden_dim \
     --gin_layers $gin_layers \
-    --input_path path/a/train.csv \
-    --val_path path/a/val_dataset.csv
+    --input_path example_data/train.csv \
+    --val_path example_data/val_dataset.csv
