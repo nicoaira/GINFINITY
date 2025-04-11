@@ -5,12 +5,13 @@
 #SBATCH --array=0-59
 #SBATCH --time=04:00:00          # Hasta 4 horas por combinación
 #SBATCH --mem=20G                # 20 GB de RAM
-#SBATCH --cpus-per-task=4        # 4 núcleos
-#SBATCH --gres=gpu:1             # 1 GPU
-#SBATCH --partition=gpu          # Nodo con GPU T4
+#SBATCH --partition=short
+#SBATCH --cpus-per-task=32         # Cada GPU A100 requiere 32 CPUs
+#SBATCH --gres=gpu:a100:1
 
 # Activar entorno Conda
-# conda activate strusi_env
+# conda init
+# conda activate ginfinity_env
 
 # Leer combinación desde el grid
 GRID="src/hp/grid.csv"
