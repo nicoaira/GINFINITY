@@ -8,7 +8,8 @@ workflow {
         GENERATE_EMBEDDINGS(Channel.fromPath(params.input))
 
     def distances_ch = COMPUTE_DISTANCES(embeddings_ch)
-    FILTER_TOP_N(distances_ch)
+    def topn_ch = FILTER_TOP_N(distances_ch)
+    DRAW_WINDOWS_PAIRS(topn_ch)
 }
 
 process GENERATE_EMBEDDINGS {
@@ -24,7 +25,7 @@ process GENERATE_EMBEDDINGS {
 
     script:
     """
-    python3 ${baseDir}/../predict_embedding.py \
+    python3 ${baseDir}/modules/predict_embedding.py \
       --input ${input_file} \
       --model_path ${params.model_path} \
       --output ${params.outdir}/embeddings.tsv \
@@ -84,5 +85,23 @@ df = pd.read_csv('${distances}', sep='\t')
 df_sorted = df.sort_values('distance').head(${params.top_n})
 df_sorted.to_csv('top_${params.top_n}.tsv', sep='\t', index=False)
 EOF
+    """
+}
+
+process DRAW_WINDOWS_PAIRS {
+    tag "draw_windows_pairs"
+    publishDir "./${params.outdir}/structures_plots", mode: 'copy'
+
+    input:
+    path top_n_file
+
+    when:
+    params.draw_pairs
+
+    script:
+    """
+    python3 /app/draw_pairs.py \
+      --tsv ${top_n_file} \
+      --outdir ${params.outdir}/structures_plots
     """
 }
