@@ -1,27 +1,35 @@
 #!/usr/bin/env nextflow
-// Nextflow pipeline to generate embeddings, compute distances, and filter top N smallest distances
+nextflow.enable.dsl=2
 
+// Nextflow pipeline: embeddings → distances → top‑N → draw → HTML report
 workflow {
-    // decide where to get embeddings
+    // Embeddings
     def embeddings_ch = params.embeddings_file ?
         Channel.fromPath(params.embeddings_file) :
         GENERATE_EMBEDDINGS(Channel.fromPath(params.input))
 
+    // Distances
     def distances_ch = COMPUTE_DISTANCES(embeddings_ch)
+
+    // Top‑N
     def topn_ch = FILTER_TOP_N(distances_ch)
-    DRAW_WINDOWS_PAIRS(topn_ch)
+
+    // Draw windows pairs → emits individual_svgs directory
+    def svg_ch = DRAW_WINDOWS_PAIRS(topn_ch)
+
+    // Generate HTML report (waits for SVGs)
+    GENERATE_HTML_REPORT(topn_ch, svg_ch)
 }
 
 process GENERATE_EMBEDDINGS {
     tag "generate_embeddings"
-    // publishDir "/home/nicolas/programs/GINFINITY/nextflow/results"
     publishDir "./${params.outdir}", mode: 'copy'
 
     input:
-    path input_file
+      path input_file
 
     output:
-    path "${params.outdir}/embeddings.tsv", emit: embeddings
+      path "${params.outdir}/embeddings.tsv", emit: embeddings
 
     script:
     """
@@ -35,7 +43,7 @@ process GENERATE_EMBEDDINGS {
       --device ${params.device} \
       --num_workers ${params.num_workers} \
       ${params.subgraphs ? '--subgraphs' : ''} \
-      ${params.L       ? "--L ${params.L}"                       : ''} \
+      ${params.L       ? "--L ${params.L}"         : ''} \
       ${params.keep_paired_neighbors ? '--keep_paired_neighbors' : ''} \
       --retries ${params.retries}
     """
@@ -46,14 +54,14 @@ process COMPUTE_DISTANCES {
     publishDir "./${params.outdir}", mode: 'copy'
 
     input:
-    path embeddings
+      path embeddings
 
     output:
-    path "distances.tsv", emit: distances
+      path "distances.tsv", emit: distances
 
     script:
     """
-    python3 ${baseDir}/../compute_distances.py --input ${embeddings} \
+    python3 ${baseDir}/modules/compute_distances.py --input ${embeddings} \
       --output distances.tsv \
       --embedding-col ${params.embedding_col} \
       --keep-cols ${params.keep_cols} \
@@ -71,16 +79,15 @@ process FILTER_TOP_N {
     publishDir "./${params.outdir}", mode: 'copy'
 
     input:
-    path distances
+      path distances
 
     output:
-    path "top_${params.top_n}.tsv"
+      path "top_${params.top_n}.tsv", emit: topn
 
     script:
     """
     python3 - << 'EOF'
 import pandas as pd
-
 df = pd.read_csv('${distances}', sep='\t')
 df_sorted = df.sort_values('distance').head(${params.top_n})
 df_sorted.to_csv('top_${params.top_n}.tsv', sep='\t', index=False)
@@ -93,15 +100,45 @@ process DRAW_WINDOWS_PAIRS {
     publishDir "./${params.outdir}/structures_plots", mode: 'copy'
 
     input:
-    path top_n_file
+      path top_n_file
+
+    output:
+      path "individual_svgs", emit: svgs
 
     when:
-    params.draw_pairs
+      params.draw_pairs
 
     script:
     """
     python3 /app/draw_pairs.py \
       --tsv ${top_n_file} \
-      --outdir ${params.outdir}/structures_plots
+      --width 500 \
+      --height 500 \
+      --highlight-colour "#00FF99" \
+      --num-workers ${params.num_workers} \
+      --outdir .
+    """
+}
+
+process GENERATE_HTML_REPORT {
+    tag "html_report"
+    publishDir "./${params.outdir}", mode: 'copy'
+
+    input:
+      path top_n_file
+      path svg_dir
+
+    output:
+      path "report.html"
+
+    when:
+      params.draw_pairs
+
+    script:
+    """
+    python3 /app/generate_report.py \
+      --pairs ${top_n_file} \
+      --svg-dir ${svg_dir} \
+      --output report.html
     """
 }
