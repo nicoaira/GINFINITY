@@ -29,3 +29,4 @@ src/data_generation/output_*
 nextflow/.nextflow/*
 nextflow/.nextflow.log*
 nextflow/work
+run_compute_distances.sh
