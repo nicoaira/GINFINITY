@@ -127,6 +127,8 @@ def generate_embeddings(
             continue
         this_row_dict = input_df.iloc[orig_idx].to_dict()
         this_row_dict['window_start'] = window_start
+        # add window_end: end index of the L‑length slice, or None if not using windows
+        this_row_dict['window_end'] = (window_start + L - 1) if window_start is not None else None
         this_row_dict['embedding_vector'] = emb
         new_rows.append(this_row_dict)
 
