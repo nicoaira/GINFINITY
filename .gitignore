@@ -30,3 +30,6 @@ nextflow/.nextflow/*
 nextflow/.nextflow.log*
 nextflow/work
 run_compute_distances.sh
+results/*
+work/*
+.nextflow*
