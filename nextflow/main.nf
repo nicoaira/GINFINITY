@@ -1,15 +1,15 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl=2
 
-/*
- * Nextflow pipeline: embeddings → distances → sort → aggregate → top-N → draw → HTML report
- */
+// — Top-level channel for the original input TSV
+def input_tsv_ch = Channel.fromPath(params.input)
+
 workflow {
 
-    // 1) Embeddings (unchanged)
+    // 1) Generate embeddings
     def embeddings_ch = params.embeddings_file ?
         Channel.fromPath(params.embeddings_file) :
-        GENERATE_EMBEDDINGS(Channel.fromPath(params.input))
+        GENERATE_EMBEDDINGS(input_tsv_ch)
 
     // 2) Compute raw distances
     def distances_ch = COMPUTE_DISTANCES(embeddings_ch)
@@ -17,16 +17,12 @@ workflow {
     // 3) Sort distances ascending
     def sorted_distances_ch = SORT_DISTANCES(distances_ch)
 
-    // 4) Aggregate contigs & windows metrics
-    def aggregated_ch = AGGREGATE_METRIC(sorted_distances_ch)
+    // 4) Aggregate + enrich in one step
+    def (enriched_all_ch, enriched_unagg_ch) = AGGREGATE_METRIC(sorted_distances_ch, input_tsv_ch)
 
-    // 5) Existing Top-N distances (for drawing pairs)
+    // 5) Legacy: also filter top-N distances for pair-drawing & report
     def topn_ch = FILTER_TOP_N(sorted_distances_ch)
-
-    // 6) Draw the top-N windows pairs
-    def svg_ch = DRAW_WINDOWS_PAIRS(topn_ch)
-
-    // 7) Generate the HTML report for distances
+    def svg_ch  = DRAW_WINDOWS_PAIRS(topn_ch)
     GENERATE_HTML_REPORT(topn_ch, svg_ch)
 }
 
@@ -43,18 +39,13 @@ process GENERATE_EMBEDDINGS {
 
     script:
     """
-    # 1) Read the original TSV, compute seq_len = length of exon_sequence, write a new file
     python3 - << 'EOF'
 import pandas as pd
-# Load the user’s input TSV
 df = pd.read_csv('${input_file}', sep='\\t')
-# Compute length of the exon_sequence column
 df['seq_len'] = df['exon_sequence'].str.len()
-# Write out a new TSV with the extra column
 df.to_csv('with_seq_len.tsv', sep='\\t', index=False)
 EOF
 
-    # 2) Run the existing embedding generator on the enriched TSV
     python3 ${baseDir}/modules/predict_embedding.py \
       --input with_seq_len.tsv \
       --model_path ${params.model_path} \
@@ -125,13 +116,15 @@ process AGGREGATE_METRIC {
 
     input:
       path sorted_distances
+      path input_tsv
 
     output:
-      path "exon_pairs_scores_all_contigs.tsv",             emit: contigs_all
-      path "exon_pairs_scores_all_contigs.unaggregated.tsv", emit: contigs_unagg
+      path "exon_pairs_scores_all_contigs.tsv",               emit: enriched_all
+      path "exon_pairs_scores_all_contigs.unaggregated.tsv",  emit: enriched_unagg
 
     script:
     """
+    # 1) Run aggregated_metric.py to produce raw intermediates
     python3 ${baseDir}/modules/aggregated_metric.py \
       --input ${sorted_distances} \
       --alpha1 ${params.alpha1} \
@@ -141,8 +134,50 @@ process AGGREGATE_METRIC {
       --gamma ${params.gamma} \
       --percentile ${params.percentile} \
       --mode contigs \
-      --output exon_pairs_scores_all_contigs.tsv \
+      --output raw_contigs.tsv \
       --output-unaggregated
+
+    # 2) Enrich those intermediates with gene_name, sequence, structure
+    python3 - << 'EOF'
+import pandas as pd
+
+# Load the raw contig tables
+df_all = pd.read_csv('raw_contigs.tsv', sep='\\t')
+df_un  = pd.read_csv('raw_contigs.unaggregated.tsv', sep='\\t')
+
+# Load the original input for metadata
+df_meta = pd.read_csv('${input_tsv}', sep='\\t', dtype=str)
+idcol     = 'exon_id'
+structcol = '${params.structure_column_name}'
+
+# Prepare side-1 metadata
+m1 = df_meta[[idcol,'gene_name','exon_sequence', structcol]]\
+      .rename(columns={
+         idcol: 'exon_id_1',
+         'gene_name': 'gene_name_1',
+         'exon_sequence': 'sequence_1',
+         structcol: 'secondary_structure_1'
+      })
+
+# Prepare side-2 metadata
+m2 = df_meta[[idcol,'gene_name','exon_sequence', structcol]]\
+      .rename(columns={
+         idcol: 'exon_id_2',
+         'gene_name': 'gene_name_2',
+         'exon_sequence': 'sequence_2',
+         structcol: 'secondary_structure_2'
+      })
+
+# Join & write enriched contigs
+df_all = df_all.merge(m1, on='exon_id_1', how='left')\
+               .merge(m2, on='exon_id_2', how='left')
+df_all.to_csv('exon_pairs_scores_all_contigs.tsv', sep='\\t', index=False)
+
+# Join & write enriched unaggregated windows
+df_un = df_un.merge(m1, on='exon_id_1', how='left')\
+             .merge(m2, on='exon_id_2', how='left')
+df_un.to_csv('exon_pairs_scores_all_contigs.unaggregated.tsv', sep='\\t', index=False)
+EOF
     """
 }
 
