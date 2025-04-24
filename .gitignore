@@ -33,3 +33,4 @@ run_compute_distances.sh
 results/*
 work/*
 .nextflow*
+nextflow/results_nf/todo.txt
