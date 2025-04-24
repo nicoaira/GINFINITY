@@ -32,11 +32,6 @@ workflow {
     // 8) Generate the two HTML reports
     def agg_report_ch    = GENERATE_AGGREGATED_REPORT(top_contigs_ch, contig_svgs_ch)
     def unagg_report_ch  = GENERATE_UNAGGREGATED_REPORT(top_contigs_unagg_ch, window_svgs_ch)
-
-    // // 9) (optional) legacy distance‐based report
-    // def topn_ch = FILTER_TOP_N(sorted_distances_ch)
-    // def svg_ch  = DRAW_WINDOWS_PAIRS(topn_ch)
-    // GENERATE_HTML_REPORT(topn_ch, svg_ch)
 }
 
 
@@ -231,29 +226,6 @@ EOF
     """
 }
 
-
-process FILTER_TOP_N {
-    tag "filter_top_n"
-    publishDir "./${params.outdir}", mode: 'copy'
-
-    input:
-      path distances
-
-    output:
-      path "top_${params.top_n}.tsv", emit: topn
-
-    script:
-    """
-    python3 - << 'EOF'
-import pandas as pd
-df = pd.read_csv('${distances}', sep='\\t')
-df_sorted = df.sort_values('distance').head(${params.top_n})
-df_sorted.to_csv('top_${params.top_n}.tsv', sep='\\t', index=False)
-EOF
-    """
-}
-
-
 process DRAW_CONTIG_SVGS {
   tag "draw_contig_svgs"
   publishDir "./${params.outdir}/contig_svgs", mode:'copy'
@@ -356,29 +328,5 @@ process GENERATE_UNAGGREGATED_REPORT {
       --pairs ${top_windows_tsv} \
       --svg-dir ${window_svg_dir} \
       --output exon_pairs_contigs_report.unaggregated.html
-    """
-}
-
-
-process GENERATE_HTML_REPORT {
-    tag "html_report"
-    publishDir "./${params.outdir}", mode: 'copy'
-
-    input:
-      path top_n_file
-      path svg_dir
-
-    output:
-      path "report.html"
-
-    when:
-      params.draw_pairs
-
-    script:
-    """
-    python3 /app/generate_report.py \
-      --pairs ${top_n_file} \
-      --svg-dir ${svg_dir} \
-      --output report.html
     """
 }
