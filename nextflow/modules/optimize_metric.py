@@ -35,10 +35,10 @@ def run_aggregated(input_tsv, percentile, alpha1, beta1, alpha2, beta2, gamma, n
 def objective(trial, args):
     # Fixed percentile
     percentile = args.percentile
+    alpha1 = args.alpha1
+    alpha2 = args.alpha2
+    beta1  = args.beta1
     # Suggest hyperparameters
-    alpha1 = trial.suggest_float('alpha1', 0.0, 0.5)
-    alpha2 = trial.suggest_float('alpha2', 0.1, 1.0)
-    beta1  = trial.suggest_float('beta1', 0.0001, 0.05, log=True)
     beta2  = trial.suggest_float('beta2', 1.0, 2.0)
     gamma  = trial.suggest_float('gamma', 0.3, 0.7)
 
@@ -97,6 +97,12 @@ def main():
                         help='Path to sorted distances.tsv')
     parser.add_argument('--percentile',  type=float, required=True,
                         help='Fixed percentile to use (e.g. 0.1)')
+    parser.add_argument('--alpha1',     type=float, default=1.0,
+                        help='Numerator rank-decay exponent (default 1.0)')
+    parser.add_argument('--beta1',      type=float, default=0.1,
+                        help='Numerator off-diagonal decay (default 0.1)')
+    parser.add_argument('--alpha2',     type=float, default=1.0,
+                        help='Denominator rank-decay exponent (default 1.0)')
     parser.add_argument('--num-workers', type=int, default=1,
                         help='Workers for aggregated_metric')
     parser.add_argument('--trials',      type=int, default=50,
