@@ -17,10 +17,13 @@ workflow {
     // 3) Sort distances ascending
     def sorted_distances_ch = SORT_DISTANCES(distances_ch)
 
-    // 4) Aggregate + enrich in one step
+    // 4) Aggregate + enrich contigs & windows metrics
     def (enriched_all_ch, enriched_unagg_ch) = AGGREGATE_METRIC(sorted_distances_ch, input_tsv_ch)
 
-    // 5) Legacy: also filter top-N distances for pair-drawing & report
+    // 5) Filter out the top-N contigs
+    def (top_contigs_ch, top_contigs_unagg_ch) = FILTER_TOP_CONTIGS(enriched_all_ch, enriched_unagg_ch)
+
+    // 6) Legacy: also filter top-N *distances* → draw → report
     def topn_ch = FILTER_TOP_N(sorted_distances_ch)
     def svg_ch  = DRAW_WINDOWS_PAIRS(topn_ch)
     GENERATE_HTML_REPORT(topn_ch, svg_ch)
@@ -39,6 +42,7 @@ process GENERATE_EMBEDDINGS {
 
     script:
     """
+    # Add seq_len column
     python3 - << 'EOF'
 import pandas as pd
 df = pd.read_csv('${input_file}', sep='\\t')
@@ -46,6 +50,7 @@ df['seq_len'] = df['exon_sequence'].str.len()
 df.to_csv('with_seq_len.tsv', sep='\\t', index=False)
 EOF
 
+    # Generate embeddings
     python3 ${baseDir}/modules/predict_embedding.py \
       --input with_seq_len.tsv \
       --model_path ${params.model_path} \
@@ -119,12 +124,13 @@ process AGGREGATE_METRIC {
       path input_tsv
 
     output:
-      path "exon_pairs_scores_all_contigs.tsv",               emit: enriched_all
-      path "exon_pairs_scores_all_contigs.unaggregated.tsv",  emit: enriched_unagg
+      // only the enriched outputs go to results/
+      path "exon_pairs_scores_all_contigs.tsv",              emit: enriched_all
+      path "exon_pairs_scores_all_contigs.unaggregated.tsv", emit: enriched_unagg
 
     script:
     """
-    # 1) Run aggregated_metric.py to produce raw intermediates
+    # 1) Run the core aggregation to get raw intermediate tables
     python3 ${baseDir}/modules/aggregated_metric.py \
       --input ${sorted_distances} \
       --alpha1 ${params.alpha1} \
@@ -137,20 +143,17 @@ process AGGREGATE_METRIC {
       --output raw_contigs.tsv \
       --output-unaggregated
 
-    # 2) Enrich those intermediates with gene_name, sequence, structure
+    # 2) Immediately enrich and write final contig files
     python3 - << 'EOF'
 import pandas as pd
 
-# Load the raw contig tables
 df_all = pd.read_csv('raw_contigs.tsv', sep='\\t')
 df_un  = pd.read_csv('raw_contigs.unaggregated.tsv', sep='\\t')
-
-# Load the original input for metadata
 df_meta = pd.read_csv('${input_tsv}', sep='\\t', dtype=str)
+
 idcol     = 'exon_id'
 structcol = '${params.structure_column_name}'
 
-# Prepare side-1 metadata
 m1 = df_meta[[idcol,'gene_name','exon_sequence', structcol]]\
       .rename(columns={
          idcol: 'exon_id_1',
@@ -159,7 +162,6 @@ m1 = df_meta[[idcol,'gene_name','exon_sequence', structcol]]\
          structcol: 'secondary_structure_1'
       })
 
-# Prepare side-2 metadata
 m2 = df_meta[[idcol,'gene_name','exon_sequence', structcol]]\
       .rename(columns={
          idcol: 'exon_id_2',
@@ -168,15 +170,52 @@ m2 = df_meta[[idcol,'gene_name','exon_sequence', structcol]]\
          structcol: 'secondary_structure_2'
       })
 
-# Join & write enriched contigs
+# write enriched contig summary
 df_all = df_all.merge(m1, on='exon_id_1', how='left')\
                .merge(m2, on='exon_id_2', how='left')
 df_all.to_csv('exon_pairs_scores_all_contigs.tsv', sep='\\t', index=False)
 
-# Join & write enriched unaggregated windows
+# write enriched unaggregated windows
 df_un = df_un.merge(m1, on='exon_id_1', how='left')\
              .merge(m2, on='exon_id_2', how='left')
 df_un.to_csv('exon_pairs_scores_all_contigs.unaggregated.tsv', sep='\\t', index=False)
+EOF
+    """
+}
+
+
+process FILTER_TOP_CONTIGS {
+    tag "filter_top_contigs"
+    publishDir "./${params.outdir}", mode: 'copy'
+
+    input:
+      path enriched_all
+      path enriched_unagg
+
+    output:
+      path "exon_pairs_scores_top_contigs.tsv",               emit: top_contigs
+      path "exon_pairs_scores_top_contigs.unaggregated.tsv", emit: top_contigs_unagg
+
+    script:
+    """
+    python3 - << 'EOF'
+import pandas as pd
+
+# load enriched tables
+df_all = pd.read_csv('${enriched_all}', sep='\\t')
+df_un  = pd.read_csv('${enriched_unagg}', sep='\\t')
+
+# pick top N contigs by contig_rank <= params.top_n
+top_n = ${params.top_n}
+df_top_all = df_all[df_all['contig_rank'] <= top_n]
+
+# filter unaggregated windows to only those contigs
+top_ids = df_top_all['contig_id'].unique().tolist()
+df_top_un = df_un[df_un['contig_id'].isin(top_ids)]
+
+# write results
+df_top_all.to_csv('exon_pairs_scores_top_contigs.tsv', sep='\\t', index=False)
+df_top_un.to_csv('exon_pairs_scores_top_contigs.unaggregated.tsv', sep='\\t', index=False)
 EOF
     """
 }
