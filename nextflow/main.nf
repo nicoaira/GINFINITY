@@ -2,28 +2,31 @@
 nextflow.enable.dsl=2
 
 /*
- * Nextflow pipeline: embeddings → distances → sort → top-N → draw → HTML report
+ * Nextflow pipeline: embeddings → distances → sort → aggregate → top-N → draw → HTML report
  */
 workflow {
 
-    // — Embeddings (unchanged)
+    // 1) Embeddings (unchanged)
     def embeddings_ch = params.embeddings_file ?
         Channel.fromPath(params.embeddings_file) :
         GENERATE_EMBEDDINGS(Channel.fromPath(params.input))
 
-    // — Compute raw distances (no longer published)
+    // 2) Compute raw distances
     def distances_ch = COMPUTE_DISTANCES(embeddings_ch)
 
-    // — Sort distances → produces distances.sorted.tsv
+    // 3) Sort distances ascending
     def sorted_distances_ch = SORT_DISTANCES(distances_ch)
 
-    // — Filter Top-N on the sorted distances
+    // 4) Aggregate contigs & windows metrics
+    def aggregated_ch = AGGREGATE_METRIC(sorted_distances_ch)
+
+    // 5) Existing Top-N distances (for drawing pairs)
     def topn_ch = FILTER_TOP_N(sorted_distances_ch)
 
-    // — Draw the top-N pairs
+    // 6) Draw the top-N windows pairs
     def svg_ch = DRAW_WINDOWS_PAIRS(topn_ch)
 
-    // — Generate the HTML report
+    // 7) Generate the HTML report for distances
     GENERATE_HTML_REPORT(topn_ch, svg_ch)
 }
 
@@ -40,18 +43,30 @@ process GENERATE_EMBEDDINGS {
 
     script:
     """
+    # 1) Read the original TSV, compute seq_len = length of exon_sequence, write a new file
+    python3 - << 'EOF'
+import pandas as pd
+# Load the user’s input TSV
+df = pd.read_csv('${input_file}', sep='\\t')
+# Compute length of the exon_sequence column
+df['seq_len'] = df['exon_sequence'].str.len()
+# Write out a new TSV with the extra column
+df.to_csv('with_seq_len.tsv', sep='\\t', index=False)
+EOF
+
+    # 2) Run the existing embedding generator on the enriched TSV
     python3 ${baseDir}/modules/predict_embedding.py \
-      --input ${input_file} \
+      --input with_seq_len.tsv \
       --model_path ${params.model_path} \
       --output ${params.outdir}/embeddings.tsv \
       --structure_column_name ${params.structure_column_name} \
-      ${params.structure_column_num != null ? "--structure_column_num ${params.structure_column_num}" : ''} \
+      ${params.structure_column_num  ? "--structure_column_num ${params.structure_column_num}" : ''} \
       --header ${params.header} \
       --device ${params.device} \
       --num_workers ${params.num_workers} \
-      ${params.subgraphs ? '--subgraphs' : ''} \
-      ${params.L       ? "--L ${params.L}"         : ''} \
-      ${params.keep_paired_neighbors ? '--keep_paired_neighbors' : ''} \
+      ${params.subgraphs            ? '--subgraphs' : ''} \
+      ${params.L                    ? "--L ${params.L}" : ''} \
+      ${params.keep_paired_neighbors? '--keep_paired_neighbors' : ''} \
       --retries ${params.retries}
     """
 }
@@ -96,13 +111,38 @@ process SORT_DISTANCES {
     """
     python3 - << 'EOF'
 import pandas as pd
-# Read raw distances
 df = pd.read_csv('${distances}', sep='\\t')
-# Sort ascending by distance
 df.sort_values('distance', inplace=True)
-# Write out the sorted TSV
 df.to_csv('distances.sorted.tsv', sep='\\t', index=False)
 EOF
+    """
+}
+
+
+process AGGREGATE_METRIC {
+    tag "aggregate_metric"
+    publishDir "./${params.outdir}", mode: 'copy'
+
+    input:
+      path sorted_distances
+
+    output:
+      path "exon_pairs_scores_all_contigs.tsv",             emit: contigs_all
+      path "exon_pairs_scores_all_contigs.unaggregated.tsv", emit: contigs_unagg
+
+    script:
+    """
+    python3 ${baseDir}/modules/aggregated_metric.py \
+      --input ${sorted_distances} \
+      --alpha1 ${params.alpha1} \
+      --alpha2 ${params.alpha2} \
+      --beta1 ${params.beta1} \
+      --beta2 ${params.beta2} \
+      --gamma ${params.gamma} \
+      --percentile ${params.percentile} \
+      --mode contigs \
+      --output exon_pairs_scores_all_contigs.tsv \
+      --output-unaggregated
     """
 }
 
