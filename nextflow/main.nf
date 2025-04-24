@@ -6,9 +6,6 @@ def input_tsv_ch = Channel.fromPath(params.input)
 
 workflow {
 
-    // 0) Original input TSV channel (declared above the workflow)
-    //    def input_tsv_ch = Channel.fromPath(params.input)
-
     // 1) Generate embeddings
     def embeddings_ch = params.embeddings_file ?
         Channel.fromPath(params.embeddings_file) :
@@ -23,20 +20,25 @@ workflow {
     // 4) Aggregate + enrich contigs & windows metrics
     def (enriched_all_ch, enriched_unagg_ch) = AGGREGATE_METRIC(sorted_distances_ch, input_tsv_ch)
 
-    // 5) Filter out the top-N contigs
+    // 5) Filter out the top-N contigs & windows
     def (top_contigs_ch, top_contigs_unagg_ch) = FILTER_TOP_CONTIGS(enriched_all_ch, enriched_unagg_ch)
 
-    // 6) Draw contig-level SVGs (highlighting full contig spans)
+    // 6) Draw contig-level SVGs
     def contig_svgs_ch = DRAW_CONTIG_SVGS(top_contigs_ch)
 
-    // 7) Draw window-level SVGs (highlighting each sub-window)
+    // 7) Draw window-level SVGs
     def window_svgs_ch = DRAW_UNAGG_SVGS(top_contigs_unagg_ch)
 
-    // 8) Legacy distance-based top-N (for your existing report)
+    // 8) Generate the two HTML reports
+    def agg_report_ch    = GENERATE_AGGREGATED_REPORT(top_contigs_ch, contig_svgs_ch)
+    def unagg_report_ch  = GENERATE_UNAGGREGATED_REPORT(top_contigs_unagg_ch, window_svgs_ch)
+
+    // // 9) (optional) legacy distance‐based report
     // def topn_ch = FILTER_TOP_N(sorted_distances_ch)
     // def svg_ch  = DRAW_WINDOWS_PAIRS(topn_ch)
     // GENERATE_HTML_REPORT(topn_ch, svg_ch)
 }
+
 
 
 process GENERATE_EMBEDDINGS {
@@ -308,6 +310,53 @@ process DRAW_UNAGG_SVGS {
     --highlight-colour "#00FF99" \
     --num-workers ${params.num_workers}
   """
+}
+
+//
+// 8a) Generate aggregated‐contig report
+//
+process GENERATE_AGGREGATED_REPORT {
+    tag "gen_agg_report"
+    publishDir "./${params.outdir}", mode: 'copy'
+
+    input:
+      path top_contigs_tsv     // exon_pairs_scores_top_contigs.tsv
+      path contig_svg_dir      // contig_svgs/individual_svgs
+
+    output:
+      path "exon_pairs_contigs_report.html"
+
+    script:
+    """
+    python3 /app/generate_report.py \
+      --pairs ${top_contigs_tsv} \
+      --svg-dir ${contig_svg_dir} \
+      --output exon_pairs_contigs_report.html
+    """
+}
+
+
+//
+// 8b) Generate unaggregated‐window report
+//
+process GENERATE_UNAGGREGATED_REPORT {
+    tag "gen_unagg_report"
+    publishDir "./${params.outdir}", mode: 'copy'
+
+    input:
+      path top_windows_tsv     // exon_pairs_scores_top_contigs.unaggregated.tsv
+      path window_svg_dir      // window_svgs/individual_svgs
+
+    output:
+      path "exon_pairs_contigs_report.unaggregated.html"
+
+    script:
+    """
+    python3 /app/generate_report.py \
+      --pairs ${top_windows_tsv} \
+      --svg-dir ${window_svg_dir} \
+      --output exon_pairs_contigs_report.unaggregated.html
+    """
 }
 
 
