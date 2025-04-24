@@ -1,25 +1,32 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl=2
 
-// Nextflow pipeline: embeddings → distances → top‑N → draw → HTML report
+/*
+ * Nextflow pipeline: embeddings → distances → sort → top-N → draw → HTML report
+ */
 workflow {
-    // Embeddings
+
+    // — Embeddings (unchanged)
     def embeddings_ch = params.embeddings_file ?
         Channel.fromPath(params.embeddings_file) :
         GENERATE_EMBEDDINGS(Channel.fromPath(params.input))
 
-    // Distances
+    // — Compute raw distances (no longer published)
     def distances_ch = COMPUTE_DISTANCES(embeddings_ch)
 
-    // Top‑N
-    def topn_ch = FILTER_TOP_N(distances_ch)
+    // — Sort distances → produces distances.sorted.tsv
+    def sorted_distances_ch = SORT_DISTANCES(distances_ch)
 
-    // Draw windows pairs → emits individual_svgs directory
+    // — Filter Top-N on the sorted distances
+    def topn_ch = FILTER_TOP_N(sorted_distances_ch)
+
+    // — Draw the top-N pairs
     def svg_ch = DRAW_WINDOWS_PAIRS(topn_ch)
 
-    // Generate HTML report (waits for SVGs)
+    // — Generate the HTML report
     GENERATE_HTML_REPORT(topn_ch, svg_ch)
 }
+
 
 process GENERATE_EMBEDDINGS {
     tag "generate_embeddings"
@@ -49,9 +56,9 @@ process GENERATE_EMBEDDINGS {
     """
 }
 
+
 process COMPUTE_DISTANCES {
     tag "compute_distances"
-    publishDir "./${params.outdir}", mode: 'copy'
 
     input:
       path embeddings
@@ -74,6 +81,32 @@ process COMPUTE_DISTANCES {
     """
 }
 
+
+process SORT_DISTANCES {
+    tag "sort_distances"
+    publishDir "./${params.outdir}", mode: 'copy'
+
+    input:
+      path distances
+
+    output:
+      path "distances.sorted.tsv", emit: sorted_distances
+
+    script:
+    """
+    python3 - << 'EOF'
+import pandas as pd
+# Read raw distances
+df = pd.read_csv('${distances}', sep='\\t')
+# Sort ascending by distance
+df.sort_values('distance', inplace=True)
+# Write out the sorted TSV
+df.to_csv('distances.sorted.tsv', sep='\\t', index=False)
+EOF
+    """
+}
+
+
 process FILTER_TOP_N {
     tag "filter_top_n"
     publishDir "./${params.outdir}", mode: 'copy'
@@ -88,12 +121,13 @@ process FILTER_TOP_N {
     """
     python3 - << 'EOF'
 import pandas as pd
-df = pd.read_csv('${distances}', sep='\t')
+df = pd.read_csv('${distances}', sep='\\t')
 df_sorted = df.sort_values('distance').head(${params.top_n})
-df_sorted.to_csv('top_${params.top_n}.tsv', sep='\t', index=False)
+df_sorted.to_csv('top_${params.top_n}.tsv', sep='\\t', index=False)
 EOF
     """
 }
+
 
 process DRAW_WINDOWS_PAIRS {
     tag "draw_windows_pairs"
@@ -119,6 +153,7 @@ process DRAW_WINDOWS_PAIRS {
       --outdir .
     """
 }
+
 
 process GENERATE_HTML_REPORT {
     tag "html_report"
