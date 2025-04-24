@@ -39,8 +39,8 @@ def objective(trial, args):
     alpha1 = trial.suggest_float('alpha1', 0.0, 0.5)
     alpha2 = trial.suggest_float('alpha2', 0.1, 1.0)
     beta1  = trial.suggest_float('beta1', 0.0001, 0.05, log=True)
-    beta2  = trial.suggest_float('beta2', 0.5, 1.0)
-    gamma  = trial.suggest_float('gamma', 0.0, 0.5)
+    beta2  = trial.suggest_float('beta2', 1.0, 2.0)
+    gamma  = trial.suggest_float('gamma', 0.3, 0.7)
 
     # Compute metrics
     df = run_aggregated(
@@ -56,7 +56,6 @@ def objective(trial, args):
         |
         ((df.exon_id_1 == 'ENSE00004286647.1') & (df.exon_id_2 == 'ENSE00001655346.1'))
     )
-
     if not mask_true.any():
         return -1e9
     true_score = df.loc[mask_true, 'metric'].iloc[0]
@@ -134,12 +133,22 @@ def main():
 
     # Generate diagnostic plots
     os.makedirs('optuna_plots', exist_ok=True)
+
+    # Optimization history (remove first trial point)
     fig1 = vis.plot_optimization_history(study)
+    trace = fig1.data[0]
+    # drop the x==0 trial
+    filtered = [(x, y) for x, y in zip(trace.x, trace.y) if x != 0]
+    trace.x, trace.y = zip(*filtered)
     fig1.write_image('optuna_plots/optimization_history.png')
     fig1.write_html('optuna_plots/optimization_history.html')
+
+    # Parameter importances
     fig2 = vis.plot_param_importances(study)
     fig2.write_image('optuna_plots/param_importances.png')
     fig2.write_html('optuna_plots/param_importances.html')
+
+    # Slice plot
     fig3 = vis.plot_slice(study)
     fig3.write_image('optuna_plots/slice_plot.png')
     fig3.write_html('optuna_plots/slice_plot.html')
