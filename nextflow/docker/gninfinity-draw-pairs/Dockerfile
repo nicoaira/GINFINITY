@@ -31,4 +31,4 @@ WORKDIR /app
 COPY nextflow/modules/draw_pairs.py ./draw_pairs.py
 
 # Install required Python packages
-RUN pip install cairosvg
+RUN pip install cairosvg pandas
