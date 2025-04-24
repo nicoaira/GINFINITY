@@ -34,3 +34,4 @@ results/*
 work/*
 .nextflow*
 nextflow/results_nf/todo.txt
+nextflow/results/todo.txt
