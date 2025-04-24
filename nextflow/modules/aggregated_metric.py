@@ -36,8 +36,8 @@ def compute_pair_metric(args):
     M_mat[mask] /= denom[mask] ** gamma
 
     G = M_mat.sum()
-    # scale down by 10E4 = 10 * 10^4 = 100000
-    return G / 1e5
+    # scale down by 10E4
+    return G / 1e4
 
 def find_contigs(df_grp):
     """
@@ -72,7 +72,7 @@ def find_contigs(df_grp):
     for i in range(n):
         root = find(i)
         comps.setdefault(root, []).append(i)
-    return [df_grp.iloc(idxs).reset_index(drop=True) for idxs in comps.values()]
+    return [df_grp.iloc[idxs].reset_index(drop=True) for idxs in comps.values()]
 
 def main():
     parser = argparse.ArgumentParser(
