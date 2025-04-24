@@ -6,6 +6,9 @@ def input_tsv_ch = Channel.fromPath(params.input)
 
 workflow {
 
+    // 0) Original input TSV channel (declared above the workflow)
+    //    def input_tsv_ch = Channel.fromPath(params.input)
+
     // 1) Generate embeddings
     def embeddings_ch = params.embeddings_file ?
         Channel.fromPath(params.embeddings_file) :
@@ -23,10 +26,16 @@ workflow {
     // 5) Filter out the top-N contigs
     def (top_contigs_ch, top_contigs_unagg_ch) = FILTER_TOP_CONTIGS(enriched_all_ch, enriched_unagg_ch)
 
-    // 6) Legacy: also filter top-N *distances* → draw → report
-    def topn_ch = FILTER_TOP_N(sorted_distances_ch)
-    def svg_ch  = DRAW_WINDOWS_PAIRS(topn_ch)
-    GENERATE_HTML_REPORT(topn_ch, svg_ch)
+    // 6) Draw contig-level SVGs (highlighting full contig spans)
+    def contig_svgs_ch = DRAW_CONTIG_SVGS(top_contigs_ch)
+
+    // 7) Draw window-level SVGs (highlighting each sub-window)
+    def window_svgs_ch = DRAW_UNAGG_SVGS(top_contigs_unagg_ch)
+
+    // 8) Legacy distance-based top-N (for your existing report)
+    // def topn_ch = FILTER_TOP_N(sorted_distances_ch)
+    // def svg_ch  = DRAW_WINDOWS_PAIRS(topn_ch)
+    // GENERATE_HTML_REPORT(topn_ch, svg_ch)
 }
 
 
@@ -243,29 +252,62 @@ EOF
 }
 
 
-process DRAW_WINDOWS_PAIRS {
-    tag "draw_windows_pairs"
-    publishDir "./${params.outdir}/structures_plots", mode: 'copy'
+process DRAW_CONTIG_SVGS {
+  tag "draw_contig_svgs"
+  publishDir "./${params.outdir}/contig_svgs", mode:'copy'
 
-    input:
-      path top_n_file
+  input:
+    path top_contigs_tsv  // exon_pairs_scores_top_contigs.tsv
 
-    output:
-      path "individual_svgs", emit: svgs
+  output:
+    path "individual_svgs", emit: contig_svgs
 
-    when:
-      params.draw_pairs
+  script:
+  """
+  # 1) massage the contig‐level TSV so draw_pairs.py sees window_start_/window_end_
+  python3 - << 'EOF'
+import pandas as pd
+df = pd.read_csv('${top_contigs_tsv}', sep='\\t')
+# rename contig_{start,end}_{1,2} → window_{start,end}_{1,2}
+df = df.rename(columns={
+  'contig_start_1':'window_start_1','contig_end_1':'window_end_1',
+  'contig_start_2':'window_start_2','contig_end_2':'window_end_2'
+})
+df.to_csv('to_draw_contigs.tsv', sep='\\t', index=False)
+EOF
 
-    script:
-    """
-    python3 /app/draw_pairs.py \
-      --tsv ${top_n_file} \
-      --width 500 \
-      --height 500 \
-      --highlight-colour "#00FF99" \
-      --num-workers ${params.num_workers} \
-      --outdir .
-    """
+  # 2) call your existing draw_pairs.py
+  python3 /app/draw_pairs.py \
+    --tsv to_draw_contigs.tsv \
+    --outdir ./individual_svgs \
+    --width 500 --height 500 \
+    --highlight-colour "#00FF99" \
+    --num-workers ${params.num_workers}
+  """
+}
+
+//
+// 7) Draw SVGS for top‐windows (unaggregated) 
+//
+process DRAW_UNAGG_SVGS {
+  tag "draw_window_svgs"
+  publishDir "./${params.outdir}/window_svgs", mode:'copy'
+
+  input:
+    path top_windows_tsv  // exon_pairs_scores_top_contigs.unaggregated.tsv
+
+  output:
+    path "individual_svgs", emit: window_svgs
+
+  script:
+  """
+  python3 /app/draw_pairs.py \
+    --tsv ${top_windows_tsv} \
+    --outdir ./individual_svgs \
+    --width 500 --height 500 \
+    --highlight-colour "#00FF99" \
+    --num-workers ${params.num_workers}
+  """
 }
 
 
