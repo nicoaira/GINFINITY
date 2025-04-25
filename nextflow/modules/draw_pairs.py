@@ -145,10 +145,10 @@ def main():
         # IDs & structures
         id1 = row.get('exon_id_1') or row.get('id1') or f"RNA_{i}_1"
         id2 = row.get('exon_id_2') or row.get('id2') or f"RNA_{i}_2"
-        seq1 = row.get('exon_sequence_1') or row.get('seq1') or ""
-        seq2 = row.get('exon_sequence_2') or row.get('seq2') or ""
-        dot1 = row.get('ss_fine_tuned_1') or row.get('structure1') or "."*len(seq1)
-        dot2 = row.get('ss_fine_tuned_2') or row.get('structure2') or "."*len(seq2)
+        seq1 = row.get('sequence_1') or row.get('seq1') or ""
+        seq2 = row.get('sequence_2') or row.get('seq2') or ""
+        dot1 = row.get('secondary_structure_1') or row.get('structure1') or "."*len(seq1)
+        dot2 = row.get('secondary_structure_2') or row.get('structure2') or "."*len(seq2)
 
         # convert T→U
         seq1 = seq1.replace('T','U').replace('t','u')
