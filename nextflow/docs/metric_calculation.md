@@ -52,12 +52,12 @@ $$
 
 ### 3.4 Numerator accumulation
 $$
-\boxed{
+
   N_{ab}
   = \sum_{j:\,(a,b)\in\mathrm{win}_j}
       \frac{1}{r_j^{\alpha_1}}
       \exp\bigl(-\beta_1\,\Delta_{ab}^{(j)}\bigr)
-}
+
 $$
 
 **Interpretation:** sums all “votes” from windows covering $(a,b)$, weighted by rank and diagonal proximity.
@@ -83,12 +83,11 @@ $$
 
 ### 4.3 Denominator accumulation
 $$
-\boxed{
+
   D_{ab}
   = \sum_{j:\,(a,b)\in\mathrm{win}_j}
       \frac{1}{r_j^{\alpha_2}}
       \exp\bigl(-\beta_2\,\Delta_{ab}^{(j)}\bigr)
-}
 $$
 
 **Interpretation:** measures the total “mass” of overlapping windows; larger $D_{ab}$ ⇒ more redundancy.
@@ -99,10 +98,10 @@ $$
 
 Introduce $\gamma\in[0,1]$ and define, for $D_{ab}>0$,
 $$
-\boxed{
+
   M_{ab}
   = \frac{N_{ab}}{D_{ab}^\gamma}
-}
+
 $$
 - $\gamma=0$: no penalty ($M_{ab}=N_{ab}$)  
 - $\gamma=1$: full normalization ($M_{ab}=N_{ab}/D_{ab}$)
@@ -113,10 +112,10 @@ $$
 
 Sum over all base-pairs:
 $$
-\boxed{
+
   G(A,B)
   = \sum_{a=1}^L \sum_{b=1}^M M_{ab}.
-}
+
 $$
 Rewards both **coverage** (many interacting cells) and **strength** (high weights).
 
