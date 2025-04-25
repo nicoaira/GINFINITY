@@ -49,10 +49,10 @@ def find_contigs(df_grp):
             j = idxs[jj]
             if df_grp.at[j,'window_start_1'] > e1_i:
                 break
-            if (df_grp.at[j,'window_start_2'] <= e1_i and
+            if (df_grp.at[j,'window_start_2'] <= e2_i and
                 s2_i <= df_grp.at[j,'window_end_2']):
                 union(i, j)
-
+    
     comps = {}
     for i in range(n):
         r = find(i)
