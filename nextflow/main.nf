@@ -52,8 +52,7 @@ process GENERATE_EMBEDDINGS {
       path input_file
 
     output:
-      path "${params.outdir}/embeddings.tsv", emit: embeddings
-      // change with  path "embeddings.tsv", emit: embeddings
+      path "embeddings.tsv", emit: embeddings
 
     script:
     """
@@ -309,7 +308,7 @@ process DRAW_UNAGG_SVGS {
 
   # We just feed the unaggregated TSV directly.
   cp ${top_windows_tsv} to_draw_windows.tsv
-  
+
   # Generate the drawings
   python3 /app/draw_pairs.py \
     --tsv to_draw_windows.tsv \
