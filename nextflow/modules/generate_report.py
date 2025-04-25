@@ -1,15 +1,3 @@
-#!/usr/bin/env python3
-"""
-generate_report.py
-Create a paginated HTML report (20 rows/page) from top_N.tsv, inlining
-the highlighted SVGs for each RNA pair in two extra columns.
-
-Usage:
-  python3 generate_report.py \
-    --pairs top_N.tsv \
-    --svg-dir structures_plots/individual_svgs \
-    --output report.html
-"""
 import base64
 import pathlib
 import argparse
@@ -53,7 +41,12 @@ HTML_TEMPLATE = """<!doctype html>
   </table>
 <script>
 $(document).ready(function(){
-    $('#report').DataTable({ pageLength: 20 });
+    $('#report').DataTable({
+        pageLength: 20
+        {% if metric_col_index is not none %},
+        order: [[ {{ metric_col_index }}, 'desc' ]]
+        {% endif %}
+    });
 });
 </script>
 </body>
@@ -73,6 +66,10 @@ def inline_svg(path: pathlib.Path) -> str:
 def make_report(pairs_tsv, svg_dir, output_html):
     df = pd.read_csv(pairs_tsv, sep='\t')
     svg_dir = pathlib.Path(svg_dir)
+    # Determine the index of the 'metric' column if present
+    metric_col_index = None
+    if 'metric' in df.columns:
+        metric_col_index = df.columns.get_loc('metric')
     rows = []
     for idx, rec in df.iterrows():
         i = idx + 1
@@ -88,7 +85,8 @@ def make_report(pairs_tsv, svg_dir, output_html):
 
     html = Template(HTML_TEMPLATE).render(
         cols=list(df.columns),
-        rows=rows
+        rows=rows,
+        metric_col_index=metric_col_index
     )
     pathlib.Path(output_html).write_text(html, encoding='utf-8')
     print(f"[ok] wrote {output_html}")
