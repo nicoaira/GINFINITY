@@ -23,15 +23,23 @@ workflow {
     // 5) Filter out the top-N contigs & windows
     def (top_contigs_ch, top_contigs_unagg_ch) = FILTER_TOP_CONTIGS(enriched_all_ch, enriched_unagg_ch)
 
-    // 6) Draw contig-level SVGs
-    def contig_svgs_ch = DRAW_CONTIG_SVGS(top_contigs_ch)
+    // 6) DRAW_CONTIG_SVGS emits 4 channels – destructure them:
+    def (contig_failures_ch, contig_kts_ch, contig_individual_ch, contig_pairs_ch) = 
+                                DRAW_CONTIG_SVGS(top_contigs_ch)
 
-    // 7) Draw window-level SVGs
-    def window_svgs_ch = DRAW_UNAGG_SVGS(top_contigs_unagg_ch)
+    // 7) DRAW_UNAGG_SVGS emits 4 channels – destructure as well:
+    def (win_failures_ch, win_kts_ch, window_individual_ch, window_pairs_ch) =
+                                DRAW_UNAGG_SVGS(top_contigs_unagg_ch)
 
-    // 8) Generate the two HTML reports
-    def agg_report_ch    = GENERATE_AGGREGATED_REPORT(top_contigs_ch, contig_svgs_ch)
-    def unagg_report_ch  = GENERATE_UNAGGREGATED_REPORT(top_contigs_unagg_ch, window_svgs_ch)
+    // 8a) Generate aggregated‐contig report: only needs
+    //     - the top‐contigs TSV
+    //     - the individual_svgs dir
+    def agg_report_ch = GENERATE_AGGREGATED_REPORT(top_contigs_ch, contig_individual_ch)
+
+    // 8b) Generate unaggregated‐window report: 
+    //     - the top‐windows TSV
+    //     - the individual_svgs dir for windows
+    def unagg_report_ch = GENERATE_UNAGGREGATED_REPORT(top_contigs_unagg_ch, window_individual_ch)
 }
 
 
@@ -45,6 +53,7 @@ process GENERATE_EMBEDDINGS {
 
     output:
       path "${params.outdir}/embeddings.tsv", emit: embeddings
+      // change with  path "embeddings.tsv", emit: embeddings
 
     script:
     """
@@ -227,79 +236,92 @@ EOF
 }
 
 //
-// 6) Draw contig‐level SVGs into a clean “drawings/contigs_drawings” tree
+// 6) Draw contig‐level SVGs + PNGs under results/drawings/contigs_drawings
 //
 process DRAW_CONTIG_SVGS {
   tag "draw_contig_svgs"
-  publishDir "./${params.outdir}/drawings/contigs_drawings", mode:'copy'
+  publishDir "./${params.outdir}/drawings/contigs_drawings", mode: 'copy'
 
   input:
     path top_contigs_tsv  // exon_pairs_scores_top_contigs.tsv
 
   output:
-    // emit the individual_svgs dir so downstream report can find them
-    path "drawings/contigs_drawings/individual_svgs", emit: contig_svgs
+    path 'failures.log',      emit: contig_failures
+    path 'kts_scripts',       emit: contig_kts
+    path 'individual_svgs',   emit: contig_individual
+    path 'pairs_drawings',    emit: contig_pairs
 
   script:
   """
-  # 1) rename contigs → windows & metadata → what draw_pairs.py expects
+  # Pre-create expected output dirs; create an empty failures.log file
+  mkdir -p kts_scripts individual_svgs pairs_drawings/pairs_svgs pairs_drawings/pairs_pngs
+  touch failures.log
+
+  # Massage TSV into the format draw_pairs.py expects
   python3 - << 'EOF'
 import pandas as pd
 df = pd.read_csv('${top_contigs_tsv}', sep='\\t')
 df = df.rename(columns={
-  'contig_start_1':'window_start_1','contig_end_1':'window_end_1',
-  'contig_start_2':'window_start_2','contig_end_2':'window_end_2',
-  'sequence_1':'exon_sequence_1','sequence_2':'exon_sequence_2',
-  'secondary_structure_1':'ss_fine_tuned_1',
-  'secondary_structure_2':'ss_fine_tuned_2'
+  'contig_start_1':'window_start_1',
+  'contig_end_1':'window_end_1',
+  'contig_start_2':'window_start_2',
+  'contig_end_2':'window_end_2'
 })
 df.to_csv('to_draw_contigs.tsv', sep='\\t', index=False)
 EOF
 
-  # 2) call draw_pairs.py into this very directory
+  # Generate the drawings
   python3 /app/draw_pairs.py \
     --tsv to_draw_contigs.tsv \
     --outdir . \
     --width 500 --height 500 \
     --highlight-colour "#00FF99" \
     --num-workers ${params.num_workers}
+
+  # Organize pair SVGs/PNGs
+  mkdir -p pairs_drawings/pairs_svgs pairs_drawings/pairs_pngs
+  mv pair_*.svg pairs_drawings/pairs_svgs/ 2>/dev/null || true
+  mv pair_*.png pairs_drawings/pairs_pngs/ 2>/dev/null || true
   """
 }
 
-
 //
-// 7) Draw window‐level SVGs into “drawings/unagg_windows_drawings” tree
+// 7) Draw unaggregated‐window SVGs + PNGs under results/drawings/unagg_windows_drawings
 //
 process DRAW_UNAGG_SVGS {
   tag "draw_window_svgs"
-  publishDir "./${params.outdir}/drawings/unagg_windows_drawings", mode:'copy'
+  publishDir "./${params.outdir}/drawings/unagg_windows_drawings", mode: 'copy'
 
   input:
     path top_windows_tsv  // exon_pairs_scores_top_contigs.unaggregated.tsv
 
   output:
-    path "drawings/unagg_windows_drawings/individual_svgs", emit: window_svgs
+    path 'failures.log',      emit: window_failures
+    path 'kts_scripts',       emit: window_kts
+    path 'individual_svgs',   emit: window_individual
+    path 'pairs_drawings',    emit: window_pairs
 
   script:
   """
-  # rename metadata → what draw_pairs.py expects
-  python3 - << 'EOF'
-import pandas as pd
-df = pd.read_csv('${top_windows_tsv}', sep='\\t')
-df = df.rename(columns={
-  'sequence_1':'exon_sequence_1','sequence_2':'exon_sequence_2',
-  'secondary_structure_1':'ss_fine_tuned_1',
-  'secondary_structure_2':'ss_fine_tuned_2'
-})
-df.to_csv('to_draw_windows.tsv', sep='\\t', index=False)
-EOF
+  # Pre-create expected output dirs; create an empty failures.log file
+  mkdir -p kts_scripts individual_svgs pairs_drawings/pairs_svgs pairs_drawings/pairs_pngs
+  touch failures.log
 
+  # We just feed the unaggregated TSV directly.
+  cp ${top_windows_tsv} to_draw_windows.tsv
+  
+  # Generate the drawings
   python3 /app/draw_pairs.py \
     --tsv to_draw_windows.tsv \
     --outdir . \
     --width 500 --height 500 \
     --highlight-colour "#00FF99" \
     --num-workers ${params.num_workers}
+
+  # Organize pair SVGs/PNGs
+  mkdir -p pairs_drawings/pairs_svgs pairs_drawings/pairs_pngs
+  mv pair_*.svg pairs_drawings/pairs_svgs/ 2>/dev/null || true
+  mv pair_*.png pairs_drawings/pairs_pngs/ 2>/dev/null || true
   """
 }
 
