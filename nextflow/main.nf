@@ -56,7 +56,7 @@ process GENERATE_EMBEDDINGS {
 
     script:
     """
-    # Add seq_len column
+    # 1) Add seq_len column to a temp file
     python3 - << 'EOF'
 import pandas as pd
 df = pd.read_csv('${input_file}', sep='\\t')
@@ -64,11 +64,11 @@ df['seq_len'] = df['exon_sequence'].str.len()
 df.to_csv('with_seq_len.tsv', sep='\\t', index=False)
 EOF
 
-    # Generate embeddings
+    # 2) Generate embeddings directly to embeddings.tsv in this CWD
     python3 ${baseDir}/modules/predict_embedding.py \
       --input with_seq_len.tsv \
       --model_path ${params.model_path} \
-      --output ${params.outdir}/embeddings.tsv \
+      --output ./embeddings.tsv \
       --structure_column_name ${params.structure_column_name} \
       ${params.structure_column_num  ? "--structure_column_num ${params.structure_column_num}" : ''} \
       --header ${params.header} \
