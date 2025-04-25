@@ -7,11 +7,14 @@ We compare RNA secondary-structure similarity between two exons, $A$ and $B$, of
 ## 1. Top-percentile filtering
 
 - **Input:** a TSV of all window comparisons, each row $j$ with learned distance $d_j$.
-- **Percentile** $p\in(0,100]$: sort rows by increasing $d_j$ and retain the top
-  $$
-    N \;=\;\Bigl\lceil \tfrac{p}{100}\times(\text{total rows})\Bigr\rceil
-  $$
-  windows, indexed $j=1,\dots,N$.
+- **Percentile** $p\in(0,100]$: sort by $d_j$ and retain the top-$N$ windows:
+
+$$
+N = \Bigl\lceil \frac{p}{100}\times(\text{total rows})\Bigr\rceil,
+\quad
+j=1,\dots,N.
+$$
+
 - **Rationale:** focuses on the most‐similar structural matches and reduces noise.
 
 ---
@@ -52,12 +55,10 @@ $$
 
 ### 3.4 Numerator accumulation
 $$
-
   N_{ab}
   = \sum_{j:\,(a,b)\in\mathrm{win}_j}
       \frac{1}{r_j^{\alpha_1}}
       \exp\bigl(-\beta_1\,\Delta_{ab}^{(j)}\bigr)
-
 $$
 
 **Interpretation:** sums all “votes” from windows covering $(a,b)$, weighted by rank and diagonal proximity.
@@ -83,7 +84,6 @@ $$
 
 ### 4.3 Denominator accumulation
 $$
-
   D_{ab}
   = \sum_{j:\,(a,b)\in\mathrm{win}_j}
       \frac{1}{r_j^{\alpha_2}}
@@ -98,10 +98,8 @@ $$
 
 Introduce $\gamma\in[0,1]$ and define, for $D_{ab}>0$,
 $$
-
   M_{ab}
   = \frac{N_{ab}}{D_{ab}^\gamma}
-
 $$
 - $\gamma=0$: no penalty ($M_{ab}=N_{ab}$)  
 - $\gamma=1$: full normalization ($M_{ab}=N_{ab}/D_{ab}$)
@@ -112,10 +110,8 @@ $$
 
 Sum over all base-pairs:
 $$
-
   G(A,B)
   = \sum_{a=1}^L \sum_{b=1}^M M_{ab}.
-
 $$
 Rewards both **coverage** (many interacting cells) and **strength** (high weights).
 
