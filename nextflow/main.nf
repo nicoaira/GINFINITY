@@ -17,32 +17,37 @@ workflow {
     // 3) Sort distances ascending
     def sorted_distances_ch = SORT_DISTANCES(distances_ch)
 
+    // 3a) Optionally plot the distance distribution
+    def dist_plot_ch = PLOT_DISTANCES(sorted_distances_ch)
+
     // 4) Aggregate + enrich contigs & windows metrics
-    def (enriched_all_ch, enriched_unagg_ch) = AGGREGATE_METRIC(sorted_distances_ch, input_tsv_ch)
+    def (enriched_all_ch, enriched_unagg_ch) =
+        AGGREGATE_METRIC(sorted_distances_ch, input_tsv_ch)
+
+    // 4b) Optionally plot the metric distribution
+    def metric_plot_ch = PLOT_METRIC(enriched_all_ch)
 
     // 5) Filter out the top-N contigs & windows
-    def (top_contigs_ch, top_contigs_unagg_ch) = FILTER_TOP_CONTIGS(enriched_all_ch, enriched_unagg_ch)
+    def (top_contigs_ch, top_contigs_unagg_ch) =
+        FILTER_TOP_CONTIGS(enriched_all_ch, enriched_unagg_ch)
 
-    // 6) DRAW_CONTIG_SVGS emits 4 channels – destructure them:
-    def (contig_failures_ch, contig_kts_ch, contig_individual_ch, contig_pairs_ch) = 
-                                DRAW_CONTIG_SVGS(top_contigs_ch)
+    // 6) Draw contig-level SVGs
+    def (contig_failures_ch, contig_kts_ch, contig_individual_ch, contig_pairs_ch) =
+        DRAW_CONTIG_SVGS(top_contigs_ch)
 
-    // 7) DRAW_UNAGG_SVGS emits 4 channels – destructure as well:
+    // 7) Draw window-level SVGs
     def (win_failures_ch, win_kts_ch, window_individual_ch, window_pairs_ch) =
-                                DRAW_UNAGG_SVGS(top_contigs_unagg_ch)
+        DRAW_UNAGG_SVGS(top_contigs_unagg_ch)
 
-    // 8a) Generate aggregated‐contig report: only needs
-    //     - the top‐contigs TSV
-    //     - the individual_svgs dir
-    def agg_report_ch = GENERATE_AGGREGATED_REPORT(top_contigs_ch, contig_individual_ch)
+    // 8a) Generate the contig-level HTML report
+    def agg_report_ch =
+        GENERATE_AGGREGATED_REPORT(top_contigs_ch, contig_individual_ch)
 
-    // 8b) Generate unaggregated‐window report: 
-    //     - the top‐windows TSV
-    //     - the individual_svgs dir for windows
-    def unagg_report_ch = GENERATE_UNAGGREGATED_REPORT(top_contigs_unagg_ch, window_individual_ch)
+    // 8b) Generate the unaggregated-window HTML report
+    def unagg_report_ch =
+        GENERATE_UNAGGREGATED_REPORT(top_contigs_unagg_ch, window_individual_ch)
+
 }
-
-
 
 process GENERATE_EMBEDDINGS {
     tag "generate_embeddings"
@@ -369,5 +374,88 @@ process GENERATE_UNAGGREGATED_REPORT {
       --pairs ${top_windows_tsv} \
       --svg-dir ${window_svgs} \
       --output exon_pairs_contigs_report.unaggregated.html
+    """
+}
+
+
+
+//
+// PLOT_DISTANCES – histogram of distance (0.1% sample by default)
+//
+process PLOT_DISTANCES {
+    tag "plot_distances"
+    publishDir "./${params.outdir}/plots", mode: 'copy'
+    when: params.plot_distances_distribution
+
+    input:
+      path sorted_distances
+
+    output:
+      path "distance_distribution.png"
+
+    script:
+    """
+    python3 - << 'EOF'
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# parameters
+seed = ${params.hist_seed}
+frac = ${params.hist_frac}
+bins = ${params.hist_bins}
+
+# load and sample
+df = pd.read_csv('${sorted_distances}', sep='\\t')
+sampled = df.sample(frac=frac, random_state=seed)
+
+# plot
+plt.figure(figsize=(8,5))
+plt.hist(sampled['distance'], bins=bins)
+plt.xlabel('Distance')
+plt.ylabel('Frequency')
+plt.title(f'Frequency Distribution of Distance ({frac*100:.1f}% sample)')
+plt.tight_layout()
+plt.savefig('distance_distribution.png')
+EOF
+    """
+}
+
+
+//
+// PLOT_METRIC – histogram of contig “metric” (no sampling)
+//
+process PLOT_METRIC {
+    tag "plot_metric"
+    publishDir "./${params.outdir}/plots", mode: 'copy'
+    when: params.plot_metric_distribution
+
+    input:
+      path enriched_all_tsv  // exon_pairs_scores_all_contigs.tsv
+
+    output:
+      path "metric_distribution.png"
+
+    script:
+    """
+    python3 - << 'EOF'
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# parameters
+bins = ${params.metric_bins}
+
+# load
+df = pd.read_csv('${enriched_all_tsv}', sep='\\t')
+
+# plot
+plt.figure(figsize=(8,5))
+plt.hist(df['metric'], bins=bins)
+plt.xlabel('Metric')
+plt.ylabel('Frequency')
+plt.title('Distribution of Contig Metric')
+plt.tight_layout()
+plt.savefig('metric_distribution.png')
+EOF
     """
 }
