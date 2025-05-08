@@ -38,7 +38,7 @@ for metric in metrics:
         plt.xlabel("Hidden Dim")
         plt.tight_layout()
 
-        plot_filename = f"hp_results/plots/heatmap_{metric}_lr{lr}.png"
+        plot_filename = f"src/hp/hp_results/plots/heatmap_{metric}_lr{lr}.png"
         plt.savefig(plot_filename)
         plt.close()
         print(f"📊 Guardado: {plot_filename}")
@@ -62,6 +62,6 @@ plt.title("AUC vs Triplet Loss por combinación de hiperparámetros")
 plt.legend(title="Learning Rate")
 plt.grid(True)
 plt.tight_layout()
-plt.savefig("hp_results/plots/scatter_auc_vs_triplet_loss.png")
+plt.savefig("src/hp/hp_results/plots/scatter_auc_vs_triplet_loss.png")
 plt.close()
-print("📊 Guardado: hp_results/plots/scatter_auc_vs_triplet_loss.png")
+print("📊 Guardado: src/hp/hp_results/plots/scatter_auc_vs_triplet_loss.png")
