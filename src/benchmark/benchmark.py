@@ -592,7 +592,10 @@ def filter_rna_types(data, rna_types):
             return row['rna_type_2']
         return None
 
-    data['analysis_rna_type'] = data.apply(pick_analysis_type, axis=1)
+    if rna_types is not None and len(rna_types) > 0:
+        data['analysis_rna_type'] = data.apply(pick_analysis_type, axis=1)
+    else:
+        data['analysis_rna_type'] = data['rna_type_1']
     # Keep only rows with a known analysis_rna_type
     return data[data['analysis_rna_type'].notna()]
 
@@ -802,8 +805,7 @@ def run_benchmark(embeddings_script,
         )
         dist_end = time.time()
 
-        if rna_types:
-            benchmark_df = filter_rna_types(benchmark_df, rna_types)
+        benchmark_df = filter_rna_types(benchmark_df, rna_types)
 
         n_pairs = benchmark_df.shape[0]
 
