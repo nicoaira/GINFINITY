@@ -1,19 +1,24 @@
 import argparse
+import json
 import os
 import time
 import pandas as pd
 import torch
 from torch import optim
 from torch_geometric.loader import DataLoader as GeoDataLoader
+from src.benchmark.benchmark import run_benchmark
 from src.model.gin_model import GINModel
 from src.gin_rna_dataset import GINRNADataset
 from src.triplet_loss import TripletLoss
-from train_model_v2 import (
+from src.utils import get_project_root
+from train_model import (
     train_model_with_early_stopping,
     remove_invalid_structures,
     log_setup,
     log_information
 )
+
+project_root = get_project_root()
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -31,8 +36,9 @@ def parse_args():
     parser.add_argument("--dropout", type=float, default=0.05)
     parser.add_argument("--pooling_type", type=str, default="global_add_pool")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--decay_rate", type=float, default=0.01)
+    parser.add_argument("--decay_rate", type=float, default=0.99)
     parser.add_argument("--results_csv", type=str, default="hp_results/parallel_grid_results.csv")
+    parser.add_argument('--benchmark_datasets', type=str, default='hard_rfam_benchmark_big', help='Benchmark datasets to use for evaluation.')
     return parser.parse_args()
 
 def main():
@@ -58,6 +64,10 @@ def main():
 
     train_loader = GeoDataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_loader = GeoDataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+
+    # Load benchmark metadata
+    with open(os.path.join(project_root, 'data/benchmark_datasets/benchmark_datasets.json'), 'r') as f:
+        benchmark_metadata = json.load(f)
 
     model = GINModel(
         hidden_dim=args.hidden_dim,
@@ -90,27 +100,52 @@ def main():
         decay_rate=args.decay_rate
     )
 
+    # Run benchmark and get average AUCs
+    model_checkpoint_path = f"output/{model_id}/{model_id}.pth"
+    benchmark_results_path = os.path.join(output_dir, "benchmark")
+    average_aucs = run_benchmark(
+        embeddings_script=os.path.join(project_root, "predict_embedding.py"),
+        benchmark_datasets=[args.benchmark_datasets],  # Pass as a list
+        benchmark_metadata=benchmark_metadata,
+        benchmark_metadata_path=os.path.join(project_root, 'data/benchmark_datasets/benchmark_datasets.json'),
+        datasets_dir=os.path.join(project_root, 'data/benchmark_datasets'),
+        save_embeddings=False,
+        emb_output_path=os.path.join(benchmark_results_path, "embeddings"),
+        model_weights_path=model_checkpoint_path,
+        structure_column_name="secondary_structure",
+        structure_column_num=None,
+        header=True,
+        skip_barplot=False,
+        skip_auc_curve=True,
+        results_path=benchmark_results_path,
+        save_distances=False,
+        no_save=False,
+        only_needed_embeddings=True,
+        no_log=False,
+        device=args.device,
+        # num_workers=args.num_workers,
+        distance_batch_size=1000,
+        rna_types=[],
+        # quiet=args.quiet_benchmark,
+        # retries=args.retries  # Pass retries argument
+    )
+
     # Extraer métricas desde el log
-    val_auc = None
     val_loss = None
     with open(log_path, 'r') as f:
         lines = f.readlines()
         for line in reversed(lines):
-            if "Validation AUC" in line and val_auc is None:
-                try:
-                    val_auc = float(line.split(":")[-1].strip())
-                except:
-                    val_auc = None
             if "Validation Triplet Loss" in line and val_loss is None:
                 try:
                     val_loss = float(line.split(":")[-1].strip())
                 except:
                     val_loss = None
-            if val_auc is not None and val_loss is not None:
+            if val_loss is not None:
                 break
 
     elapsed = round((time.time() - start_time) / 60, 3)
 
+    val_auc = sum(average_aucs) / len(average_aucs)
     # Guardar resultados
     results = {
         "model_id": model_id,
