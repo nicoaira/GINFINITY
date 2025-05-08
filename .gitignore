@@ -26,3 +26,11 @@ troubleshoot/*
 src/data_generation/rnafold_prueba.fa
 src/data_generation/forgi_graph/test_structures.txt
 src/data_generation/output_*
+nextflow/.nextflow/*
+nextflow/.nextflow.log*
+nextflow/work
+run_compute_distances.sh
+results/*
+work/*
+.nextflow*
+nextflow/results/todo.txt

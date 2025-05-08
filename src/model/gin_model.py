@@ -75,7 +75,7 @@ class GINModel(nn.Module):
     @staticmethod
     def load_from_checkpoint(checkpoint_path, device='cpu'):
         """Load model from checkpoint with metadata"""
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         metadata = checkpoint['metadata']
 
         model = GINModel(
