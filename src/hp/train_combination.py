@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument("--dropout", type=float, default=0.05)
     parser.add_argument("--pooling_type", type=str, default="global_add_pool")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--decay_rate", type=float, default=0.99)
+    parser.add_argument("--decay_rate", type=float, default=0.95)
     parser.add_argument("--results_csv", type=str, default="hp_results/parallel_grid_results.csv")
     parser.add_argument('--benchmark_datasets', type=str, default='hard_rfam_benchmark_big', help='Benchmark datasets to use for evaluation.')
     return parser.parse_args()
@@ -151,6 +151,7 @@ def main():
         "model_id": model_id,
         "learning_rate": args.lr,
         "hidden_dim": args.hidden_dim,
+        "output_dim": args.output_dim,
         "gin_layers": args.gin_layers,
         "val_triplet_loss": val_loss,
         "val_auc": val_auc,
