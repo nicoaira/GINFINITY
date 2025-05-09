@@ -45,7 +45,7 @@ def main():
     args = parse_args()
     os.makedirs("hp_results", exist_ok=True)
 
-    model_id = f"gin_lr{args.lr}_dim{args.hidden_dim}_layers{args.gin_layers}"
+    model_id = f"gin_lr{args.lr}_dim{args.hidden_dim}__out{args.output_dim}_layers{args.gin_layers}"
     output_dir = f"output/{model_id}"
     os.makedirs(output_dir, exist_ok=True)
     log_path = f"{output_dir}/train.log"
