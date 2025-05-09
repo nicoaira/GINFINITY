@@ -16,12 +16,13 @@
 # Leer combinación desde el grid
 GRID="src/hp/grid.csv"
 combo=$(sed -n "$((SLURM_ARRAY_TASK_ID + 2))p" $GRID)
-IFS=',' read lr hidden_dim gin_layers <<< "$combo"
+IFS=',' read gin_layers hidden_dim output_dim lr <<< "$combo"
 
 # Ejecutar entrenamiento
 python -m src.hp.train_combination \
     --lr $lr \
     --hidden_dim $hidden_dim \
+    --output_dim $output_dim \
     --gin_layers $gin_layers \
     --input_path example_data/train.csv \
     --val_path example_data/val_dataset.csv
