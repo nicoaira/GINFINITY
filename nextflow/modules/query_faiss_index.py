@@ -67,7 +67,7 @@ def main():
             })
     out_df = pd.DataFrame(rows)
 
-    # 6) Write exactly distances.tsv that aggregated_metric expects
+    # 6) Write exactly distances.tsv that aggregated_score expects
     out_df.to_csv(args.output, sep='\t', index=False)
 
 if __name__ == '__main__':

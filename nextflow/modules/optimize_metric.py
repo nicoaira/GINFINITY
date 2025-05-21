@@ -10,13 +10,13 @@ import optuna.visualization as vis
 
 def run_aggregated(input_tsv, percentile, alpha1, beta1, alpha2, beta2, gamma, num_workers):
     """
-    Run the aggregated_metric.py script with the given hyperparameters,
+    Run the aggregated_score.py script with the given hyperparameters,
     return its output as a DataFrame.
     """
     with tempfile.NamedTemporaryFile(suffix='.tsv', delete=False) as tmp:
         tmp_out = tmp.name
     cmd = [
-        'python3', 'aggregated_metric.py',
+        'python3', 'aggregated_score.py',
         '--input', input_tsv,
         '--percentile', str(percentile),
         '--alpha1', str(alpha1),
@@ -48,7 +48,7 @@ def objective(trial, args):
     beta2  = trial.suggest_float('beta2', 1.0, 2.0)
     gamma  = trial.suggest_float('gamma', 0.3, 0.7)
 
-    # Compute metrics
+    # Compute scores
     df = run_aggregated(
         args.input, percentile,
         alpha1, beta1,
@@ -63,11 +63,11 @@ def objective(trial, args):
     )
     if not mask_true.any():
         return -1e9
-    true_score = df.loc[mask_true, 'metric'].iloc[0]
+    true_score = df.loc[mask_true, 'score'].iloc[0]
     true_rank = int(df.index[mask_true][0])  # 0-based
 
     # Average of top-3 others
-    others = df.loc[~mask_true, 'metric']
+    others = df.loc[~mask_true, 'score']
     avg_top3 = others.sort_values(ascending=False).head(3).mean() if len(others) else true_score
 
     # Relative margin vs top-3
@@ -90,7 +90,7 @@ def objective(trial, args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Optimize hyperparameters for pairwise metric'
+        description='Optimize hyperparameters for pairwise score'
     )
     parser.add_argument('--input',       required=True,
                         help='Path to sorted distances.tsv')
@@ -103,7 +103,7 @@ def main():
     parser.add_argument('--alpha2',     type=float, default=1.0,
                         help='Denominator rank-decay exponent (default 1.0)')
     parser.add_argument('--num-workers', type=int, default=1,
-                        help='Workers for aggregated_metric')
+                        help='Workers for aggregated_score')
     parser.add_argument('--trials',      type=int, default=50,
                         help='Number of Optuna trials')
     parser.add_argument('--storage',     type=str, default='sqlite:///optuna_study.db',

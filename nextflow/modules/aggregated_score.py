@@ -7,7 +7,7 @@ import pandas as pd
 from dask import dataframe as dd
 
 
-def compute_pair_metric(args):
+def compute_pair_score(args):
     group, alpha1, beta1, alpha2, beta2, gamma = args
     # now read the lengths we carried through
     L = int(group['len_1'].iat[0])
@@ -78,7 +78,7 @@ def find_contigs(df_grp):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Compute aggregated pair metrics for windows or contigs')
+        description='Compute aggregated pair scores for windows or contigs')
     parser.add_argument('--input',             required=True,
                         help='Path to the sorted distances TSV')
     parser.add_argument('--id-column',         default='exon_id',
@@ -94,8 +94,8 @@ def main():
     parser.add_argument('--alpha2',            type=float, default=1.0)
     parser.add_argument('--beta2',             type=float, default=0.1)
     parser.add_argument('--gamma',             type=float, default=0.5)
-    parser.add_argument('--output',            default='exon_pair_metrics.tsv',
-                        help='Output TSV path for aggregated metrics')
+    parser.add_argument('--output',            default='exon_pair_scores.tsv',
+                        help='Output TSV path for aggregated scores')
     parser.add_argument('--output-unaggregated', action='store_true',
                         help='Also output unaggregated windows')
     args = parser.parse_args()
@@ -173,7 +173,7 @@ def main():
         for sub in contigs:
             old_id += 1
             nwin = len(sub)
-            G = compute_pair_metric((
+            G = compute_pair_score((
                 sub, args.alpha1, args.beta1,
                 args.alpha2, args.beta2, args.gamma
             ))
@@ -192,26 +192,26 @@ def main():
 
     # 5) build & sort the contig-level table
     if args.mode == 'global':
-        cols_out = [id1_col, id2_col, 'old_contig_id', 'n_collapsed_windows', 'metric']
+        cols_out = [id1_col, id2_col, 'old_contig_id', 'n_collapsed_windows', 'score']
     else:
         cols_out = [
             id1_col, 'contig_start_1', 'contig_end_1',
             id2_col, 'contig_start_2', 'contig_end_2',
-            'old_contig_id', 'n_collapsed_windows', 'metric'
+            'old_contig_id', 'n_collapsed_windows', 'score'
         ]
 
     df_agg = pd.DataFrame(aggregated, columns=cols_out)
-    df_agg.sort_values('metric', ascending=False, inplace=True)
+    df_agg.sort_values('score', ascending=False, inplace=True)
     df_agg['contig_id']   = np.arange(1, len(df_agg) + 1)
     df_agg['contig_rank'] = df_agg['contig_id']
 
     if args.mode == 'global':
-        final_cols = [id1_col, id2_col, 'contig_id', 'contig_rank', 'n_collapsed_windows', 'metric']
+        final_cols = [id1_col, id2_col, 'contig_id', 'contig_rank', 'n_collapsed_windows', 'score']
     else:
         final_cols = [
             id1_col, 'contig_start_1', 'contig_end_1',
             id2_col, 'contig_start_2', 'contig_end_2',
-            'contig_id', 'contig_rank', 'n_collapsed_windows', 'metric'
+            'contig_id', 'contig_rank', 'n_collapsed_windows', 'score'
         ]
 
     df_agg[final_cols].to_csv(args.output, sep='\t', index=False)
@@ -222,7 +222,7 @@ def main():
         base, ext = os.path.splitext(args.output)
         fn = f"{base}.unaggregated{ext}"
         mapping = df_agg.set_index('old_contig_id')[[
-            'contig_id', 'contig_rank', 'n_collapsed_windows', 'metric'
+            'contig_id', 'contig_rank', 'n_collapsed_windows', 'score'
         ]].to_dict('index')
 
         rows = []
@@ -232,13 +232,13 @@ def main():
                 'contig_id':            m['contig_id'],
                 'contig_rank':          m['contig_rank'],
                 'n_collapsed_windows':  m['n_collapsed_windows'],
-                'contig_metric':        m['metric']
+                'contig_score':        m['score']
             })
             rec.pop('old_contig_id')
             rows.append(rec)
 
         df_un = pd.DataFrame(rows)
-        df_un.sort_values('contig_metric', ascending=False, inplace=True)
+        df_un.sort_values('contig_score', ascending=False, inplace=True)
         df_un.to_csv(fn, sep='\t', index=False)
         print(f"Written unaggregated to {fn}")
 

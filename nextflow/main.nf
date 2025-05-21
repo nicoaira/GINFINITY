@@ -47,8 +47,8 @@ params.hist_seed              = 42
 params.hist_frac              = 0.001
 params.hist_bins              = 200
 
-params.plot_metric_distribution = true
-params.metric_bins            = 30
+params.plot_score_distribution = true
+params.score_bins            = 30
 
 /*─────────────────────────────────────────────────────────────
  *  BASIC CHECK
@@ -272,8 +272,8 @@ PY
 /*─────────────────────────────────────────────────────────────
  *  6)  AGGREGATE + ENRICH
  *────────────────────────────────────────────────────────────*/
-process AGGREGATE_METRIC {
-    tag       "aggregate_metric"
+process AGGREGATE_SCORE {
+    tag       "aggregate_score"
     publishDir "${params.outdir}", mode:'copy'
     cpus      params.num_workers
     memory    '16 GB'
@@ -290,7 +290,7 @@ process AGGREGATE_METRIC {
     script:
     """
     # 1) run the core aggregation
-    python3 ${baseDir}/modules/aggregated_metric.py \
+    python3 ${baseDir}/modules/aggregated_score.py \
       --input ${sorted_distances} \
       --id-column ${params.id_column} \
       --alpha1 ${params.alpha1} --alpha2 ${params.alpha2} \
@@ -334,11 +334,11 @@ PY
 }
 
 /*─────────────────────────────────────────────────────────────
- *  7)  (OPTIONAL) PLOT METRIC
+ *  7)  (OPTIONAL) PLOT SCORE
  *────────────────────────────────────────────────────────────*/
-process PLOT_METRIC {
-    when   { params.plot_metric_distribution }
-    tag    "plot_metric"
+process PLOT_SCORE {
+    when   { params.plot_score_distribution }
+    tag    "plot_score"
     publishDir "${params.outdir}/plots", mode:'copy'
     cpus   1
     memory '2 GB'
@@ -347,19 +347,19 @@ process PLOT_METRIC {
       path enriched_all
 
     output:
-      path "metric_distribution.png"
+      path "score_distribution.png"
 
     script:
     """
     python3 - <<'PY'
 import pandas as pd, matplotlib.pyplot as plt
-bins=${params.metric_bins}
+bins=${params.score_bins}
 df=pd.read_csv('${enriched_all}',sep='\\t')
 plt.figure(figsize=(8,5))
-plt.hist(df['metric'],bins=bins)
-plt.xlabel('Metric'); plt.ylabel('Frequency')
-plt.title('Contig Metric Distribution')
-plt.tight_layout(); plt.savefig('metric_distribution.png')
+plt.hist(df['score'],bins=bins)
+plt.xlabel('Score'); plt.ylabel('Frequency')
+plt.title('Contig Score Distribution')
+plt.tight_layout(); plt.savefig('score_distribution.png')
 PY
     """
 }
@@ -547,9 +547,9 @@ workflow {
     def sorted_dist = SORT_DISTANCES(distances)
     PLOT_DISTANCES(sorted_dist)
 
-    /* 6-7   aggregation & optional metric plot */
-    def (agg_all, agg_un) = AGGREGATE_METRIC(sorted_dist, Channel.fromPath(params.input))
-    PLOT_METRIC(agg_all)
+    /* 6-7   aggregation & optional score plot */
+    def (agg_all, agg_un) = AGGREGATE_SCORE(sorted_dist, Channel.fromPath(params.input))
+    PLOT_SCORE(agg_all)
 
     /* 8     top-N selection */
     def (top_contigs, top_un) = FILTER_TOP_CONTIGS(agg_all, agg_un)

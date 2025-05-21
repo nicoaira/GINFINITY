@@ -1,6 +1,6 @@
 # Methods
 
-We compare RNA secondary-structure similarity between two exons, $A$ and $B$, of lengths $L=|A|$ and $M=|B|$. Below we describe each step of the metric’s construction, explain every symbol and parameter, and outline how we tune them.
+We compare RNA secondary-structure similarity between two exons, $A$ and $B$, of lengths $L=|A|$ and $M=|B|$. Below we describe each step of the score’s construction, explain every symbol and parameter, and outline how we tune them.
 
 ---
 
@@ -147,4 +147,4 @@ $(\mathrm{ENSE00001655346.1},\mathrm{ENSE00004286647.1})$:
 
 ---
 
-This framework balances **signal amplification** with **redundancy control**, yielding a robust per-base and global similarity metric.
+This framework balances **signal amplification** with **redundancy control**, yielding a robust per-base and global similarity score.

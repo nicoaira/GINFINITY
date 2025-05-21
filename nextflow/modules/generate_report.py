@@ -54,8 +54,8 @@ HTML_TEMPLATE = """<!doctype html>
 $(document).ready(function(){
     $('#report').DataTable({
         pageLength: 20
-        {% if metric_col_index is not none %},
-        order: [[ {{ metric_col_index }}, 'desc' ]]
+        {% if score_col_index is not none %},
+        order: [[ {{ score_col_index }}, 'desc' ]]
         {% endif %}
     });
 });
@@ -86,10 +86,10 @@ def make_report(pairs_tsv, svg_dir, output_html, id_column):
     # Auto-detect sequence columns (case-insensitive)
     sequence_cols = [col for col in df.columns if 'sequence' in col.lower()]
     
-    # Determine metric column index if exists
-    metric_col_index = None
-    if 'metric' in df.columns:
-        metric_col_index = df.columns.get_loc('metric')
+    # Determine score column index if exists
+    score_col_index = None
+    if 'score' in df.columns:
+        score_col_index = df.columns.get_loc('score')
     
     rows = []
     for idx, rec in df.iterrows():
@@ -122,7 +122,7 @@ def make_report(pairs_tsv, svg_dir, output_html, id_column):
     html = Template(HTML_TEMPLATE).render(
         cols=list(df.columns),
         rows=rows,
-        metric_col_index=metric_col_index,
+        score_col_index=score_col_index,
         sequence_cols=sequence_cols
     )
     pathlib.Path(output_html).write_text(html, encoding='utf-8')
