@@ -20,13 +20,16 @@ params.retries                 = 0
 
 params.batch_size_embed        = 100        // full sequences per embedding task
 
+// faiss index defaults
+params.faiss_k = 100    
+
 // compute-distances defaults
 params.embedding_col           = 'embedding_vector'
 params.keep_cols               = 'transcript_id,window_start,window_end'
 params.num_workers_dist        = 1
 params.device_dist             = 'cpu'
 params.batch_size              = 4096
-params.mode                    = 1
+params.mode                    = 2
 params.query                   = null
 
 // aggregation defaults
@@ -35,7 +38,7 @@ params.alpha2                  = 0.24
 params.beta1                   = 0.0057
 params.beta2                   = 1.15
 params.gamma                   = 0.41
-params.percentile              = 0.01
+params.percentile              = 1
 params.top_n                   = 10
 
 // plotting flags
@@ -90,7 +93,7 @@ EOF
       --id-column ${params.id_column} \
       --model_path ${params.model_path} \
       --output embeddings_batch_${task.index}.tsv \
-      --keep-cols ${params.id_column} \
+      --keep-cols ${params.id_column},seq_len \
       --structure_column_name ${params.structure_column_name} \
       ${params.structure_column_num ? "--structure_column_num ${params.structure_column_num}" : ''} \
       --header true \
@@ -125,6 +128,55 @@ process MERGE_EMBEDDINGS {
     for f in ${batch_embeddings.join(' ')}; do
         tail -n +2 \$f >> embeddings.tsv
     done
+    """
+}
+
+process BUILD_FAISS_INDEX {
+    tag    "build_faiss_index"
+    cpus   1
+    memory '4 GB'
+
+    input:
+      path embeddings
+
+    output:
+      path "faiss.index",       emit: faiss_idx
+      path "faiss_mapping.tsv", emit: faiss_map
+
+    script:
+    """
+    python3 ${baseDir}/modules/build_faiss_index.py \
+      --input embeddings.tsv \
+      --id-column ${params.id_column} \
+      --query ${params.query} \
+      --index-path faiss.index \
+      --mapping-path faiss_mapping.tsv
+    """
+}
+
+process QUERY_FAISS_INDEX {
+    tag    "query_faiss_index"
+    cpus   params.num_workers_dist
+    memory '8 GB'
+
+    input:
+      path embeddings
+      path faiss_idx
+      path faiss_map
+
+    output:
+      path "distances.tsv", emit: distances
+
+    script:
+    """
+    python3 ${baseDir}/modules/query_faiss_index.py \
+      --input embeddings.tsv \
+      --id-column ${params.id_column} \
+      --query ${params.query} \
+      --index-path faiss.index \
+      --mapping-path faiss_mapping.tsv \
+      --top-k ${params.faiss_k} \
+      --output distances.tsv
     """
 }
 
@@ -234,8 +286,10 @@ process AGGREGATE_METRIC {
       path "pairs_scores_all_contigs.tsv",              emit: enriched_all
       path "pairs_scores_all_contigs.unaggregated.tsv", emit: enriched_unagg
 
+    // ← updated script section:
     script:
     """
+    # 1) run the core aggregation
     python3 ${baseDir}/modules/aggregated_metric.py \
       --input ${sorted_distances} \
       --id-column ${params.id_column} \
@@ -246,20 +300,35 @@ process AGGREGATE_METRIC {
       --output raw_contigs.tsv \
       --output-unaggregated
 
-    python3 - <<'PY'
-import pandas as pd, sys
-idc='${params.id_column}'
-dfA=pd.read_csv('raw_contigs.tsv',sep='\\t')
-dfU=pd.read_csv('raw_contigs.unaggregated.tsv',sep='\\t')
-meta=pd.read_csv('${input_tsv}',sep='\\t',dtype=str)
-m1=meta[[idc,'gene_name','exon_sequence','${params.structure_column_name}']].rename(
-   columns={idc:f'{idc}_1','gene_name':'gene_name_1','exon_sequence':'sequence_1','${params.structure_column_name}':'secondary_structure_1'})
-m2=meta[[idc,'gene_name','exon_sequence','${params.structure_column_name}']].rename(
-   columns={idc:f'{idc}_2','gene_name':'gene_name_2','exon_sequence':'sequence_2','${params.structure_column_name}':'secondary_structure_2'})
-dfA=dfA.merge(m1,on=f'{idc}_1',how='left').merge(m2,on=f'{idc}_2',how='left')
-dfU=dfU.merge(m1,on=f'{idc}_1',how='left').merge(m2,on=f'{idc}_2',how='left')
-dfA.to_csv('pairs_scores_all_contigs.tsv',sep='\\t',index=False)
-dfU.to_csv('pairs_scores_all_contigs.unaggregated.tsv',sep='\\t',index=False)
+    # 2) enrich with whatever columns exist in the original metadata
+    python3 - << 'PY'
+import pandas as pd, sys, pathlib, os
+
+# ------- inputs -------
+idc      = '${params.id_column}'
+meta_tsv = pathlib.Path('${input_tsv}')
+df_all   = pd.read_csv('raw_contigs.tsv',            sep='\\t')
+df_un    = pd.read_csv('raw_contigs.unaggregated.tsv', sep='\\t')
+# ----------------------
+
+meta = pd.read_csv(meta_tsv, sep='\\t', dtype=str)
+
+# which optional columns are actually present?
+optional_cols = ['gene_name', 'exon_sequence', '${params.structure_column_name}']
+present_cols  = [c for c in optional_cols if c in meta.columns]
+
+# build two mapping DataFrames with *only* the present columns
+m1 = meta[[idc] + present_cols].rename(
+        columns={ idc:f'{idc}_1', **{c: f'{c}_1' for c in present_cols} })
+m2 = meta[[idc] + present_cols].rename(
+        columns={ idc:f'{idc}_2', **{c: f'{c}_2' for c in present_cols} })
+
+# left-merge; missing cols simply stay absent
+df_all = df_all.merge(m1, on=f'{idc}_1', how='left').merge(m2, on=f'{idc}_2', how='left')
+df_un  = df_un .merge(m1, on=f'{idc}_1', how='left').merge(m2, on=f'{idc}_2', how='left')
+
+df_all.to_csv('pairs_scores_all_contigs.tsv',               sep='\t', index=False)
+df_un .to_csv('pairs_scores_all_contigs.unaggregated.tsv',  sep='\t', index=False)
 PY
     """
 }
@@ -468,25 +537,28 @@ workflow {
 
     /* 1-2  embeddings + merge */
     def gen    = GENERATE_EMBEDDINGS(batch_ch)
-    def merged = MERGE_EMBEDDINGS( gen.batch_embeddings.collect() )
+    def merged = MERGE_EMBEDDINGS(gen.batch_embeddings.collect())
 
-    /* 3-5  distances / sort / optional plot */
-    def distances   = COMPUTE_DISTANCES( merged.embeddings )
-    def sorted_dist = SORT_DISTANCES( distances )
-    PLOT_DISTANCES( sorted_dist )
+    /* 3-4   build & query FAISS index instead of brute force */
+    def idx       = BUILD_FAISS_INDEX(merged.embeddings)
+    def distances = QUERY_FAISS_INDEX(merged.embeddings, idx.faiss_idx, idx.faiss_map)
 
-    /* 6-7  aggregation & optional metric plot */
-    def (agg_all, agg_un) = AGGREGATE_METRIC( sorted_dist, Channel.fromPath(params.input) )
-    PLOT_METRIC( agg_all )
+    /* 5     sort + optional plot */
+    def sorted_dist = SORT_DISTANCES(distances)
+    PLOT_DISTANCES(sorted_dist)
+
+    /* 6-7   aggregation & optional metric plot */
+    def (agg_all, agg_un) = AGGREGATE_METRIC(sorted_dist, Channel.fromPath(params.input))
+    PLOT_METRIC(agg_all)
 
     /* 8     top-N selection */
-    def (top_contigs, top_un) = FILTER_TOP_CONTIGS( agg_all, agg_un )
+    def (top_contigs, top_un) = FILTER_TOP_CONTIGS(agg_all, agg_un)
 
-    /* 9-10 drawings */
-    def contig_draws = DRAW_CONTIG_SVGS( top_contigs )
-    def window_draws = DRAW_UNAGG_SVGS( top_un )
+    /* 9-10  drawings */
+    def contig_draws  = DRAW_CONTIG_SVGS(top_contigs)
+    def window_draws  = DRAW_UNAGG_SVGS(top_un)
 
     /* 11-12 HTML reports */
-    GENERATE_AGGREGATED_REPORT( top_contigs, contig_draws.contig_individual )
-    GENERATE_UNAGGREGATED_REPORT( top_un, window_draws.window_individual )
+    GENERATE_AGGREGATED_REPORT(top_contigs, contig_draws.contig_individual)
+    GENERATE_UNAGGREGATED_REPORT(top_un, window_draws.window_individual)
 }

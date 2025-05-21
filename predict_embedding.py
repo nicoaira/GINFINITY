@@ -15,8 +15,6 @@ from src.utils import (
 import os
 from torch.multiprocessing import Pool, set_start_method
 
-# ── model loading & embedding routines unchanged ─────────────────────────────
-
 def load_trained_model(model_path, device='cpu'):
     model = GINModel.load_from_checkpoint(model_path, device)
     model.to(device)
@@ -37,21 +35,20 @@ def get_gin_embedding(model, graph_encoding, structure, device, L=None, keep_pai
         if L is not None:
             node_embs = model.get_node_embeddings(tg)
             sorted_nodes = sorted(graph.nodes())
-            n = len(sorted_nodes)
-            if n < L:
+            if len(sorted_nodes) < L:
                 return [(-1, "")]
             embeddings = []
             slices = generate_slices(graph, L, keep_paired_neighbors)
             for start_idx, subgraph_H in slices:
-                subgraph_nodes = sorted(subgraph_H.nodes())
-                node_indices = [sorted_nodes.index(node) for node in subgraph_nodes]
-                if not node_indices:
+                sub_nodes = sorted(subgraph_H.nodes())
+                idxs = [sorted_nodes.index(n) for n in sub_nodes]
+                if not idxs:
                     continue
-                sub_embs = node_embs[node_indices]
+                sub_embs = node_embs[idxs]
                 batch = torch.zeros(len(sub_embs), dtype=torch.long, device=device)
                 pooled = model.pooling(sub_embs, batch)
-                sub_embedding = model.fc(pooled)
-                emb_str = ','.join(f'{x:.6f}' for x in sub_embedding.cpu().numpy().flatten())
+                emb = model.fc(pooled)
+                emb_str = ','.join(f'{x:.6f}' for x in emb.cpu().numpy().flatten())
                 embeddings.append((start_idx, emb_str))
             return embeddings or [(-1, "")]
         else:
@@ -60,25 +57,22 @@ def get_gin_embedding(model, graph_encoding, structure, device, L=None, keep_pai
 
 def validate_structure(structure):
     if not isinstance(structure, str):
-        raise ValueError("Secondary structure must be a string in dot-bracket.")
+        raise ValueError("Secondary structure must be a string.")
     valid = "()[]{}<>AaBbCcDd."
-    if any(ch not in valid for ch in structure):
-        raise ValueError(f"Invalid structure chars: {set(structure)-set(valid)}")
+    bad = set(structure) - set(valid)
+    if bad:
+        raise ValueError(f"Invalid structure chars: {bad}")
 
 def generate_embedding_for_row(args):
-    idx, row, model, structure_column, device, graph_encoding, \
-      subgraphs, L, keep_paired_neighbors = args
-
-    structure = row[structure_column]
+    idx, row, model, struct_col, device, enc, subgraphs, L, keep_pairs = args
+    structure = row[struct_col]
     validate_structure(structure)
     if subgraphs:
-        emb_list = get_gin_embedding(model, graph_encoding, structure, device, L, keep_paired_neighbors)
-        return [(idx, start, emb) for (start, emb) in emb_list]
+        lst = get_gin_embedding(model, enc, structure, device, L, keep_pairs)
+        return [(idx, start, emb) for (start, emb) in lst]
     else:
-        emb = get_gin_embedding(model, graph_encoding, structure, device)
+        emb = get_gin_embedding(model, enc, structure, device)
         return [(idx, None, emb[0][1])]
-
-# ── modified generate_embeddings with keep_cols support ──────────────────────
 
 def generate_embeddings(
         input_df,
@@ -94,160 +88,137 @@ def generate_embeddings(
         retries=0,
         keep_cols=None
 ):
-    """
-    keep_cols: list of input_df columns to retain (or None for all)
-    """
-    # resolve keep_cols
+    # ─ ensure seq_len exists ───────────────────────────
+    if 'seq_len' not in input_df.columns:
+        input_df['seq_len'] = input_df[structure_column].str.len()
+
+    # ─ resolve keep_cols, but force seq_len in it ──────
     if keep_cols is None:
         keep_cols = list(input_df.columns)
     else:
-        missing = [c for c in keep_cols if c not in input_df.columns]
+        # split, validate
+        cols = [c.strip() for c in keep_cols.split(',')]
+        missing = [c for c in cols if c not in input_df.columns]
         if missing:
             raise ValueError(f"--keep-cols references unknown columns: {missing}")
+        keep_cols = cols
+    if 'seq_len' not in keep_cols:
+        keep_cols.append('seq_len')
 
+    # ─ load model ───────────────────────────────────────
     model = load_trained_model(model_path, device)
     graph_encoding = model.metadata['graph_encoding']
 
-    # prepare jobs
+    # ─ prepare arguments for each row ───────────────────
     args_list = [
         (idx, row, model, structure_column, device, graph_encoding,
          subgraphs, L, keep_paired_neighbors)
         for idx, row in input_df.iterrows()
     ]
 
-    # compute embeddings in parallel
+    # ─ compute embeddings in parallel ───────────────────
     results = []
     with Pool(num_workers) as pool:
         try:
-            for result in tqdm(pool.imap_unordered(generate_embedding_for_row, args_list),
-                               total=len(input_df), desc="Processing Embeddings"):
-                results.extend(result)
+            for res in tqdm(pool.imap_unordered(generate_embedding_for_row, args_list),
+                            total=len(input_df), desc="Embedding"):
+                results.extend(res)
         finally:
             pool.close()
             pool.join()
 
-    # build output rows
-    new_rows = []
-    for orig_idx, window_start, emb in results:
+    # ─ assemble output rows ─────────────────────────────
+    out_rows = []
+    for orig_idx, wstart, emb in results:
         if not (0 <= orig_idx < len(input_df)):
             continue
         base = input_df.iloc[orig_idx]
-        row_dict = { c: base[c] for c in keep_cols }
-        row_dict['window_start'] = window_start
-        row_dict['window_end']   = (window_start + L - 1) if window_start is not None else None
-        row_dict['embedding_vector'] = emb
-        new_rows.append(row_dict)
+        row = { c: base[c] for c in keep_cols }
+        row['window_start']    = wstart
+        row['window_end']      = (wstart + L - 1) if wstart is not None else None
+        row['embedding_vector'] = emb
+        out_rows.append(row)
 
-    output_df = pd.DataFrame(new_rows)
-    log_information(log_path, output_df.head(), "Output DataFrame head")
+    output_df = pd.DataFrame(out_rows)
+    log_information(log_path, output_df.head(), "Output head")
     output_df.to_csv(output_path, sep='\t', index=False)
     print(f"Embeddings saved to {output_path}")
-    log_information(log_path, {"Embeddings saved path": output_path})
+    log_information(log_path, {"output": output_path})
 
-    # retry logic unchanged
+    # ─ retry logic ──────────────────────────────────────
     if not os.path.exists(output_path) and retries > 0:
-        print(f"Output file not found; retrying ({retries})…")
+        print(f"Output missing, retrying ({retries})…")
         generate_embeddings(
             input_df, output_path, model_path, log_path,
             structure_column, device=device,
             subgraphs=subgraphs, L=L,
             keep_paired_neighbors=keep_paired_neighbors,
             num_workers=num_workers, retries=retries,
-            keep_cols=keep_cols
+            keep_cols=','.join(keep_cols)
         )
 
-# ── I/O helpers unchanged ───────────────────────────────────────────────────
-
 def read_input_data(input_path, samples, structure_column_num, header):
-    """
-    Read the input TSV/CSV into a DataFrame.
-      - input_path: file path
-      - samples:   number of random rows to sample (or None)
-      - structure_column_num: required if header=False
-      - header:    True if the file has a header row
-    """
     sep_char = '\t' if input_path.endswith('.tsv') else ','
-
     if header:
         df = pd.read_csv(input_path, sep=sep_char)
     else:
         if structure_column_num is None:
-            raise ValueError(
-                "When header=False, structure_column_num must be specified."
-            )
+            raise ValueError("When header=False, must specify structure_column_num.")
         df = pd.read_csv(input_path, sep=sep_char, header=None)
-
     if samples:
         df = df.sample(n=samples, random_state=42)
-
     return df
 
-def get_structure_column_name(input_df, header, structure_column_name, structure_column_num):
+def get_structure_column_name(df, header, col_name, col_num):
     if header:
-        if structure_column_name:
-            return structure_column_name
-        elif structure_column_num is not None:
-            return input_df.columns[structure_column_num]
-        else:
-            return "secondary_structure"
+        if col_name:   return col_name
+        elif col_num is not None: return df.columns[col_num]
+        else:          return "secondary_structure"
     else:
-        return input_df.columns[structure_column_num]
-
-# ── main: add --keep-cols to parser and pass through ────────────────────────
+        return df.columns[col_num]
 
 if __name__ == "__main__":
-    try:
-        set_start_method('spawn')
-    except RuntimeError:
-        pass
+    try: set_start_method('spawn')
+    except RuntimeError: pass
 
     parser = argparse.ArgumentParser(
-        description="Generate embeddings from RNA structures via GIN."
+        description="Generate embeddings from RNA structures"
     )
-    parser.add_argument('--input',              type=str, required=True)
-    parser.add_argument('--id-column',          type=str, required=True)
-    parser.add_argument('--output',             type=str, help='Output TSV path')
-    parser.add_argument('--model_path',         type=str, required=True)
+    parser.add_argument('--input',               type=str,  required=True)
+    parser.add_argument('--id-column',           type=str,  required=True)
+    parser.add_argument('--output',              type=str,  required=True)
+    parser.add_argument('--model_path',          type=str,  required=True)
     parser.add_argument('--structure_column_name', type=str)
     parser.add_argument('--structure_column_num',  type=int)
-    parser.add_argument('--header',             type=str, default='True')
-    parser.add_argument('--device',             type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument('--num_workers',        type=int, default=4)
-    parser.add_argument('--subgraphs',          action='store_true')
-    parser.add_argument('--L',                  type=int)
+    parser.add_argument('--header',              type=str,  default='True')
+    parser.add_argument('--device',              type=str,  default="cpu")
+    parser.add_argument('--num_workers',         type=int,  default=4)
+    parser.add_argument('--subgraphs',           action='store_true')
+    parser.add_argument('--L',                   type=int)
     parser.add_argument('--keep_paired_neighbors', action='store_true')
-    parser.add_argument('--retries',            type=int, default=0)
-    parser.add_argument(
-        '--keep-cols', type=str,
-        help="Comma-separated list of input columns to retain.  Default=all."
-    )
-
+    parser.add_argument('--retries',             type=int,  default=0)
+    parser.add_argument('--keep-cols',           type=str,
+                        help="Comma-separated list of input columns to retain.")
     args = parser.parse_args()
+
     args.header = args.header.lower() == 'true'
-
-    # read input
-    df = read_input_data(args.input, None, args.structure_column_num, args.header)
-
-    # validate id column
+    # read
+    df = read_input_data(args.input, None,
+                         args.structure_column_num, args.header)
+    # validate ID
     if args.id_column not in df.columns:
-        raise ValueError(f"--id-column '{args.id-column}' not in input columns {list(df.columns)}")
+        raise ValueError(f"--id-column '{args.id_column}' not in {list(df.columns)}")
     if df[args.id_column].duplicated().any():
         raise ValueError(f"Values in '{args.id_column}' must be unique.")
-
-    struct_col = get_structure_column_name(df, args.header, args.structure_column_name, args.structure_column_num)
-
-    # parse keep-cols
-    if args.keep_cols:
-        keep_cols = [c.strip() for c in args.keep_cols.split(',')]
-    else:
-        keep_cols = None
-
-    # prepare output path & log
-    if not args.output:
-        raise ValueError("Please supply --output")
-    outdir = os.path.dirname(args.output)
-    if outdir:
-        os.makedirs(outdir, exist_ok=True)
+    # determine structure column
+    struct_col = get_structure_column_name(
+        df, args.header,
+        args.structure_column_name,
+        args.structure_column_num
+    )
+    # make output dir & log
+    outdir = os.path.dirname(args.output) or '.'
+    os.makedirs(outdir, exist_ok=True)
     log_path = os.path.splitext(args.output)[0] + '.log'
     log_setup(log_path)
 
@@ -259,8 +230,8 @@ if __name__ == "__main__":
         subgraphs=args.subgraphs, L=args.L,
         keep_paired_neighbors=args.keep_paired_neighbors,
         num_workers=args.num_workers, retries=args.retries,
-        keep_cols=keep_cols
+        keep_cols=args.keep_cols
     )
     elapsed = (time.time() - start)/60
-    print(f"Finished in {elapsed:.2f} min.")
-    log_information(log_path, {"execution_time_min": elapsed}, "Timing")
+    print(f"Done in {elapsed:.2f} min.")
+    log_information(log_path, {"time_min": elapsed}, "Timing")

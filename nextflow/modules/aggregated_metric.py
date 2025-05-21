@@ -31,36 +31,50 @@ def compute_pair_metric(args):
 
 
 def find_contigs(df_grp):
+    """
+    Collapse a set of window pairs into connected components.
+    Two windows belong to the same contig iff
+      [s1,e1] overlaps [s1',e1']   AND
+      [s2,e2] overlaps [s2',e2'].
+    The algorithm is O(n²) but n is tiny (top-percentile windows),
+    so it is fast and – unlike the old sweep – always finds the
+    full transitive closure.
+    """
     n = len(df_grp)
     parent = list(range(n))
+
     def find(x):
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
+
     def union(a, b):
         ra, rb = find(a), find(b)
         if ra != rb:
             parent[rb] = ra
 
-    idxs = np.argsort(df_grp['window_start_1'].values)
-    for ii in range(n):
-        i = idxs[ii]
-        s1_i, e1_i = df_grp.at[i, 'window_start_1'], df_grp.at[i, 'window_end_1']
-        for jj in range(ii+1, n):
-            j = idxs[jj]
-            if df_grp.at[j, 'window_start_1'] > e1_i:
-                break
-            if (df_grp.at[j, 'window_start_2'] <= e1_i and
-                s1_i <= df_grp.at[j, 'window_end_2']):
+    # brute-force pairwise test (n is small, so this is OK)
+    s1  = df_grp['window_start_1'].values
+    e1  = df_grp['window_end_1'].values
+    s2  = df_grp['window_start_2'].values
+    e2  = df_grp['window_end_2'].values
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if (s1[i] <= e1[j] and s1[j] <= e1[i]) and \
+               (s2[i] <= e2[j] and s2[j] <= e2[i]):
                 union(i, j)
-    
+
+    # gather indices for each connected component
     comps = {}
     for i in range(n):
         r = find(i)
         comps.setdefault(r, []).append(i)
-    return [df_grp.iloc(idx_list).reset_index(drop=True) for idx_list in comps.values()]
 
+    # return a DataFrame per contig
+    return [df_grp.iloc[idx_list].reset_index(drop=True)
+            for idx_list in comps.values()]
 
 def main():
     parser = argparse.ArgumentParser(
@@ -114,6 +128,8 @@ def main():
 
     if args.output_unaggregated:
         df_unagg = df.copy()
+        # ensure the 'rnk' column exists on df_unagg too
+        df_unagg['rnk'] = df_unagg['window_rank']
 
     df = df[[
         id1_col, 'window_start_1', 'window_end_1',
