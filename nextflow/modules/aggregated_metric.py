@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+
 import argparse
 import os
 import numpy as np
 import pandas as pd
 from dask import dataframe as dd
+
 
 def compute_pair_metric(args):
     group, alpha1, beta1, alpha2, beta2, gamma = args
@@ -13,19 +15,20 @@ def compute_pair_metric(args):
     M_mat = np.zeros((L, M))
     denom = np.zeros((L, M))
     for _, row in group.iterrows():
-        s1,e1 = int(row['window_start_1']), int(row['window_end_1'])
-        s2,e2 = int(row['window_start_2']), int(row['window_end_2'])
+        s1, e1 = int(row['window_start_1']), int(row['window_end_1'])
+        s2, e2 = int(row['window_start_2']), int(row['window_end_2'])
         r = float(row['rnk'])
         f_num = r**(-alpha1)
         f_den = r**(-alpha2)
         for i in range(s1, e1+1):
             for j in range(s2, e2+1):
-                delta = abs((i-s1)-(j-s2))
-                M_mat[i,j]   += f_num * np.exp(-beta1*delta)
-                denom[i,j]   += f_den * np.exp(-beta2*delta)
+                delta = abs((i-s1) - (j-s2))
+                M_mat[i, j]   += f_num * np.exp(-beta1 * delta)
+                denom[i, j]   += f_den * np.exp(-beta2 * delta)
     mask = denom > 0
     M_mat[mask] /= denom[mask]**gamma
     return int(round(M_mat.sum() / 1e5))
+
 
 def find_contigs(df_grp):
     n = len(df_grp)
@@ -43,47 +46,60 @@ def find_contigs(df_grp):
     idxs = np.argsort(df_grp['window_start_1'].values)
     for ii in range(n):
         i = idxs[ii]
-        s1_i, e1_i = df_grp.at[i,'window_start_1'], df_grp.at[i,'window_end_1']
-        s2_i, e2_i = df_grp.at[i,'window_start_2'], df_grp.at[i,'window_end_2']
+        s1_i, e1_i = df_grp.at[i, 'window_start_1'], df_grp.at[i, 'window_end_1']
         for jj in range(ii+1, n):
             j = idxs[jj]
-            if df_grp.at[j,'window_start_1'] > e1_i:
+            if df_grp.at[j, 'window_start_1'] > e1_i:
                 break
-            if (df_grp.at[j,'window_start_2'] <= e2_i and
-                s2_i <= df_grp.at[j,'window_end_2']):
+            if (df_grp.at[j, 'window_start_2'] <= e1_i and
+                s1_i <= df_grp.at[j, 'window_end_2']):
                 union(i, j)
     
     comps = {}
     for i in range(n):
         r = find(i)
         comps.setdefault(r, []).append(i)
-    return [df_grp.iloc[idxs].reset_index(drop=True) 
-            for idxs in comps.values()]
+    return [df_grp.iloc(idx_list).reset_index(drop=True) for idx_list in comps.values()]
+
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument('--input', required=True)
-    p.add_argument('--percentile', type=float, default=0.01)
-    p.add_argument('--mode', choices=['global','contigs'], default='global')
-    p.add_argument('--num-workers', type=int, default=1)
-    p.add_argument('--alpha1', type=float, default=1.0)
-    p.add_argument('--beta1', type=float, default=0.1)
-    p.add_argument('--alpha2', type=float, default=1.0)
-    p.add_argument('--beta2', type=float, default=0.1)
-    p.add_argument('--gamma', type=float, default=0.5)
-    p.add_argument('--output', default='exon_pair_metrics.tsv')
-    p.add_argument('--output-unaggregated', action='store_true')
-    args = p.parse_args()
+    parser = argparse.ArgumentParser(
+        description='Compute aggregated pair metrics for windows or contigs')
+    parser.add_argument('--input',             required=True,
+                        help='Path to the sorted distances TSV')
+    parser.add_argument('--id-column',         default='exon_id',
+                        help='Name of the original ID column (without _1/_2).')
+    parser.add_argument('--percentile',        type=float, default=0.01,
+                        help='Percentile of top windows to use')
+    parser.add_argument('--mode',              choices=['global','contigs'], default='global',
+                        help='Aggregation mode')
+    parser.add_argument('--num-workers',       type=int, default=1,
+                        help='Workers for parallel operations')
+    parser.add_argument('--alpha1',            type=float, default=1.0)
+    parser.add_argument('--beta1',             type=float, default=0.1)
+    parser.add_argument('--alpha2',            type=float, default=1.0)
+    parser.add_argument('--beta2',             type=float, default=0.1)
+    parser.add_argument('--gamma',             type=float, default=0.5)
+    parser.add_argument('--output',            default='exon_pair_metrics.tsv',
+                        help='Output TSV path for aggregated metrics')
+    parser.add_argument('--output-unaggregated', action='store_true',
+                        help='Also output unaggregated windows')
+    args = parser.parse_args()
+
+    # Dynamically compute ID column names
+    id1_col = f"{args.id_column}_1"
+    id2_col = f"{args.id_column}_2"
 
     # 1) load & filter only the columns we need
+    usecols = [
+        id1_col, 'window_start_1', 'window_end_1', 'seq_len_1',
+        id2_col, 'window_start_2', 'window_end_2', 'seq_len_2',
+        'distance'
+    ]
     ddf = dd.read_csv(
         args.input, sep='\t',
-        usecols=[
-            'exon_id_1','window_start_1','window_end_1','seq_len_1',
-            'exon_id_2','window_start_2','window_end_2','seq_len_2',
-            'distance'
-        ],
-        dtype={'exon_id_1':str,'exon_id_2':str}
+        usecols=usecols,
+        dtype={id1_col: str, id2_col: str}
     )
     total = ddf.shape[0].compute()
     top_n = max(1, int(total * args.percentile / 100.0))
@@ -96,52 +112,54 @@ def main():
     df['len_1']           = df['seq_len_1'].astype(int)
     df['len_2']           = df['seq_len_2'].astype(int)
 
-    df = df[[
-        'exon_id_1','window_start_1','window_end_1',
-        'exon_id_2','window_start_2','window_end_2',
-        'len_1','len_2','window_distance','window_rank'
-    ]]
-    df['rnk'] = df['window_rank']
     if args.output_unaggregated:
         df_unagg = df.copy()
 
-    # 3) unify exon order on each row
+    df = df[[
+        id1_col, 'window_start_1', 'window_end_1',
+        id2_col, 'window_start_2', 'window_end_2',
+        'len_1', 'len_2', 'window_distance', 'window_rank'
+    ]]
+    df['rnk'] = df['window_rank']
+
+    # 3) unify ID order on each row
     def unify(r):
-        if r['exon_id_1'] <= r['exon_id_2']:
+        a, b = r[id1_col], r[id2_col]
+        if a <= b:
             return r
         return pd.Series({
-            'exon_id_1':       r['exon_id_2'],
-            'window_start_1':  r['window_start_2'],
-            'window_end_1':    r['window_end_2'],
-            'exon_id_2':       r['exon_id_1'],
-            'window_start_2':  r['window_start_1'],
-            'window_end_2':    r['window_end_1'],
-            'len_1':           r['len_2'],
-            'len_2':           r['len_1'],
+            id1_col:          b,
+            'window_start_1': r['window_start_2'],
+            'window_end_1':   r['window_end_2'],
+            id2_col:          a,
+            'window_start_2': r['window_start_1'],
+            'window_end_2':   r['window_end_1'],
+            'len_1':          r['len_2'],
+            'len_2':          r['len_1'],
             'window_distance': r['window_distance'],
-            'window_rank':     r['window_rank'],
-            'rnk':             r['rnk']
+            'window_rank':    r['window_rank'],
+            'rnk':            r['rnk']
         })
 
     df = df.apply(unify, axis=1)
     if args.output_unaggregated:
         df_unagg = df_unagg.apply(unify, axis=1)
 
-    # 4) group by exon-pairs and collapse into contigs
-    df['pair'] = list(zip(df['exon_id_1'], df['exon_id_2']))
+    # 4) group by ID-pairs and collapse into contigs
+    df['pair'] = list(zip(df[id1_col], df[id2_col]))
     aggregated = []
-    unagg      = []
-    old_id     = 0
+    unagg = []
+    old_id = 0
 
-    for (e1,e2), grp in df.groupby('pair'):
+    for (e1, e2), grp in df.groupby('pair'):
         grp = grp.reset_index(drop=True)
-        contigs = [grp] if args.mode=='global' else find_contigs(grp)
+        contigs = [grp] if args.mode == 'global' else find_contigs(grp)
         for sub in contigs:
             old_id += 1
             nwin = len(sub)
             G = compute_pair_metric((
                 sub, args.alpha1, args.beta1,
-                     args.alpha2, args.beta2, args.gamma
+                args.alpha2, args.beta2, args.gamma
             ))
             if args.mode == 'global':
                 aggregated.append((e1, e2, old_id, nwin, G))
@@ -152,40 +170,35 @@ def main():
 
             if args.output_unaggregated:
                 for _, r in sub.iterrows():
-                    unagg.append({
-                        **r[[
-                            'exon_id_1','window_start_1','window_end_1',
-                            'exon_id_2','window_start_2','window_end_2',
-                            'window_distance','window_rank'
-                        ]].to_dict(),
-                        'old_contig_id': old_id
-                    })
+                    rec = r.to_dict()
+                    rec['old_contig_id'] = old_id
+                    unagg.append(rec)
 
     # 5) build & sort the contig-level table
-    if args.mode=='global':
-        cols_in = ['exon_id_1','exon_id_2','old_contig_id','n_collapsed_windows','metric']
+    if args.mode == 'global':
+        cols_out = [id1_col, id2_col, 'old_contig_id', 'n_collapsed_windows', 'metric']
     else:
-        cols_in = [
-            'exon_id_1','contig_start_1','contig_end_1',
-            'exon_id_2','contig_start_2','contig_end_2',
-            'old_contig_id','n_collapsed_windows','metric'
+        cols_out = [
+            id1_col, 'contig_start_1', 'contig_end_1',
+            id2_col, 'contig_start_2', 'contig_end_2',
+            'old_contig_id', 'n_collapsed_windows', 'metric'
         ]
 
-    df_agg = pd.DataFrame(aggregated, columns=cols_in)
+    df_agg = pd.DataFrame(aggregated, columns=cols_out)
     df_agg.sort_values('metric', ascending=False, inplace=True)
-    df_agg['contig_id']   = np.arange(1, len(df_agg)+1)
+    df_agg['contig_id']   = np.arange(1, len(df_agg) + 1)
     df_agg['contig_rank'] = df_agg['contig_id']
 
-    if args.mode=='global':
-        out_cols = ['exon_id_1','exon_id_2','contig_id','contig_rank','n_collapsed_windows','metric']
+    if args.mode == 'global':
+        final_cols = [id1_col, id2_col, 'contig_id', 'contig_rank', 'n_collapsed_windows', 'metric']
     else:
-        out_cols = [
-            'exon_id_1','contig_start_1','contig_end_1',
-            'exon_id_2','contig_start_2','contig_end_2',
-            'contig_id','contig_rank','n_collapsed_windows','metric'
+        final_cols = [
+            id1_col, 'contig_start_1', 'contig_end_1',
+            id2_col, 'contig_start_2', 'contig_end_2',
+            'contig_id', 'contig_rank', 'n_collapsed_windows', 'metric'
         ]
 
-    df_agg[out_cols].to_csv(args.output, sep='\t', index=False)
+    df_agg[final_cols].to_csv(args.output, sep='\t', index=False)
     print(f"Written aggregated to {args.output}")
 
     # 6) write the unaggregated windows if requested
@@ -193,17 +206,17 @@ def main():
         base, ext = os.path.splitext(args.output)
         fn = f"{base}.unaggregated{ext}"
         mapping = df_agg.set_index('old_contig_id')[[
-            'contig_id','contig_rank','n_collapsed_windows','metric'
+            'contig_id', 'contig_rank', 'n_collapsed_windows', 'metric'
         ]].to_dict('index')
 
         rows = []
         for rec in unagg:
             m = mapping[rec['old_contig_id']]
             rec.update({
-                'contig_id':           m['contig_id'],
-                'contig_rank':         m['contig_rank'],
-                'n_collapsed_windows': m['n_collapsed_windows'],
-                'contig_metric':       m['metric']
+                'contig_id':            m['contig_id'],
+                'contig_rank':          m['contig_rank'],
+                'n_collapsed_windows':  m['n_collapsed_windows'],
+                'contig_metric':        m['metric']
             })
             rec.pop('old_contig_id')
             rows.append(rec)

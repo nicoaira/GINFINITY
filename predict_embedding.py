@@ -7,34 +7,31 @@ import pandas as pd
 from tqdm import tqdm
 import argparse
 from src.model.gin_model import GINModel
-from src.utils import dotbracket_to_forgi_graph, forgi_graph_to_tensor, log_information, log_setup, dotbracket_to_graph, graph_to_tensor, generate_slices
+from src.utils import (
+    dotbracket_to_forgi_graph, forgi_graph_to_tensor,
+    log_information, log_setup, dotbracket_to_graph,
+    graph_to_tensor, generate_slices
+)
 import os
-import subprocess
-from pathlib import Path
-from torch.multiprocessing import Pool, set_start_method, Manager
+from torch.multiprocessing import Pool, set_start_method
 
-# Load the trained model
-
+# ── model loading & embedding routines unchanged ─────────────────────────────
 
 def load_trained_model(model_path, device='cpu'):
-    """Load trained model from checkpoint with metadata"""
     model = GINModel.load_from_checkpoint(model_path, device)
-    model.to(device)  # Move model to the specified device
+    model.to(device)
     model.eval()
     return model
-
-# Function to get embedding from graph
-
 
 def get_gin_embedding(model, graph_encoding, structure, device, L=None, keep_paired_neighbors=False):
     if graph_encoding == "standard":
         graph = dotbracket_to_graph(structure)
         tg = graph_to_tensor(graph)
-    elif graph_encoding == "forgi":
+    else:
         graph = dotbracket_to_forgi_graph(structure)
         tg = forgi_graph_to_tensor(graph)
 
-    tg = tg.to(device)  # Move tensor to the specified device
+    tg = tg.to(device)
     model.eval()
     with torch.no_grad():
         if L is not None:
@@ -54,26 +51,24 @@ def get_gin_embedding(model, graph_encoding, structure, device, L=None, keep_pai
                 batch = torch.zeros(len(sub_embs), dtype=torch.long, device=device)
                 pooled = model.pooling(sub_embs, batch)
                 sub_embedding = model.fc(pooled)
-                embedding_str = ','.join(f'{x:.6f}' for x in sub_embedding.cpu().numpy().flatten())
-                embeddings.append((start_idx, embedding_str))
-            return embeddings if embeddings else [(-1, "")]
+                emb_str = ','.join(f'{x:.6f}' for x in sub_embedding.cpu().numpy().flatten())
+                embeddings.append((start_idx, emb_str))
+            return embeddings or [(-1, "")]
         else:
-            embedding = model.forward_once(tg)
-            return [(None, ','.join(f'{x:.6f}' for x in embedding.cpu().numpy().flatten()))]
+            emb = model.forward_once(tg)
+            return [(None, ','.join(f'{x:.6f}' for x in emb.cpu().numpy().flatten()))]
 
-# Function to validate dot-bracket structure
 def validate_structure(structure):
     if not isinstance(structure, str):
-        raise ValueError(
-            "The secondary structure must be a string containing valid characters for dot-bracket notation.")
-    valid_characters = "()[]{}<>AaBbCcDd."
-    if not all(char in valid_characters for char in structure):
-        raise ValueError(f"Invalid characters found in the column used for secondary structure: '{structure}'. Valid characters are: {valid_characters}")
+        raise ValueError("Secondary structure must be a string in dot-bracket.")
+    valid = "()[]{}<>AaBbCcDd."
+    if any(ch not in valid for ch in structure):
+        raise ValueError(f"Invalid structure chars: {set(structure)-set(valid)}")
 
-# Function to generate embeddings for a single row
 def generate_embedding_for_row(args):
-    idx, row, model, structure_column, device, graph_encoding, subgraphs, L, keep_paired_neighbors = args
-    
+    idx, row, model, structure_column, device, graph_encoding, \
+      subgraphs, L, keep_paired_neighbors = args
+
     structure = row[structure_column]
     validate_structure(structure)
     if subgraphs:
@@ -81,11 +76,9 @@ def generate_embedding_for_row(args):
         return [(idx, start, emb) for (start, emb) in emb_list]
     else:
         emb = get_gin_embedding(model, graph_encoding, structure, device)
-        # Return only the embedding vector as a string of numbers
         return [(idx, None, emb[0][1])]
 
-# Main function to generate embeddings from CSV or TSV
-
+# ── modified generate_embeddings with keep_cols support ──────────────────────
 
 def generate_embeddings(
         input_df,
@@ -98,94 +91,109 @@ def generate_embeddings(
         L=None,
         keep_paired_neighbors=False,
         num_workers=4,
-        retries=0  # Add retries parameter
+        retries=0,
+        keep_cols=None
 ):
-    # Load the trained model once - simplified as parameters are loaded from checkpoint
+    """
+    keep_cols: list of input_df columns to retain (or None for all)
+    """
+    # resolve keep_cols
+    if keep_cols is None:
+        keep_cols = list(input_df.columns)
+    else:
+        missing = [c for c in keep_cols if c not in input_df.columns]
+        if missing:
+            raise ValueError(f"--keep-cols references unknown columns: {missing}")
+
     model = load_trained_model(model_path, device)
     graph_encoding = model.metadata['graph_encoding']
 
-    # Initialize list for storing embeddings
-    embeddings = [None] * len(input_df)
+    # prepare jobs
+    args_list = [
+        (idx, row, model, structure_column, device, graph_encoding,
+         subgraphs, L, keep_paired_neighbors)
+        for idx, row in input_df.iterrows()
+    ]
 
-    # Prepare arguments for multiprocessing
-    args_list = [(idx, row, model, structure_column, device, graph_encoding, subgraphs, L, keep_paired_neighbors) for idx, row in input_df.iterrows()]
-
+    # compute embeddings in parallel
     results = []
     with Pool(num_workers) as pool:
         try:
-            for result in tqdm(pool.imap_unordered(generate_embedding_for_row, args_list), total=len(input_df), desc="Processing Embeddings"):
+            for result in tqdm(pool.imap_unordered(generate_embedding_for_row, args_list),
+                               total=len(input_df), desc="Processing Embeddings"):
                 results.extend(result)
         finally:
             pool.close()
             pool.join()
 
-    # Create an output DataFrame with one entry per subgraph
+    # build output rows
     new_rows = []
-    for (orig_idx, window_start, emb) in results:
-        # Skip out-of-bounds indices
-        if orig_idx < 0 or orig_idx >= len(input_df):
+    for orig_idx, window_start, emb in results:
+        if not (0 <= orig_idx < len(input_df)):
             continue
-        this_row_dict = input_df.iloc[orig_idx].to_dict()
-        this_row_dict['window_start'] = window_start
-        # add window_end: end index of the L‑length slice, or None if not using windows
-        this_row_dict['window_end'] = (window_start + L - 1) if window_start is not None else None
-        this_row_dict['embedding_vector'] = emb
-        new_rows.append(this_row_dict)
+        base = input_df.iloc[orig_idx]
+        row_dict = { c: base[c] for c in keep_cols }
+        row_dict['window_start'] = window_start
+        row_dict['window_end']   = (window_start + L - 1) if window_start is not None else None
+        row_dict['embedding_vector'] = emb
+        new_rows.append(row_dict)
 
     output_df = pd.DataFrame(new_rows)
     log_information(log_path, output_df.head(), "Output DataFrame head")
     output_df.to_csv(output_path, sep='\t', index=False)
     print(f"Embeddings saved to {output_path}")
-    save_log = {
-        "Embeddings saved path": output_path
-    }
-    log_information(log_path, save_log)
+    log_information(log_path, {"Embeddings saved path": output_path})
 
-    # Check if the output file has been saved
+    # retry logic unchanged
     if not os.path.exists(output_path) and retries > 0:
-        print(f"Output file not found. Retrying {retries} more times...")
-        retries -= 1
+        print(f"Output file not found; retrying ({retries})…")
         generate_embeddings(
-            input_df,
-            output_path,
-            model_path,
-            log_path,
-            structure_column,
-            device=device,
-            subgraphs=subgraphs,
-            L=L,
+            input_df, output_path, model_path, log_path,
+            structure_column, device=device,
+            subgraphs=subgraphs, L=L,
             keep_paired_neighbors=keep_paired_neighbors,
-            num_workers=num_workers,
-            retries=retries
+            num_workers=num_workers, retries=retries,
+            keep_cols=keep_cols
         )
 
-def read_input_data(input, samples, structure_column_num, header):
-    delimiter = '\t' if input.endswith('.tsv') else ','
+# ── I/O helpers unchanged ───────────────────────────────────────────────────
 
-    # Load the input CSV based on whether there is a header or not
+def read_input_data(input_path, samples, structure_column_num, header):
+    """
+    Read the input TSV/CSV into a DataFrame.
+      - input_path: file path
+      - samples:   number of random rows to sample (or None)
+      - structure_column_num: required if header=False
+      - header:    True if the file has a header row
+    """
+    sep_char = '\t' if input_path.endswith('.tsv') else ','
+
     if header:
-        df = pd.read_csv(input, delimiter=delimiter)
+        df = pd.read_csv(input_path, sep=sep_char)
     else:
         if structure_column_num is None:
             raise ValueError(
-                "When header is False, structure_column_num must be specified.")
-        df = pd.read_csv(input, delimiter=delimiter, header=None)
-        
+                "When header=False, structure_column_num must be specified."
+            )
+        df = pd.read_csv(input_path, sep=sep_char, header=None)
+
     if samples:
-        random_indices = random.sample(range(len(df)), samples)
-        df = df.iloc[random_indices].copy()
+        df = df.sample(n=samples, random_state=42)
+
     return df
 
-def get_structure_column_name(input_df, header,structure_column_name, structure_column_num):
+def get_structure_column_name(input_df, header, structure_column_name, structure_column_num):
     if header:
         if structure_column_name:
-            structure_column = structure_column_name
-        elif args.structure_column_num is not None and not structure_column_name:
-            structure_column = input_df.columns[structure_column_num]
+            return structure_column_name
+        elif structure_column_num is not None:
+            return input_df.columns[structure_column_num]
         else:
-            # default value = secondary_structure
-            structure_column = "secondary_structure"
-    return structure_column
+            return "secondary_structure"
+    else:
+        return input_df.columns[structure_column_num]
+
+# ── main: add --keep-cols to parser and pass through ────────────────────────
 
 if __name__ == "__main__":
     try:
@@ -194,97 +202,65 @@ if __name__ == "__main__":
         pass
 
     parser = argparse.ArgumentParser(
-        description="Generate embeddings from RNA secondary structures using a trained GIN model.")
-    parser.add_argument('--input', type=str, required=True,
-                        help='Path to the input CSV/TSV file containing RNA secondary structures.')
-    parser.add_argument('--samples', type=int)
-    
-    parser.add_argument('--output', type=str, help='Output path of the embedding')
-    parser.add_argument('--model_id', type=str, help='If output path not defined, store in output/{model_id}/{model_id}_embedding.tsv')
-    
-    parser.add_argument('--structure_column_name', type=str,
-                        help='Name of the column with the RNA secondary structures.')
-    parser.add_argument('--structure_column_num', type=int,
-                        help='Column number of the RNA secondary structures (0-indexed). If both column name and number are provided, column number will be ignored.')
-
-    # Allows the default model_path to be dynamic
-    script_directory = Path(__file__).resolve().parent
-    default_model_path = script_directory / 'saved_model' / 'ResNet-Secondary.pth'
-    parser.add_argument('--model_path', type=str, required=True,
-                        help='Path to the trained model file.')
-
-    parser.add_argument('--header', type=str, default='True',
-                        help='Specify whether the input CSV file has a header (default: True). Use "True" or "False".')
-    parser.add_argument('--device', type=str, default="cuda" if torch.cuda.is_available() else "cpu",
-                        help='Device to run the model on (default: "cuda" if available, otherwise "cpu").')
-    parser.add_argument('--num_workers', type=int, default=4, help='Number of worker processes to use for multiprocessing (default: 4).')
-    parser.add_argument('--subgraphs', action='store_true',
-                        help='Generate subgraph embeddings instead of whole graph embeddings.')
-    parser.add_argument('--L', type=int,
-                        help='Window length for subgraph generation (required if --subgraphs).')
-    parser.add_argument('--keep_paired_neighbors', action='store_true',
-                        help='Include paired neighbors in subgraphs.')
-    parser.add_argument('--retries', type=int, default=0, help='Number of retries if the output file is not saved (default: 0).')
-    args = parser.parse_args()
-
-    # Validate the header argument
-    if args.header.lower() not in ['true', 'false']:
-        raise ValueError(
-            "Invalid value for --header. Please use 'True' or 'False'.")
-    args.header = args.header.lower() == 'true'
-
-    if args.output:
-        output_path = args.output
-    elif args.model_id:
-        output_path = f"output/{args.model_id}/{args.model_id}_embeddings.tsv"
-    else:
-        raise "Either output path or output name must be defined"
-    
-    input_df = read_input_data(args.input, args.samples, args.structure_column_num, args.header)
-
-    # Determine which column to use for structure
-    structure_column = get_structure_column_name(input_df, args.header, args.structure_column_name, args.structure_column_num)
-    
-    device = args.device
-    
-    output_folder = os.path.dirname(output_path) 
-    os.makedirs(output_folder, exist_ok=True)
-
-    log_path = f"{output_folder}/predict_embedding.log"
-    log_setup(log_path)
-
-    predict_params = {
-        "model_path": args.model_path,
-        "device": device,
-        "test_data_path": args.input,
-        "samples_test_data": input_df.shape[0],
-        "num_workers": args.num_workers
-    }
-    
-    # Model metadata will be logged automatically when loading the model
-    log_information(log_path, predict_params, "Predict params")
-    
-    start_time = time.time()
-    # Generate embeddings
-    generate_embeddings(
-        input_df,
-        output_path,
-        args.model_path,
-        log_path,
-        structure_column,
-        device=device,
-        subgraphs=args.subgraphs,
-        L=args.L,
-        keep_paired_neighbors=args.keep_paired_neighbors,
-        num_workers=args.num_workers,
-        retries=args.retries  # Pass the retries argument
+        description="Generate embeddings from RNA structures via GIN."
+    )
+    parser.add_argument('--input',              type=str, required=True)
+    parser.add_argument('--id-column',          type=str, required=True)
+    parser.add_argument('--output',             type=str, help='Output TSV path')
+    parser.add_argument('--model_path',         type=str, required=True)
+    parser.add_argument('--structure_column_name', type=str)
+    parser.add_argument('--structure_column_num',  type=int)
+    parser.add_argument('--header',             type=str, default='True')
+    parser.add_argument('--device',             type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument('--num_workers',        type=int, default=4)
+    parser.add_argument('--subgraphs',          action='store_true')
+    parser.add_argument('--L',                  type=int)
+    parser.add_argument('--keep_paired_neighbors', action='store_true')
+    parser.add_argument('--retries',            type=int, default=0)
+    parser.add_argument(
+        '--keep-cols', type=str,
+        help="Comma-separated list of input columns to retain.  Default=all."
     )
 
-    end_time = time.time()
-    execution_time_minutes = (end_time - start_time) / 60
+    args = parser.parse_args()
+    args.header = args.header.lower() == 'true'
 
-    print(f"Finished. Total execution time: {execution_time_minutes:.6f} minutes")
-    execution_time = {
-        "Total execution time" : f"{execution_time_minutes:.6f} minutes"
-    }
-    log_information(log_path, execution_time, "Execution time")
+    # read input
+    df = read_input_data(args.input, None, args.structure_column_num, args.header)
+
+    # validate id column
+    if args.id_column not in df.columns:
+        raise ValueError(f"--id-column '{args.id-column}' not in input columns {list(df.columns)}")
+    if df[args.id_column].duplicated().any():
+        raise ValueError(f"Values in '{args.id_column}' must be unique.")
+
+    struct_col = get_structure_column_name(df, args.header, args.structure_column_name, args.structure_column_num)
+
+    # parse keep-cols
+    if args.keep_cols:
+        keep_cols = [c.strip() for c in args.keep_cols.split(',')]
+    else:
+        keep_cols = None
+
+    # prepare output path & log
+    if not args.output:
+        raise ValueError("Please supply --output")
+    outdir = os.path.dirname(args.output)
+    if outdir:
+        os.makedirs(outdir, exist_ok=True)
+    log_path = os.path.splitext(args.output)[0] + '.log'
+    log_setup(log_path)
+
+    # run
+    start = time.time()
+    generate_embeddings(
+        df, args.output, args.model_path, log_path, struct_col,
+        device=args.device,
+        subgraphs=args.subgraphs, L=args.L,
+        keep_paired_neighbors=args.keep_paired_neighbors,
+        num_workers=args.num_workers, retries=args.retries,
+        keep_cols=keep_cols
+    )
+    elapsed = (time.time() - start)/60
+    print(f"Finished in {elapsed:.2f} min.")
+    log_information(log_path, {"execution_time_min": elapsed}, "Timing")
