@@ -21,7 +21,7 @@ params.retries                 = 0
 params.batch_size_embed        = 100        // full sequences per embedding task
 
 // faiss index defaults
-params.faiss_k = 100    
+params.faiss_k = 500    
 
 // compute-distances defaults
 params.embedding_col           = 'embedding_vector'
@@ -68,8 +68,7 @@ def batch_ch = Channel
  *─────────────────────────────────────────────────────────────*/
 process GENERATE_EMBEDDINGS {
     tag       { "generate_embeddings batch=${task.index}" }
-    cpus      1
-    memory    '4 GB'
+    maxForks = 1
 
     input:
       val rows                               // list< Map >
@@ -98,7 +97,7 @@ EOF
       ${params.structure_column_num ? "--structure_column_num ${params.structure_column_num}" : ''} \
       --header true \
       --device ${params.device} \
-      --num_workers 1 \
+      --num_workers ${params.num_workers} \
       ${params.subgraphs            ? '--subgraphs' : ''} \
       ${params.L                    ? "--L ${params.L}" : ''} \
       ${params.keep_paired_neighbors? '--keep_paired_neighbors' : ''} \
@@ -113,8 +112,6 @@ process MERGE_EMBEDDINGS {
     container ''                       // <<<< disable Docker for this step
     tag       "merge_embeddings"
     publishDir "${params.outdir}", mode:'copy'
-    cpus      1
-    memory    '2 GB'
 
     input:
       path batch_embeddings
@@ -133,8 +130,6 @@ process MERGE_EMBEDDINGS {
 
 process BUILD_FAISS_INDEX {
     tag    "build_faiss_index"
-    cpus   1
-    memory '4 GB'
 
     input:
       path embeddings
@@ -157,7 +152,6 @@ process BUILD_FAISS_INDEX {
 process QUERY_FAISS_INDEX {
     tag    "query_faiss_index"
     cpus   params.num_workers_dist
-    memory '8 GB'
 
     input:
       path embeddings
@@ -187,7 +181,6 @@ process COMPUTE_DISTANCES {
     tag       "compute_distances"
     publishDir "${params.outdir}", mode:'copy'
     cpus      params.num_workers_dist
-    memory    '8 GB'
 
     input:
       path embeddings
@@ -217,8 +210,6 @@ process COMPUTE_DISTANCES {
 process SORT_DISTANCES {
     tag       "sort_distances"
     publishDir "${params.outdir}", mode:'copy'
-    cpus      1
-    memory    '2 GB'
 
     input:
       path distances
@@ -244,8 +235,6 @@ process PLOT_DISTANCES {
     when   { params.plot_distances_distribution }
     tag    "plot_distances"
     publishDir "${params.outdir}/plots", mode:'copy'
-    cpus   1
-    memory '2 GB'
 
     input:
       path sorted_distances
@@ -276,7 +265,6 @@ process AGGREGATE_SCORE {
     tag       "aggregate_score"
     publishDir "${params.outdir}", mode:'copy'
     cpus      params.num_workers
-    memory    '16 GB'
 
     input:
       path sorted_distances
@@ -340,8 +328,6 @@ process PLOT_SCORE {
     when   { params.plot_score_distribution }
     tag    "plot_score"
     publishDir "${params.outdir}/plots", mode:'copy'
-    cpus   1
-    memory '2 GB'
 
     input:
       path enriched_all
@@ -370,8 +356,6 @@ PY
 process FILTER_TOP_CONTIGS {
     tag       "filter_top_contigs"
     publishDir "${params.outdir}", mode:'copy'
-    cpus      1
-    memory    '2 GB'
 
     input:
       path enriched_all
@@ -404,7 +388,6 @@ process DRAW_CONTIG_SVGS {
     tag       "draw_contig_svgs"
     publishDir "${params.outdir}/drawings/contigs_drawings", mode:'copy'
     cpus      params.num_workers
-    memory    '4 GB'
 
     input:
       path top_contigs_tsv
@@ -447,7 +430,6 @@ process DRAW_UNAGG_SVGS {
     tag       "draw_window_svgs"
     publishDir "${params.outdir}/drawings/unagg_windows_drawings", mode:'copy'
     cpus      params.num_workers
-    memory    '4 GB'
 
     input:
       path top_windows_tsv
@@ -484,8 +466,6 @@ process DRAW_UNAGG_SVGS {
 process GENERATE_AGGREGATED_REPORT {
     tag       "gen_agg_report"
     publishDir "${params.outdir}", mode:'copy'
-    cpus      1
-    memory    '2 GB'
 
     input:
       path top_contigs_tsv
@@ -510,8 +490,6 @@ process GENERATE_AGGREGATED_REPORT {
 process GENERATE_UNAGGREGATED_REPORT {
     tag       "gen_unagg_report"
     publishDir "${params.outdir}", mode:'copy'
-    cpus      1
-    memory    '2 GB'
 
     input:
       path top_windows_tsv
