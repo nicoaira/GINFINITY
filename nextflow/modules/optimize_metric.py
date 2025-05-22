@@ -10,13 +10,13 @@ import optuna.visualization as vis
 
 def run_aggregated(input_tsv, percentile, alpha1, beta1, alpha2, beta2, gamma, num_workers):
     """
-    Run the aggregated_metric.py script with the given hyperparameters,
+    Run the aggregated_score.py script with the given hyperparameters,
     return its output as a DataFrame.
     """
     with tempfile.NamedTemporaryFile(suffix='.tsv', delete=False) as tmp:
         tmp_out = tmp.name
     cmd = [
-        'python3', 'aggregated_metric.py',
+        'python3', 'aggregated_score.py',
         '--input', input_tsv,
         '--percentile', str(percentile),
         '--alpha1', str(alpha1),
@@ -33,16 +33,22 @@ def run_aggregated(input_tsv, percentile, alpha1, beta1, alpha2, beta2, gamma, n
     return df
 
 def objective(trial, args):
-    # Fixed percentile
+    # Dynamic columns
+    id1_col = f"{args.id_column}_1"
+    id2_col = f"{args.id_column}_2"
+    true1, true2 = args.true_pair
+
+    # Fixed percentile & alpha/betas
     percentile = args.percentile
     alpha1 = args.alpha1
     alpha2 = args.alpha2
     beta1  = args.beta1
+
     # Suggest hyperparameters
     beta2  = trial.suggest_float('beta2', 1.0, 2.0)
     gamma  = trial.suggest_float('gamma', 0.3, 0.7)
 
-    # Compute metrics
+    # Compute scores
     df = run_aggregated(
         args.input, percentile,
         alpha1, beta1,
@@ -50,23 +56,19 @@ def objective(trial, args):
         gamma, args.num_workers
     )
 
-    # Extract true-positive score and its rank (0-based)
+    # Find the true-pair score & its rank
     mask_true = (
-        ((df.exon_id_1 == 'ENSE00001655346.1') & (df.exon_id_2 == 'ENSE00004286647.1'))
-        |
-        ((df.exon_id_1 == 'ENSE00004286647.1') & (df.exon_id_2 == 'ENSE00001655346.1'))
+        ((df[id1_col] == true1) & (df[id2_col] == true2)) |
+        ((df[id1_col] == true2) & (df[id2_col] == true1))
     )
     if not mask_true.any():
         return -1e9
-    true_score = df.loc[mask_true, 'metric'].iloc[0]
+    true_score = df.loc[mask_true, 'score'].iloc[0]
     true_rank = int(df.index[mask_true][0])  # 0-based
 
-    # Avg of top-3 others
-    others = df.loc[~mask_true, 'metric']
-    if len(others) == 0:
-        avg_top3 = true_score
-    else:
-        avg_top3 = others.sort_values(ascending=False).head(3).mean()
+    # Average of top-3 others
+    others = df.loc[~mask_true, 'score']
+    avg_top3 = others.sort_values(ascending=False).head(3).mean() if len(others) else true_score
 
     # Relative margin vs top-3
     margin = (true_score - avg_top3) / avg_top3
@@ -75,16 +77,12 @@ def objective(trial, args):
     is_rank1 = (true_rank == 0)
     trial.set_user_attr('true_rank1', is_rank1)
 
-    # Now check existing best trial safely
-    prev_rank1 = False
-    try:
-        best = trial.study.best_trial
-        prev_rank1 = best.user_attrs.get('true_rank1', False)
-    except ValueError:
-        # no best_trial yet
-        pass
-
     # If a previous rank1 exists, only allow new rank1 trials
+    try:
+        prev_rank1 = trial.study.best_trial.user_attrs.get('true_rank1', False)
+    except Exception:
+        prev_rank1 = False
+
     if prev_rank1 and not is_rank1:
         return -1e9
 
@@ -92,7 +90,8 @@ def objective(trial, args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Optimize hyperparameters for exon-pair metric')
+        description='Optimize hyperparameters for pairwise score'
+    )
     parser.add_argument('--input',       required=True,
                         help='Path to sorted distances.tsv')
     parser.add_argument('--percentile',  type=float, required=True,
@@ -104,15 +103,20 @@ def main():
     parser.add_argument('--alpha2',     type=float, default=1.0,
                         help='Denominator rank-decay exponent (default 1.0)')
     parser.add_argument('--num-workers', type=int, default=1,
-                        help='Workers for aggregated_metric')
+                        help='Workers for aggregated_score')
     parser.add_argument('--trials',      type=int, default=50,
                         help='Number of Optuna trials')
     parser.add_argument('--storage',     type=str, default='sqlite:///optuna_study.db',
-                        help='Optuna storage URL (e.g. sqlite:///db.sqlite)')
-    parser.add_argument('--study-name',  type=str, default='exon_pair_opt',
+                        help='Optuna storage URL')
+    parser.add_argument('--study-name',  type=str, default='pair_opt',
                         help='Name of the Optuna study')
     parser.add_argument('--output',      default='best_params.json',
                         help='File to write best parameters JSON')
+    parser.add_argument('--id-column',   type=str, default='exon_id',
+                        help='Base name of the ID column (without _1/_2).')
+    parser.add_argument('--true-pair',   nargs=2, metavar=('ID1','ID2'), required=True,
+                        help='The two IDs (in either order) that should rank highest.')
+
     args = parser.parse_args()
 
     # Create or load study for resuming
@@ -123,7 +127,7 @@ def main():
         load_if_exists=True
     )
 
-    # Run optimization (allow interruption)
+    # Optimize
     try:
         study.optimize(lambda t: objective(t, args), n_trials=args.trials)
     except KeyboardInterrupt:
@@ -140,10 +144,9 @@ def main():
     # Generate diagnostic plots
     os.makedirs('optuna_plots', exist_ok=True)
 
-    # Optimization history (remove first trial point)
+    # Optimization history
     fig1 = vis.plot_optimization_history(study)
     trace = fig1.data[0]
-    # drop the x==0 trial
     filtered = [(x, y) for x, y in zip(trace.x, trace.y) if x != 0]
     trace.x, trace.y = zip(*filtered)
     fig1.write_image('optuna_plots/optimization_history.png')

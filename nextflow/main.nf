@@ -1,461 +1,409 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl=2
 
-// — Top-level channel for the original input TSV
-def input_tsv_ch = Channel.fromPath(params.input)
+// User‐tunable parameters (override on CLI)
+params.input                 = "$baseDir/input.tsv"           // TSV with sequences
+params.outdir                = "results"
+params.model_path            = "$baseDir/model.pth"
+params.structure_column_name = 'secondary_structure'
+params.structure_column_num  = null
+params.id_column             = 'transcript_id'
 
-workflow {
+params.device                = 'cpu'
+params.num_workers           = 4
+params.subgraphs             = false
+params.L                     = null
+params.keep_paired_neighbors = false
+params.retries               = 0
+params.batch_size_embed      = 100       // sequences per embedding task
 
-    // 1) Generate embeddings
-    def embeddings_ch = params.embeddings_file ?
-        Channel.fromPath(params.embeddings_file) :
-        GENERATE_EMBEDDINGS(input_tsv_ch)
+params.faiss_k               = 1000      // neighbors to retrieve in FAISS
 
-    // 2) Compute raw distances
-    def distances_ch = COMPUTE_DISTANCES(embeddings_ch)
+// aggregation parameters
+params.alpha1    = 0.25
+params.alpha2    = 0.24
+params.beta1     = 0.0057
+params.beta2     = 1.15
+params.gamma     = 0.41
+params.percentile= 1
+params.top_n     = 10
 
-    // 3) Sort distances ascending
-    def sorted_distances_ch = SORT_DISTANCES(distances_ch)
+// plotting flags
+params.plot_distances_distribution = true
+params.hist_seed                   = 42
+params.hist_frac                   = 0.001
+params.hist_bins                   = 200
 
-    // 3a) Optionally plot the distance distribution
-    def dist_plot_ch = PLOT_DISTANCES(sorted_distances_ch)
+params.plot_score_distribution     = true
+params.score_bins                  = 30
 
-    // 4) Aggregate + enrich contigs & windows metrics
-    def (enriched_all_ch, enriched_unagg_ch) =
-        AGGREGATE_METRIC(sorted_distances_ch, input_tsv_ch)
+// Basic check
+if ( !file(params.input).exists() )
+    error "Cannot find input TSV: ${params.input}"
 
-    // 4b) Optionally plot the metric distribution
-    def metric_plot_ch = PLOT_METRIC(enriched_all_ch)
+// Build batches
+def batch_ch = Channel
+    .fromPath(params.input)
+    .splitCsv(header: true, by: params.batch_size_embed)
 
-    // 5) Filter out the top-N contigs & windows
-    def (top_contigs_ch, top_contigs_unagg_ch) =
-        FILTER_TOP_CONTIGS(enriched_all_ch, enriched_unagg_ch)
-
-    // 6) Draw contig-level SVGs
-    def (contig_failures_ch, contig_kts_ch, contig_individual_ch, contig_pairs_ch) =
-        DRAW_CONTIG_SVGS(top_contigs_ch)
-
-    // 7) Draw window-level SVGs
-    def (win_failures_ch, win_kts_ch, window_individual_ch, window_pairs_ch) =
-        DRAW_UNAGG_SVGS(top_contigs_unagg_ch)
-
-    // 8a) Generate the contig-level HTML report
-    def agg_report_ch =
-        GENERATE_AGGREGATED_REPORT(top_contigs_ch, contig_individual_ch)
-
-    // 8b) Generate the unaggregated-window HTML report
-    def unagg_report_ch =
-        GENERATE_UNAGGREGATED_REPORT(top_contigs_unagg_ch, window_individual_ch)
-
-}
-
+// 1) Generate embeddings per batch
 process GENERATE_EMBEDDINGS {
-    tag "generate_embeddings"
-    publishDir "./${params.outdir}", mode: 'copy'
+    tag { "embeddings batch=${task.index}" }
+    maxForks = 1
 
     input:
-      path input_file
+    val rows
 
     output:
-      path "embeddings.tsv", emit: embeddings
+    path "embeddings_batch_${task.index}.tsv", emit: batch_embeddings
 
     script:
+    def header = new File(params.input).withReader { it.readLine() }
+    def lines  = rows.collect { it.values().join('\t') }.join('\n')
+
     """
-    # 1) Add seq_len column to a temp file
-    python3 - << 'EOF'
-import pandas as pd
-df = pd.read_csv('${input_file}', sep='\\t')
-df['seq_len'] = df['exon_sequence'].str.len()
-df.to_csv('with_seq_len.tsv', sep='\\t', index=False)
+    cat > batch_${task.index}.tsv << 'EOF'
+${header}
+${lines}
 EOF
 
-    # 2) Generate embeddings directly to embeddings.tsv in this CWD
     python3 ${baseDir}/modules/predict_embedding.py \
-      --input with_seq_len.tsv \
+      --input batch_${task.index}.tsv \
+      --id-column ${params.id_column} \
       --model_path ${params.model_path} \
-      --output ./embeddings.tsv \
+      --output embeddings_batch_${task.index}.tsv \
+      --keep-cols ${params.id_column},seq_len \
       --structure_column_name ${params.structure_column_name} \
-      ${params.structure_column_num  ? "--structure_column_num ${params.structure_column_num}" : ''} \
-      --header ${params.header} \
+      ${params.structure_column_num ? "--structure_column_num ${params.structure_column_num}" : ''} \
+      --header true \
       --device ${params.device} \
       --num_workers ${params.num_workers} \
       ${params.subgraphs            ? '--subgraphs' : ''} \
       ${params.L                    ? "--L ${params.L}" : ''} \
       ${params.keep_paired_neighbors? '--keep_paired_neighbors' : ''} \
-      --retries ${params.retries}
+      --retries ${params.retries} \
+      --mask-threshold ${params.mask_threshold}
     """
 }
 
-
-process COMPUTE_DISTANCES {
-    tag "compute_distances"
+// 2) Merge per‐batch embeddings
+process MERGE_EMBEDDINGS {
+    tag "merge_embeddings"
+    container ''                  // disable Docker here
+    publishDir "${params.outdir}", mode: 'copy'
 
     input:
-      path embeddings
+    path batch_embeddings
 
     output:
-      path "distances.tsv", emit: distances
+    path "embeddings.tsv", emit: embeddings
 
     script:
     """
-    python3 ${baseDir}/modules/compute_distances.py --input ${embeddings} \
-      --output distances.tsv \
-      --embedding-col ${params.embedding_col} \
-      --keep-cols ${params.keep_cols} \
-      --num-workers ${params.num_workers_dist} \
-      --device ${params.device_dist} \
-      --batch-size ${params.batch_size} \
-      --mode ${params.mode} \
-      --id-column ${params.id_column} \
-      --query ${params.query}
+    head -n1 ${batch_embeddings[0]} > embeddings.tsv
+    for f in ${batch_embeddings.join(' ')}; do
+      tail -n +2 \$f >> embeddings.tsv
+    done
     """
 }
 
+// 3) Build FAISS index
+process BUILD_FAISS_INDEX {
+    tag    "build_faiss_index"
+    cpus   1
+    memory '16 GB'
+    publishDir "${params.outdir}/faiss_index", mode: 'copy'
 
+    input:
+    path embeddings
+
+    output:
+    path "faiss.index",       emit: faiss_idx
+    path "faiss_mapping.tsv", emit: faiss_map
+
+    script:
+    """
+    python3 ${baseDir}/modules/build_faiss_index.py \
+      --input embeddings.tsv \
+      --id-column ${params.id_column} \
+      --query ${params.query} \
+      --index-path faiss.index \
+      --mapping-path faiss_mapping.tsv
+    """
+}
+
+// 4) Query FAISS index
+process QUERY_FAISS_INDEX {
+    tag  "query_faiss_index"
+    cpus params.num_workers
+
+    input:
+    path embeddings
+    path faiss_idx
+    path faiss_map
+
+    output:
+    path "distances.tsv", emit: distances
+
+    script:
+    """
+    python3 ${baseDir}/modules/query_faiss_index.py \
+      --input embeddings.tsv \
+      --id-column ${params.id_column} \
+      --query ${params.query} \
+      --index-path faiss.index \
+      --mapping-path faiss_mapping.tsv \
+      --top-k ${params.faiss_k} \
+      --output distances.tsv
+    """
+}
+
+// 5) Sort distances
 process SORT_DISTANCES {
     tag "sort_distances"
-    publishDir "./${params.outdir}", mode: 'copy'
+    publishDir "${params.outdir}", mode: 'copy'
 
     input:
-      path distances
+    path distances
 
     output:
-      path "distances.sorted.tsv", emit: sorted_distances
+    path "distances.sorted.tsv", emit: sorted_distances
 
     script:
     """
-    python3 - << 'EOF'
+    python3 - << 'PY'
 import pandas as pd
-df = pd.read_csv('${distances}', sep='\\t')
+df = pd.read_csv('distances.tsv', sep='\\t')
 df.sort_values('distance', inplace=True)
 df.to_csv('distances.sorted.tsv', sep='\\t', index=False)
-EOF
+PY
     """
 }
 
-
-process AGGREGATE_METRIC {
-    tag "aggregate_metric"
-    publishDir "./${params.outdir}", mode: 'copy'
+// 6) Plot distance distribution
+process PLOT_DISTANCES {
+    when   { params.plot_distances_distribution }
+    tag    "plot_distances"
+    publishDir "${params.outdir}/plots", mode: 'copy'
 
     input:
-      path sorted_distances
-      path input_tsv
+    path sorted_distances
 
     output:
-      // only the enriched outputs go to results/
-      path "exon_pairs_scores_all_contigs.tsv",              emit: enriched_all
-      path "exon_pairs_scores_all_contigs.unaggregated.tsv", emit: enriched_unagg
+    path "distance_distribution.png"
 
     script:
     """
-    # 1) Run the core aggregation to get raw intermediate tables
-    python3 ${baseDir}/modules/aggregated_metric.py \
-      --input ${sorted_distances} \
-      --alpha1 ${params.alpha1} \
-      --alpha2 ${params.alpha2} \
-      --beta1 ${params.beta1} \
-      --beta2 ${params.beta2} \
-      --gamma ${params.gamma} \
-      --percentile ${params.percentile} \
+    python3 - << 'PY'
+import pandas as pd, matplotlib.pyplot as plt
+df = pd.read_csv('distances.sorted.tsv', sep='\\t')
+sample = df.sample(frac=${params.hist_frac}, random_state=${params.hist_seed})
+plt.hist(sample['distance'], bins=${params.hist_bins})
+plt.xlabel('Distance')
+plt.ylabel('Frequency')
+plt.title('Distance Distribution')
+plt.tight_layout()
+plt.savefig('distance_distribution.png')
+PY
+    """
+}
+
+// 7) Aggregate and enrich
+process AGGREGATE_SCORE {
+    tag "aggregate_score"
+    cpus params.num_workers
+    publishDir "${params.outdir}", mode: 'copy'
+
+    input:
+    path sorted_distances
+
+    output:
+    path "pairs_scores_all_contigs.tsv", emit: enriched_all
+    path "pairs_scores_all_contigs.unaggregated.tsv", emit: enriched_unagg
+
+    script:
+    """
+    python3 ${baseDir}/modules/aggregated_score.py \
+      --input distances.sorted.tsv \
+      --id-column ${params.id_column} \
+      --alpha1 ${params.alpha1} --alpha2 ${params.alpha2} \
+      --beta1 ${params.beta1}   --beta2 ${params.beta2} \
+      --gamma ${params.gamma}   --percentile ${params.percentile} \
       --mode contigs \
       --output raw_contigs.tsv \
       --output-unaggregated
 
-    # 2) Immediately enrich and write final contig files
-    python3 - << 'EOF'
-import pandas as pd
+    python3 - << 'PY'
+import pandas as pd, pathlib
 
-df_all = pd.read_csv('raw_contigs.tsv', sep='\\t')
-df_un  = pd.read_csv('raw_contigs.unaggregated.tsv', sep='\\t')
-df_meta = pd.read_csv('${input_tsv}', sep='\\t', dtype=str)
-
-idcol     = 'exon_id'
-structcol = '${params.structure_column_name}'
-
-m1 = df_meta[[idcol,'gene_name','exon_sequence', structcol]]\
-      .rename(columns={
-         idcol: 'exon_id_1',
-         'gene_name': 'gene_name_1',
-         'exon_sequence': 'sequence_1',
-         structcol: 'secondary_structure_1'
-      })
-
-m2 = df_meta[[idcol,'gene_name','exon_sequence', structcol]]\
-      .rename(columns={
-         idcol: 'exon_id_2',
-         'gene_name': 'gene_name_2',
-         'exon_sequence': 'sequence_2',
-         structcol: 'secondary_structure_2'
-      })
-
-# write enriched contig summary
-df_all = df_all.merge(m1, on='exon_id_1', how='left')\
-               .merge(m2, on='exon_id_2', how='left')
-df_all.to_csv('exon_pairs_scores_all_contigs.tsv', sep='\\t', index=False)
-
-# write enriched unaggregated windows
-df_un = df_un.merge(m1, on='exon_id_1', how='left')\
-             .merge(m2, on='exon_id_2', how='left')
-df_un.to_csv('exon_pairs_scores_all_contigs.unaggregated.tsv', sep='\\t', index=False)
-EOF
+idc      = '${params.id_column}'
+meta     = pd.read_csv('${params.input}', sep='\\t', dtype=str)
+cols     = [c for c in ['gene_name','exon_sequence','${params.structure_column_name}'] if c in meta]
+m1       = meta[[idc]+cols].rename(columns={idc:f'{idc}_1', **{c:f'{c}_1' for c in cols}})
+m2       = meta[[idc]+cols].rename(columns={idc:f'{idc}_2', **{c:f'{c}_2' for c in cols}})
+all_df   = pd.read_csv('raw_contigs.tsv', sep='\\t').merge(m1,on=f'{idc}_1').merge(m2,on=f'{idc}_2')
+unagg_df = pd.read_csv('raw_contigs.unaggregated.tsv', sep='\\t').merge(m1,on=f'{idc}_1').merge(m2,on=f'{idc}_2')
+all_df.to_csv('pairs_scores_all_contigs.tsv', sep='\\t', index=False)
+unagg_df.to_csv('pairs_scores_all_contigs.unaggregated.tsv', sep='\\t', index=False)
+PY
     """
 }
 
-
-process FILTER_TOP_CONTIGS {
-    tag "filter_top_contigs"
-    publishDir "./${params.outdir}", mode: 'copy'
+// 8) Plot score distribution
+process PLOT_SCORE {
+    when   { params.plot_score_distribution }
+    tag    "plot_score"
+    publishDir "${params.outdir}/plots", mode: 'copy'
 
     input:
-      path enriched_all
-      path enriched_unagg
+    path enriched_all
 
     output:
-      path "exon_pairs_scores_top_contigs.tsv",               emit: top_contigs
-      path "exon_pairs_scores_top_contigs.unaggregated.tsv", emit: top_contigs_unagg
+    path "score_distribution.png"
 
     script:
     """
-    python3 - << 'EOF'
-import pandas as pd
-
-# load enriched tables
-df_all = pd.read_csv('${enriched_all}', sep='\\t')
-df_un  = pd.read_csv('${enriched_unagg}', sep='\\t')
-
-# pick top N contigs by contig_rank <= params.top_n
-top_n = ${params.top_n}
-df_top_all = df_all[df_all['contig_rank'] <= top_n]
-
-# filter unaggregated windows to only those contigs
-top_ids = df_top_all['contig_id'].unique().tolist()
-df_top_un = df_un[df_un['contig_id'].isin(top_ids)]
-
-# write results
-df_top_all.to_csv('exon_pairs_scores_top_contigs.tsv', sep='\\t', index=False)
-df_top_un.to_csv('exon_pairs_scores_top_contigs.unaggregated.tsv', sep='\\t', index=False)
-EOF
+    python3 - << 'PY'
+import pandas as pd, matplotlib.pyplot as plt
+df = pd.read_csv('pairs_scores_all_contigs.tsv', sep='\\t')
+plt.hist(df['score'], bins=${params.score_bins})
+plt.xlabel('Score')
+plt.ylabel('Frequency')
+plt.title('Contig Score Distribution')
+plt.tight_layout()
+plt.savefig('score_distribution.png')
+PY
     """
 }
 
-//
-// 6) Draw contig‐level SVGs + PNGs under results/drawings/contigs_drawings
-//
-process DRAW_CONTIG_SVGS {
-  tag "draw_contig_svgs"
-  publishDir "./${params.outdir}/drawings/contigs_drawings", mode: 'copy'
-
-  input:
-    path top_contigs_tsv  // exon_pairs_scores_top_contigs.tsv
-
-  output:
-    path 'failures.log',      emit: contig_failures
-    path 'kts_scripts',       emit: contig_kts
-    path 'individual_svgs',   emit: contig_individual
-    path 'pairs_drawings',    emit: contig_pairs
-
-  script:
-  """
-  # Pre-create expected output dirs; create an empty failures.log file
-  mkdir -p kts_scripts individual_svgs pairs_drawings/pairs_svgs pairs_drawings/pairs_pngs
-  touch failures.log
-
-  # Massage TSV into the format draw_pairs.py expects
-  python3 - << 'EOF'
-import pandas as pd
-df = pd.read_csv('${top_contigs_tsv}', sep='\\t')
-df = df.rename(columns={
-  'contig_start_1':'window_start_1',
-  'contig_end_1':'window_end_1',
-  'contig_start_2':'window_start_2',
-  'contig_end_2':'window_end_2'
-})
-df.to_csv('to_draw_contigs.tsv', sep='\\t', index=False)
-EOF
-
-  # Generate the drawings
-  python3 /app/draw_pairs.py \
-    --tsv to_draw_contigs.tsv \
-    --outdir . \
-    --width 500 --height 500 \
-    --highlight-colour "#00FF99" \
-    --num-workers ${params.num_workers}
-
-  # Organize pair SVGs/PNGs
-  mkdir -p pairs_drawings/pairs_svgs pairs_drawings/pairs_pngs
-  mv pair_*.svg pairs_drawings/pairs_svgs/ 2>/dev/null || true
-  mv pair_*.png pairs_drawings/pairs_pngs/ 2>/dev/null || true
-  """
-}
-
-//
-// 7) Draw unaggregated‐window SVGs + PNGs under results/drawings/unagg_windows_drawings
-//
-process DRAW_UNAGG_SVGS {
-  tag "draw_window_svgs"
-  publishDir "./${params.outdir}/drawings/unagg_windows_drawings", mode: 'copy'
-
-  input:
-    path top_windows_tsv  // exon_pairs_scores_top_contigs.unaggregated.tsv
-
-  output:
-    path 'failures.log',      emit: window_failures
-    path 'kts_scripts',       emit: window_kts
-    path 'individual_svgs',   emit: window_individual
-    path 'pairs_drawings',    emit: window_pairs
-
-  script:
-  """
-  # Pre-create expected output dirs; create an empty failures.log file
-  mkdir -p kts_scripts individual_svgs pairs_drawings/pairs_svgs pairs_drawings/pairs_pngs
-  touch failures.log
-
-  # We just feed the unaggregated TSV directly.
-  cp ${top_windows_tsv} to_draw_windows.tsv
-
-  # Generate the drawings
-  python3 /app/draw_pairs.py \
-    --tsv to_draw_windows.tsv \
-    --outdir . \
-    --width 500 --height 500 \
-    --highlight-colour "#00FF99" \
-    --num-workers ${params.num_workers}
-
-  # Organize pair SVGs/PNGs
-  mkdir -p pairs_drawings/pairs_svgs pairs_drawings/pairs_pngs
-  mv pair_*.svg pairs_drawings/pairs_svgs/ 2>/dev/null || true
-  mv pair_*.png pairs_drawings/pairs_pngs/ 2>/dev/null || true
-  """
-}
-
-
-//
-// 8a) Generate the contig‐level HTML report
-//
-process GENERATE_AGGREGATED_REPORT {
-    tag "gen_agg_report"
-    publishDir "./${params.outdir}", mode: 'copy'
+// 9) Filter top‐N contigs
+process FILTER_TOP_CONTIGS {
+    tag "filter_top_contigs"
+    publishDir "${params.outdir}", mode: 'copy'
 
     input:
-      path top_contigs_tsv     // exon_pairs_scores_top_contigs.tsv
-      path contig_svgs         // drawings/contigs_drawings/individual_svgs
+    path enriched_all
+    path enriched_unagg
 
     output:
-      path "exon_pairs_contigs_report.html"
+    path "pairs_scores_top_contigs.tsv", emit: top_contigs
+    path "pairs_scores_top_contigs.unaggregated.tsv", emit: top_contigs_unagg
+
+    script:
+    """
+    python3 - << 'PY'
+import pandas as pd
+top = ${params.top_n}
+all_df = pd.read_csv('pairs_scores_all_contigs.tsv', sep='\\t')
+un_df  = pd.read_csv('pairs_scores_all_contigs.unaggregated.tsv', sep='\\t')
+sel    = all_df[all_df.contig_rank <= top]
+ids    = sel.contig_id.unique()
+sel.to_csv('pairs_scores_top_contigs.tsv', sep='\\t', index=False)
+un_df[un_df.contig_id.isin(ids)].to_csv('pairs_scores_top_contigs.unaggregated.tsv', sep='\\t', index=False)
+PY
+    """
+}
+
+// 10) Draw contig‐level SVGs/PNGs
+process DRAW_CONTIG_SVGS {
+    tag "draw_contig_svgs"
+    cpus params.num_workers
+    publishDir "${params.outdir}/drawings/contigs", mode: 'copy'
+
+    input:
+    path top_contigs_tsv
+
+    output:
+    path 'individual_svgs', emit: contig_individual
+
+    script:
+    """
+    mkdir -p individual_svgs
+    python3 /app/draw_pairs.py \
+      --tsv ${top_contigs_tsv} --outdir individual_svgs \
+      --width 500 --height 500 --highlight-colour "#00FF99" \
+      --num-workers ${params.num_workers}
+    """
+}
+
+// 11) Draw window‐level SVGs/PNGs
+process DRAW_UNAGG_SVGS {
+    tag "draw_window_svgs"
+    cpus params.num_workers
+    publishDir "${params.outdir}/drawings/unagg_windows", mode: 'copy'
+
+    input:
+    path top_unagg_tsv
+
+    output:
+    path 'individual_svgs', emit: window_individual
+
+    script:
+    """
+    mkdir -p individual_svgs
+    python3 /app/draw_pairs.py \
+      --tsv ${top_unagg_tsv} --outdir individual_svgs \
+      --width 500 --height 500 --highlight-colour "#00FF99" \
+      --num-workers ${params.num_workers}
+    """
+}
+
+// 12) Generate contig‐level HTML report
+process GENERATE_AGGREGATED_REPORT {
+    tag "gen_agg_report"
+    publishDir "${params.outdir}", mode: 'copy'
+
+    input:
+    path top_contigs_tsv
+    path contig_individual
+
+    output:
+    path "pairs_contigs_report.html"
 
     script:
     """
     python3 /app/generate_report.py \
       --pairs ${top_contigs_tsv} \
-      --svg-dir ${contig_svgs} \
-      --output exon_pairs_contigs_report.html
+      --svg-dir ${contig_individual} \
+      --id-column ${params.id_column} \
+      --output pairs_contigs_report.html
     """
 }
 
-
-//
-// 8b) Generate the unaggregated‐window HTML report
-//
+// 13) Generate window‐level HTML report
 process GENERATE_UNAGGREGATED_REPORT {
     tag "gen_unagg_report"
-    publishDir "./${params.outdir}", mode: 'copy'
+    publishDir "${params.outdir}", mode: 'copy'
 
     input:
-      path top_windows_tsv     // exon_pairs_scores_top_contigs.unaggregated.tsv
-      path window_svgs         // drawings/unagg_windows_drawings/individual_svgs
+    path top_contigs_unagg_tsv
+    path window_individual
 
     output:
-      path "exon_pairs_contigs_report.unaggregated.html"
+    path "pairs_contigs_report.unaggregated.html"
 
     script:
     """
     python3 /app/generate_report.py \
-      --pairs ${top_windows_tsv} \
-      --svg-dir ${window_svgs} \
-      --output exon_pairs_contigs_report.unaggregated.html
+      --pairs ${top_contigs_unagg_tsv} \
+      --svg-dir ${window_individual} \
+      --id-column ${params.id_column} \
+      --output pairs_contigs_report.unaggregated.html
     """
 }
 
-
-
-//
-// PLOT_DISTANCES – histogram of distance (0.1% sample by default)
-//
-process PLOT_DISTANCES {
-    tag "plot_distances"
-    publishDir "./${params.outdir}/plots", mode: 'copy'
-    when: params.plot_distances_distribution
-
-    input:
-      path sorted_distances
-
-    output:
-      path "distance_distribution.png"
-
-    script:
-    """
-    python3 - << 'EOF'
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-
-# parameters
-seed = ${params.hist_seed}
-frac = ${params.hist_frac}
-bins = ${params.hist_bins}
-
-# load and sample
-df = pd.read_csv('${sorted_distances}', sep='\\t')
-sampled = df.sample(frac=frac, random_state=seed)
-
-# plot
-plt.figure(figsize=(8,5))
-plt.hist(sampled['distance'], bins=bins)
-plt.xlabel('Distance')
-plt.ylabel('Frequency')
-plt.title(f'Frequency Distribution of Distance ({frac*100:.1f}% sample)')
-plt.tight_layout()
-plt.savefig('distance_distribution.png')
-EOF
-    """
-}
-
-
-//
-// PLOT_METRIC – histogram of contig “metric” (no sampling)
-//
-process PLOT_METRIC {
-    tag "plot_metric"
-    publishDir "./${params.outdir}/plots", mode: 'copy'
-    when: params.plot_metric_distribution
-
-    input:
-      path enriched_all_tsv  // exon_pairs_scores_all_contigs.tsv
-
-    output:
-      path "metric_distribution.png"
-
-    script:
-    """
-    python3 - << 'EOF'
-import pandas as pd
-import matplotlib.pyplot as plt
-
-# parameters
-bins = ${params.metric_bins}
-
-# load
-df = pd.read_csv('${enriched_all_tsv}', sep='\\t')
-
-# plot
-plt.figure(figsize=(8,5))
-plt.hist(df['metric'], bins=bins)
-plt.xlabel('Metric')
-plt.ylabel('Frequency')
-plt.title('Distribution of Contig Metric')
-plt.tight_layout()
-plt.savefig('metric_distribution.png')
-EOF
-    """
+workflow {
+    def gen     = GENERATE_EMBEDDINGS(batch_ch)
+    def merged  = MERGE_EMBEDDINGS(gen.batch_embeddings.collect())
+    def idx     = BUILD_FAISS_INDEX(merged.embeddings)
+    def dists   = QUERY_FAISS_INDEX(merged.embeddings, idx.faiss_idx, idx.faiss_map)
+    def sorted  = SORT_DISTANCES(dists)
+    PLOT_DISTANCES(sorted)
+    def (agg_all, agg_un) = AGGREGATE_SCORE(sorted)
+    PLOT_SCORE(agg_all)
+    def (top_c, top_u)    = FILTER_TOP_CONTIGS(agg_all, agg_un)
+    def contigs_draw       = DRAW_CONTIG_SVGS(top_c)
+    def windows_draw       = DRAW_UNAGG_SVGS(top_u)
+    GENERATE_AGGREGATED_REPORT(top_c, contigs_draw.contig_individual)
+    GENERATE_UNAGGREGATED_REPORT(top_u, windows_draw.window_individual)
 }
