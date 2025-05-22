@@ -215,7 +215,6 @@ process AGGREGATE_SCORE {
 
     input:
     path sorted_distances
-    path input_tsv from Channel.fromPath(params.input)
 
     output:
     path "pairs_scores_all_contigs.tsv", emit: enriched_all
@@ -237,7 +236,7 @@ process AGGREGATE_SCORE {
 import pandas as pd, pathlib
 
 idc      = '${params.id_column}'
-meta     = pd.read_csv('${input_tsv}', sep='\\t', dtype=str)
+meta     = pd.read_csv('${params.input}', sep='\\t', dtype=str)
 cols     = [c for c in ['gene_name','exon_sequence','${params.structure_column_name}'] if c in meta]
 m1       = meta[[idc]+cols].rename(columns={idc:f'{idc}_1', **{c:f'{c}_1' for c in cols}})
 m2       = meta[[idc]+cols].rename(columns={idc:f'{idc}_2', **{c:f'{c}_2' for c in cols}})
@@ -333,7 +332,7 @@ process DRAW_UNAGG_SVGS {
     publishDir "${params.outdir}/drawings/unagg_windows", mode: 'copy'
 
     input:
-    path top_contigs_unagg_tsv
+    path top_unagg_tsv
 
     output:
     path 'individual_svgs', emit: window_individual
@@ -342,7 +341,7 @@ process DRAW_UNAGG_SVGS {
     """
     mkdir -p individual_svgs
     python3 ${baseDir}/modules/draw_pairs.py \
-      --tsv ${top_contigs_unagg_tsv} --outdir individual_svgs \
+      --tsv ${top_unagg_tsv} --outdir individual_svgs \
       --width 500 --height 500 --highlight-colour "#00FF99" \
       --num-workers ${params.num_workers}
     """
