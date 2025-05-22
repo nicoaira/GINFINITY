@@ -1,8 +1,0 @@
-
-==================================================
-Date and Time: 2025-01-28 20:33:47.081362
-Command Run: /home/nicolas/programs/GINFINITY/src/hyperparameter_tuning/tune.py --input_path /home/nicolas/programs/GINFINITY/data/train/train_small.csv --study_id tuning_250128_2030 --batch_size 500 --num_epochs 1 --patience 4 --num_workers 8 --device cuda --save_best_weights True --pooling_type global_add_pool --n_trials 8 --benchmark_datasets hard_rfam_benchmark_big
-Platform: Linux-6.8.0-51-generic-x86_64-with-glibc2.39
-Python Version: 3.12.7
-CUDA Available: True
-GPU: NVIDIA GeForce RTX 3070 Laptop GPU
