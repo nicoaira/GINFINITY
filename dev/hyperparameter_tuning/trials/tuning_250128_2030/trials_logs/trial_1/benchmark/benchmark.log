@@ -1,0 +1,20 @@
+
+==================================================
+Date and Time: 2025-01-28 20:31:07.118060
+Command Run: /home/nicolas/programs/GINFINITY/src/hyperparameter_tuning/tune.py --input_path /home/nicolas/programs/GINFINITY/data/train/train_small.csv --batch_size 500 --num_epochs 1 --patience 4 --num_workers 8 --device cuda --save_best_weights True --pooling_type global_add_pool --n_trials 8 --benchmark_datasets hard_rfam_benchmark_big
+Platform: Linux-6.8.0-51-generic-x86_64-with-glibc2.39
+Python Version: 3.12.7
+CUDA Available: True
+GPU: NVIDIA GeForce RTX 3070 Laptop GPU
+
+==================================================
+Embedding Generation for PID c508458a: 15.5321 seconds total, 0.002418571378315249 per row
+
+==================================================
+Distance Calculation for hard_rfam_benchmark_big: 12.4984 seconds total, 3.2047181863051196e-05 per pair
+AUC Results for hard_rfam_benchmark_big: AUC by RNA Type: {'RNase_P_RNA': 0.7634799933333334, 'SRP_RNA': 0.8851319977777778, 'antisense_RNA': 0.9909113199999999, 'ncRNA': 0.7853622066666666, 'other': 0.9066158488888889, 'pre_miRNA': 0.8788219333333334, 'rRNA': 0.9036755244444445, 'ribozyme': 0.83520436, 'sRNA': 0.9206958399999999, 'snRNA': 0.8698608177777778, 'snoRNA': 0.8648161244444443, 'tRNA': 0.8633910822222222, 'tmRNA': 0.9653162577777776}, Average AUC: 0.8795
+
+==================================================
+Primary Datasets Used: ['unpaired_rnas_rfam_benchmark-v1.tsv']
+Benchmark Datasets Used: ['hard_rfam_benchmark_big-v1.tsv']
+Total Execution Time: 28.7577 seconds
