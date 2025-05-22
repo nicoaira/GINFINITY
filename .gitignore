@@ -35,3 +35,4 @@ results/*
 work/*
 .nextflow*
 nextflow/results/todo.txt
+nextflow/dev/optuna_plots*
