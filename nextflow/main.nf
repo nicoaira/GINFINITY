@@ -319,7 +319,7 @@ process DRAW_CONTIG_SVGS {
     script:
     """
     mkdir -p individual_svgs
-    python3 ${baseDir}/modules/draw_pairs.py \
+    python3 /app/draw_pairs.py \
       --tsv ${top_contigs_tsv} --outdir individual_svgs \
       --width 500 --height 500 --highlight-colour "#00FF99" \
       --num-workers ${params.num_workers}
@@ -341,7 +341,7 @@ process DRAW_UNAGG_SVGS {
     script:
     """
     mkdir -p individual_svgs
-    python3 ${baseDir}/modules/draw_pairs.py \
+    python3 /app/draw_pairs.py \
       --tsv ${top_unagg_tsv} --outdir individual_svgs \
       --width 500 --height 500 --highlight-colour "#00FF99" \
       --num-workers ${params.num_workers}
@@ -362,7 +362,7 @@ process GENERATE_AGGREGATED_REPORT {
 
     script:
     """
-    python3 ${baseDir}/modules/generate_report.py \
+    python3 /app/generate_report.py \
       --pairs ${top_contigs_tsv} \
       --svg-dir ${contig_individual} \
       --id-column ${params.id_column} \
@@ -384,7 +384,7 @@ process GENERATE_UNAGGREGATED_REPORT {
 
     script:
     """
-    python3 ${baseDir}/modules/generate_report.py \
+    python3 /app/generate_report.py \
       --pairs ${top_contigs_unagg_tsv} \
       --svg-dir ${window_individual} \
       --id-column ${params.id_column} \
