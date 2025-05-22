@@ -129,7 +129,12 @@ process MERGE_EMBEDDINGS {
 }
 
 process BUILD_FAISS_INDEX {
+    // <- publish everything into results/faiss_index
+    publishDir "${params.outdir}/faiss_index", mode: 'copy'
+
     tag    "build_faiss_index"
+    cpus   1
+    memory '16 GB'
 
     input:
       path embeddings
@@ -148,6 +153,7 @@ process BUILD_FAISS_INDEX {
       --mapping-path faiss_mapping.tsv
     """
 }
+
 
 process QUERY_FAISS_INDEX {
     tag    "query_faiss_index"

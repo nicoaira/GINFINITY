@@ -1,48 +1,88 @@
 #!/usr/bin/env python3
-
 import argparse
-import pandas as pd
-import faiss
+import csv
 import numpy as np
+import faiss
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Build a FAISS index from embeddings.tsv (including seq_len)"
+    p = argparse.ArgumentParser(
+        description="Build a FAISS index from embeddings.tsv (streaming, low‐memory)"
     )
-    parser.add_argument('--input',        required=True,
-                        help="Path to embeddings.tsv")
-    parser.add_argument('--id-column',    required=True,
-                        help="Name of the transcript/window ID column")
-    parser.add_argument('--query',        required=True,
-                        help="ID value to treat as “query”")
-    parser.add_argument('--index-path',   required=True,
-                        help="Where to write the faiss index file")
-    parser.add_argument('--mapping-path', required=True,
-                        help="Where to write the DB metadata (with seq_len)")
-    args = parser.parse_args()
+    p.add_argument('--input',        required=True,
+                   help="Path to embeddings.tsv")
+    p.add_argument('--id-column',    required=True,
+                   help="Name of the transcript/window ID column")
+    p.add_argument('--query',        required=True,
+                   help="ID value to treat as “query”")
+    p.add_argument('--index-path',   required=True,
+                   help="Where to write the faiss index file")
+    p.add_argument('--mapping-path', required=True,
+                   help="Where to write the DB metadata (with seq_len)")
+    p.add_argument('--chunk-size',   type=int, default=10000,
+                   help="Number of vectors to buffer before adding to index")
+    args = p.parse_args()
 
-    # 1) Load embeddings (must include seq_len!)
-    df = pd.read_csv(args.input, sep='\t')
-    if 'seq_len' not in df.columns:
-        raise ValueError("embeddings.tsv missing seq_len column")
+    # Open mapping file and write header
+    with open(args.mapping_path, 'w', newline='') as map_f:
+        writer = csv.writer(map_f, delimiter='\t')
+        writer.writerow([args.id_column, 'window_start', 'window_end', 'seq_len'])
 
-    # 2) Split out query vs database
-    mask_q   = df[args.id_column] == args.query
-    db_df    = df.loc[~mask_q, [args.id_column, 'window_start', 'window_end', 'seq_len']].reset_index(drop=True)
-    db_vecs  = np.stack(
-        df.loc[~mask_q, 'embedding_vector']
-          .str.split(',')
-          .map(lambda xs: [float(x) for x in xs])
-    )
+        # Stream‐read the embeddings TSV
+        with open(args.input, newline='') as in_f:
+            reader = csv.DictReader(in_f, delimiter='\t')
+            # Determine embedding dimension from first non-query row
+            for first in reader:
+                if first[args.id_column] == args.query:
+                    continue
+                emb0 = np.fromstring(first['embedding_vector'], sep=',', dtype='float32')
+                dim = emb0.shape[0]
+                # initialize FAISS index
+                index = faiss.IndexFlatL2(dim)
+                # start buffer with this first vector
+                buffer_vecs  = [emb0]
+                buffer_meta  = [
+                    (first[args.id_column],
+                     first['window_start'],
+                     first['window_end'],
+                     first['seq_len'])
+                ]
+                break
+            else:
+                raise ValueError(f"Query {args.query} not found in {args.input}")
 
-    # 3) Build and save a simple L2 FAISS index
-    dim   = db_vecs.shape[1]
-    index = faiss.IndexFlatL2(dim)
-    index.add(db_vecs)
+            # Process remaining rows
+            for row in reader:
+                if row[args.id_column] == args.query:
+                    continue
+                vec = np.fromstring(row['embedding_vector'], sep=',', dtype='float32')
+                buffer_vecs.append(vec)
+                buffer_meta.append((
+                    row[args.id_column],
+                    row['window_start'],
+                    row['window_end'],
+                    row['seq_len']
+                ))
+
+                # once buffer is full, add to FAISS and flush metadata
+                if len(buffer_vecs) >= args.chunk_size:
+                    arr = np.stack(buffer_vecs)
+                    index.add(arr)
+                    for m in buffer_meta:
+                        writer.writerow(m)
+                    buffer_vecs.clear()
+                    buffer_meta.clear()
+
+            # Add any leftovers
+            if buffer_vecs:
+                arr = np.stack(buffer_vecs)
+                index.add(arr)
+                for m in buffer_meta:
+                    writer.writerow(m)
+
+    # Finally write the FAISS index to disk
     faiss.write_index(index, args.index_path)
-
-    # 4) Save the DB‐side metadata (so that index row i → db_df.iloc[i])
-    db_df.to_csv(args.mapping_path, sep='\t', index=False)
+    print(f"Wrote FAISS index → {args.index_path}")
+    print(f"Wrote mapping TSV → {args.mapping_path}")
 
 if __name__ == '__main__':
     main()
