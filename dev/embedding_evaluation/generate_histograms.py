@@ -12,7 +12,7 @@ import os
 from tqdm import tqdm
 
 from src.embedding_evaluation.utils import square_dist
-from src.gin_rna_dataset import GINRNADataset
+from src.training.gin_rna_dataset import GINRNADataset
 from src.model.gin_model import GINModel
 from src.utils import is_valid_dot_bracket
 
@@ -178,4 +178,3 @@ if __name__ == "__main__":
     save_histogram(output_folder, anchor_embeddings, positive_embeddings, negative_embeddings, 'square_dist', square_dist_range=(0,1000))
     save_histogram(output_folder, anchor_embeddings, positive_embeddings, negative_embeddings, 'square_dist')
 
-    

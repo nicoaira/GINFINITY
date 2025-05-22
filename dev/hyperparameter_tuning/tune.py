@@ -8,14 +8,17 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from torch_geometric.loader import DataLoader as GeoDataLoader
 from src.model.gin_model import GINModel
-from src.triplet_loss import TripletLoss
-from src.early_stopping import EarlyStopping
-from src.gin_rna_dataset import GINRNADataset
 from src.utils import is_valid_dot_bracket, log_information, log_setup, get_project_root
 from optuna.integration import PyTorchLightningPruningCallback
 import time
 from datetime import datetime
 from src.benchmark.benchmark import run_benchmark
+from pytorch_lightning.loggers import TensorBoardLogger
+from torch.utils.data import DataLoader, random_split
+
+from src.training.triplet_loss import TripletLoss
+from src.training.early_stopping import EarlyStopping
+from src.training.gin_rna_dataset import GINRNADataset
 
 # Get the project root directory
 project_root = get_project_root()
@@ -199,7 +202,7 @@ def objective(trial, args):
         # Run benchmark and get average AUCs
         benchmark_results_path = os.path.join(trial_log_dir, "benchmark")
         average_aucs = run_benchmark(
-            embeddings_script=os.path.join(project_root, "predict_embedding.py"),
+            embeddings_script=os.path.join(project_root, "scripts/predict_embedding.py"),
             benchmark_datasets=[args.benchmark_datasets],  # Pass as a list
             benchmark_metadata=benchmark_metadata,
             benchmark_metadata_path=os.path.join(project_root, 'data/benchmark_datasets/benchmark_datasets.json'),
