@@ -199,30 +199,49 @@ if __name__ == "__main__":
     parser.add_argument('--retries',             type=int,  default=0)
     parser.add_argument('--keep-cols',           type=str,
                         help="Comma-separated list of input columns to retain.")
+    parser.add_argument('--mask-threshold',      type=float, default=0.3,
+                    help="Minimum fraction of paired bases (brackets) required; rows below are dropped (default 0.3)")
+
     args = parser.parse_args()
 
     args.header = args.header.lower() == 'true'
     # read
     df = read_input_data(args.input, None,
                          args.structure_column_num, args.header)
-    # validate ID
+    
+     # ─── validate ID ──────────────────────────────────────
     if args.id_column not in df.columns:
-        raise ValueError(f"--id-column '{args.id_column}' not in {list(df.columns)}")
+        raise ValueError(f"--id-column '{args.id-column}' not in {list(df.columns)}")
     if df[args.id_column].duplicated().any():
         raise ValueError(f"Values in '{args.id_column}' must be unique.")
-    # determine structure column
+
+    # ─── determine structure column ───────────────────────
     struct_col = get_structure_column_name(
         df, args.header,
         args.structure_column_name,
         args.structure_column_num
     )
-    # make output dir & log
+
+    # ─── NEW: filter low‐complexity windows ───────────────
+    mt = args.mask_threshold
+    if mt > 0:
+        # count paired chars (anything ≠ '.') and compute fraction
+        lengths = df[struct_col].astype(str).str.len().replace(0,1)
+        paired  = df[struct_col].astype(str).map(lambda s: sum(1 for c in s if c != '.'))
+        frac    = paired.div(lengths)
+        mask    = frac >= mt
+        removed = (~mask).sum()
+        if removed:
+            print(f"[filter] Dropped {removed} rows with paired‐base fraction < {mt}")
+        df = df[mask].copy()
+
+    # ─── make output dir & log ────────────────────────────
     outdir = os.path.dirname(args.output) or '.'
     os.makedirs(outdir, exist_ok=True)
     log_path = os.path.splitext(args.output)[0] + '.log'
     log_setup(log_path)
 
-    # run
+    # ─── run embeddings ───────────────────────────────────
     start = time.time()
     generate_embeddings(
         df, args.output, args.model_path, log_path, struct_col,

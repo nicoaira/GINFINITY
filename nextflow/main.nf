@@ -81,7 +81,8 @@ EOF
       ${params.subgraphs            ? '--subgraphs' : ''} \
       ${params.L                    ? "--L ${params.L}" : ''} \
       ${params.keep_paired_neighbors? '--keep_paired_neighbors' : ''} \
-      --retries ${params.retries}
+      --retries ${params.retries} \
+      --mask-threshold ${params.mask_threshold}
     """
 }
 
