@@ -27,21 +27,19 @@ def main():
 
     # ─── 1) Read mapping (DB side) ───
     db_meta = pd.read_csv(args.mapping_path, sep='\t')
-    # keep as dict-of-records for fast iloc
     db_records = db_meta.to_dict('records')
 
-    # ─── 2) Stream the embeddings.tsv for just the query rows ───
+    # ─── 2) Gather only the query’s windows ───
     q_meta = []
     q_vecs_list = []
-
     with open(args.input, 'r') as fh:
         header = fh.readline().rstrip('\n').split('\t')
         try:
-            id_i   = header.index(args.id_column)
-            start_i= header.index('window_start')
-            end_i  = header.index('window_end')
-            len_i  = header.index('seq_len')
-            vec_i  = header.index('embedding_vector')
+            id_i    = header.index(args.id_column)
+            start_i = header.index('window_start')
+            end_i   = header.index('window_end')
+            len_i   = header.index('seq_len')
+            vec_i   = header.index('embedding_vector')
         except ValueError as e:
             sys.exit(f"ERROR: missing column in {args.input}: {e}")
 
@@ -49,46 +47,49 @@ def main():
             parts = line.rstrip('\n').split('\t')
             if parts[id_i] != args.query:
                 continue
-
-            # record meta
             q_meta.append({
-                args.id_column:   parts[id_i],
-                'window_start':   int(parts[start_i]),
-                'window_end':     int(parts[end_i]),
-                'seq_len':        int(parts[len_i])
+                args.id_column: parts[id_i],
+                'window_start': int(parts[start_i]),
+                'window_end':   int(parts[end_i]),
+                'seq_len':      int(parts[len_i])
             })
-            # parse vector
-            vec = np.fromstring(parts[vec_i], sep=',', dtype='float32')
-            q_vecs_list.append(vec)
+            q_vecs_list.append(np.fromstring(parts[vec_i], sep=',', dtype='float32'))
 
     if not q_vecs_list:
         sys.exit(f"ERROR: no rows found where {args.id_column} == {args.query}")
 
     q_vecs = np.stack(q_vecs_list)
 
-    # ─── 3) Load FAISS index & search ───
+    # ─── 3) Load FAISS index & over-fetch ───
     index = faiss.read_index(args.index_path)
-    D, I = index.search(q_vecs, args.top_k)
+    extra = len(q_meta)  # allow dropping up to one “self” per window
+    D, I = index.search(q_vecs, args.top_k + extra)      # ← ask for a few extra
 
-    # ─── 4) Build output rows ───
+    # ─── 4) Build output rows, exactly top_k per query window ───
     rows = []
     for qi, (dists, neighs) in enumerate(zip(D, I)):
         qrec = q_meta[qi]
+        kept = 0
         for dist, dbi in zip(dists, neighs):
             nrec = db_records[dbi]
+            if nrec[args.id_column] == args.query:
+                continue                                   # ← skip self
             rows.append({
-                f"{args.id_column}_1":    qrec[args.id_column],
-                "window_start_1":         qrec["window_start"],
-                "window_end_1":           qrec["window_end"],
-                "seq_len_1":              qrec["seq_len"],
+                f"{args.id_column}_1": qrec[args.id_column],
+                "window_start_1":      qrec["window_start"],
+                "window_end_1":        qrec["window_end"],
+                "seq_len_1":           qrec["seq_len"],
 
-                f"{args.id_column}_2":    nrec[args.id_column],
-                "window_start_2":         nrec["window_start"],
-                "window_end_2":           nrec["window_end"],
-                "seq_len_2":              nrec["seq_len"],
+                f"{args.id_column}_2": nrec[args.id_column],
+                "window_start_2":      nrec["window_start"],
+                "window_end_2":        nrec["window_end"],
+                "seq_len_2":           nrec["seq_len"],
 
-                "distance": float(dist)
+                "distance":            float(dist)
             })
+            kept += 1
+            if kept >= args.top_k:
+                break                                      # ← stop at exactly K
 
     # ─── 5) Write distances.tsv ───
     out_df = pd.DataFrame(rows)
