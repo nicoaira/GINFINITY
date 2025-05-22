@@ -21,7 +21,7 @@ params.retries                 = 0
 params.batch_size_embed        = 100        // full sequences per embedding task
 
 // faiss index defaults
-params.faiss_k = 500    
+params.faiss_k = 1000    
 
 // compute-distances defaults
 params.embedding_col           = 'embedding_vector'
