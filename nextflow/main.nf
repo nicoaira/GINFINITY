@@ -1,7 +1,9 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl=2
 
-// User‐tunable parameters (override on CLI)
+// ───────────────────────────────────────────────────────────
+// User-tunable parameters (override on CLI)
+// ───────────────────────────────────────────────────────────
 params.input                 = "$baseDir/input.tsv"           // TSV with sequences
 params.outdir                = "results"
 params.model_path            = "$baseDir/model.pth"
@@ -37,11 +39,46 @@ params.hist_bins                   = 200
 params.plot_score_distribution     = true
 params.score_bins                  = 30
 
-// Basic check
+// ───────────────────────────────────────────────────────────
+// Basic checks
+// ───────────────────────────────────────────────────────────
 if ( !file(params.input).exists() )
     error "Cannot find input TSV: ${params.input}"
 
-// Build batches
+// ───────────────────────────────────────────────────────────
+// 0)  Extract lightweight metadata (ID → sequences + structure)
+//     Keeps bulky cols out of embeddings.tsv
+// ───────────────────────────────────────────────────────────
+process EXTRACT_META_MAP {
+    tag "extract_meta_map"
+    publishDir "${params.outdir}", mode: 'copy'
+
+    input:
+    path orig_tsv
+
+    output:
+    path "id_meta.tsv", emit: meta_map
+
+    script:
+    """
+    python3 - << 'PY'
+import pandas as pd, sys
+df  = pd.read_csv('${orig_tsv}', sep='\\t', dtype=str)
+idc = '${params.id_column}'
+scol = '${params.structure_column_name}'.strip()
+seq_cols = [c for c in df.columns if 'sequence' in c.lower()]
+if scol and scol in df.columns and scol not in seq_cols:
+    seq_cols.append(scol)
+if not seq_cols:
+    sys.exit('No sequence or structure columns found – expected at least one column containing \"sequence\" or the specified structure column')
+df[[idc] + seq_cols].to_csv('id_meta.tsv', sep='\\t', index=False)
+PY
+    """
+}
+
+// ───────────────────────────────────────────────────────────
+// Build input batches for embedding
+// ───────────────────────────────────────────────────────────
 def batch_ch = Channel
     .fromPath(params.input)
     .splitCsv(header: true, by: params.batch_size_embed)
@@ -86,10 +123,10 @@ EOF
     """
 }
 
-// 2) Merge per‐batch embeddings
+// 2) Merge per-batch embeddings
 process MERGE_EMBEDDINGS {
     tag "merge_embeddings"
-    container ''                  // disable Docker here
+    container ''
     publishDir "${params.outdir}", mode: 'copy'
 
     input:
@@ -208,7 +245,7 @@ PY
     """
 }
 
-// 7) Aggregate and enrich
+// 7) Aggregate and enrich (re-attach sequences *and* secondary structures)
 process AGGREGATE_SCORE {
     tag "aggregate_score"
     cpus params.num_workers
@@ -216,9 +253,10 @@ process AGGREGATE_SCORE {
 
     input:
     path sorted_distances
+    path meta_map
 
     output:
-    path "pairs_scores_all_contigs.tsv", emit: enriched_all
+    path "pairs_scores_all_contigs.tsv",              emit: enriched_all
     path "pairs_scores_all_contigs.unaggregated.tsv", emit: enriched_unagg
 
     script:
@@ -234,15 +272,19 @@ process AGGREGATE_SCORE {
       --output-unaggregated
 
     python3 - << 'PY'
-import pandas as pd, pathlib
-
+import pandas as pd
 idc      = '${params.id_column}'
-meta     = pd.read_csv('${params.input}', sep='\\t', dtype=str)
-cols     = [c for c in ['gene_name','exon_sequence','${params.structure_column_name}'] if c in meta]
-m1       = meta[[idc]+cols].rename(columns={idc:f'{idc}_1', **{c:f'{c}_1' for c in cols}})
-m2       = meta[[idc]+cols].rename(columns={idc:f'{idc}_2', **{c:f'{c}_2' for c in cols}})
+
+# meta_map has IDs + *all* sequence and structure columns
+meta     = pd.read_csv('id_meta.tsv', sep='\\t', dtype=str)
+meta_cols = [c for c in meta.columns if c != idc]
+
+m1 = meta.rename(columns={idc:f'{idc}_1', **{c:f'{c}_1' for c in meta_cols}})
+m2 = meta.rename(columns={idc:f'{idc}_2', **{c:f'{c}_2' for c in meta_cols}})
+
 all_df   = pd.read_csv('raw_contigs.tsv', sep='\\t').merge(m1,on=f'{idc}_1').merge(m2,on=f'{idc}_2')
 unagg_df = pd.read_csv('raw_contigs.unaggregated.tsv', sep='\\t').merge(m1,on=f'{idc}_1').merge(m2,on=f'{idc}_2')
+
 all_df.to_csv('pairs_scores_all_contigs.tsv', sep='\\t', index=False)
 unagg_df.to_csv('pairs_scores_all_contigs.unaggregated.tsv', sep='\\t', index=False)
 PY
@@ -276,7 +318,7 @@ PY
     """
 }
 
-// 9) Filter top‐N contigs
+// 9) Filter top-N contigs
 process FILTER_TOP_CONTIGS {
     tag "filter_top_contigs"
     publishDir "${params.outdir}", mode: 'copy'
@@ -286,7 +328,7 @@ process FILTER_TOP_CONTIGS {
     path enriched_unagg
 
     output:
-    path "pairs_scores_top_contigs.tsv", emit: top_contigs
+    path "pairs_scores_top_contigs.tsv",              emit: top_contigs
     path "pairs_scores_top_contigs.unaggregated.tsv", emit: top_contigs_unagg
 
     script:
@@ -304,7 +346,7 @@ PY
     """
 }
 
-// 10) Draw contig‐level SVGs/PNGs
+// 10) Draw contig-level SVGs/PNGs
 process DRAW_CONTIG_SVGS {
     tag "draw_contig_svgs"
     cpus params.num_workers
@@ -326,7 +368,7 @@ process DRAW_CONTIG_SVGS {
     """
 }
 
-// 11) Draw window‐level SVGs/PNGs
+// 11) Draw window-level SVGs/PNGs
 process DRAW_UNAGG_SVGS {
     tag "draw_window_svgs"
     cpus params.num_workers
@@ -348,7 +390,7 @@ process DRAW_UNAGG_SVGS {
     """
 }
 
-// 12) Generate contig‐level HTML report
+// 12) Generate contig-level HTML report
 process GENERATE_AGGREGATED_REPORT {
     tag "gen_agg_report"
     publishDir "${params.outdir}", mode: 'copy'
@@ -370,7 +412,7 @@ process GENERATE_AGGREGATED_REPORT {
     """
 }
 
-// 13) Generate window‐level HTML report
+// 13) Generate window-level HTML report
 process GENERATE_UNAGGREGATED_REPORT {
     tag "gen_unagg_report"
     publishDir "${params.outdir}", mode: 'copy'
@@ -392,18 +434,29 @@ process GENERATE_UNAGGREGATED_REPORT {
     """
 }
 
+// ───────────────────────────────────────────────────────────
+// Workflow wiring
+// ───────────────────────────────────────────────────────────
 workflow {
+    // 0) Build the metadata map once
+    def meta = EXTRACT_META_MAP(file(params.input))
+
+    // 1-2-3-4-5-6
     def gen     = GENERATE_EMBEDDINGS(batch_ch)
     def merged  = MERGE_EMBEDDINGS(gen.batch_embeddings.collect())
     def idx     = BUILD_FAISS_INDEX(merged.embeddings)
     def dists   = QUERY_FAISS_INDEX(merged.embeddings, idx.faiss_idx, idx.faiss_map)
     def sorted  = SORT_DISTANCES(dists)
     PLOT_DISTANCES(sorted)
-    def (agg_all, agg_un) = AGGREGATE_SCORE(sorted)
+
+    // 7
+    def (agg_all, agg_un) = AGGREGATE_SCORE(sorted, meta.meta_map)
     PLOT_SCORE(agg_all)
-    def (top_c, top_u)    = FILTER_TOP_CONTIGS(agg_all, agg_un)
-    def contigs_draw       = DRAW_CONTIG_SVGS(top_c)
-    def windows_draw       = DRAW_UNAGG_SVGS(top_u)
+
+    // 8-9-10-11-12-13
+    def (top_c, top_u)  = FILTER_TOP_CONTIGS(agg_all, agg_un)
+    def contigs_draw    = DRAW_CONTIG_SVGS(top_c)
+    def windows_draw    = DRAW_UNAGG_SVGS(top_u)
     GENERATE_AGGREGATED_REPORT(top_c, contigs_draw.contig_individual)
     GENERATE_UNAGGREGATED_REPORT(top_u, windows_draw.window_individual)
 }
