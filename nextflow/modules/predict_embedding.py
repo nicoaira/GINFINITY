@@ -1,1 +1,1 @@
-../../predict_embedding.py
+../../scripts/predict_embedding.py
