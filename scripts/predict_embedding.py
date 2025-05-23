@@ -217,7 +217,7 @@ if __name__ == "__main__":
     # --- Input/Output Arguments ---
     parser.add_argument('--input', type=str, required=True, help="Path to input TSV/CSV file. This file should contain structures, either full or pre-windowed.")
     parser.add_argument('--output', type=str, required=True, help="Path to output TSV file for embeddings.")
-    parser.add_argument('--model_path', type=str, required=True, help="Path to the trained GIN model (.pth file or checkpoint)." )
+    parser.add_argument('--model-path', type=str, required=True, help="Path to the trained GIN model (.pth file or checkpoint)." )
     
     # --- Column Specification Arguments ---
     parser.add_argument('--id-column', type=str, required=True, help="Name of the column containing unique sequence/structure identifiers.")
@@ -228,7 +228,7 @@ if __name__ == "__main__":
 
     # --- Embedding Generation Arguments ---
     parser.add_argument('--device', type=str, default="cpu", help="Device to use for model inference ('cpu' or 'cuda', default: cpu).")
-    parser.add_argument('--num_workers', type=int, default=4, help="Number of worker processes for parallel embedding generation (default: 4).")
+    parser.add_argument('--num-workers', type=int, default=4, help="Number of worker processes for parallel embedding generation (default: 4).")
     
     args = parser.parse_args()
     args.header = args.header.lower() == 'true'
