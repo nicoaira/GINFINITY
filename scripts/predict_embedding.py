@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-
+import sys, os
+# TODO: Remove this when the module is properly installed
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 import time
 import torch
 import pandas as pd
@@ -19,6 +21,7 @@ from src.utils import (
 )
 import os
 from torch.multiprocessing import Pool, set_start_method
+
 
 def load_trained_model(model_path, device='cpu'):
     model = GINModel.load_from_checkpoint(model_path, device)
