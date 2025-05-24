@@ -36,3 +36,4 @@ work/*
 .nextflow*
 nextflow/results/todo.txt
 nextflow/dev/optuna_plots*
+nextflow/run_transcript_pipeline.sh

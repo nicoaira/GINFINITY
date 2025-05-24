@@ -69,15 +69,19 @@ def generate_embedding_for_row(args_tuple):
 
     Args:
         args_tuple: A tuple containing all necessary arguments:
-            (unique_id, structure_string, model_instance, graph_encoding_method, device_to_use)
+            (original_row_index, unique_id, structure_string, model_path, graph_encoding_method, device_to_use) # Changed model_instance to model_path
     """
     (
+        original_row_index,
         unique_id,
         structure_string,
-        model_instance,
+        model_path,  # Changed from model_instance
         graph_encoding_method,
         device_to_use,
     ) = args_tuple
+
+    # Load the model inside the worker process
+    model_instance = load_trained_model(model_path, device_to_use)
 
     embedding_results = get_gin_embedding(
         model_instance,
@@ -86,7 +90,10 @@ def generate_embedding_for_row(args_tuple):
         device_to_use
     )
 
-    return [(unique_id, start_idx, emb_str) for start_idx, emb_str in embedding_results]
+    # Return original_row_index, unique_id (id_column value), and emb_str
+    # The original get_gin_embedding returns a list, typically with one item [(None, emb_str)]
+    # We adapt this to include original_row_index and unique_id for each result.
+    return [(original_row_index, unique_id, emb_str) for _, emb_str in embedding_results]
 
 def generate_embeddings(
         input_df,
@@ -113,25 +120,32 @@ def generate_embeddings(
             elif col not in final_keep_cols:
                 final_keep_cols.append(col)
     
-    # Load model
-    model = load_trained_model(model_path, device)
-    graph_encoding = model.metadata['graph_encoding']
+    # Load model once to get graph_encoding, but don't pass this instance to workers
+    # model = load_trained_model(model_path, device) # Original line
+    # Instead, just get metadata or load temporarily if needed for graph_encoding
+    # For simplicity, we can load it to get metadata then discard, or pass metadata if already available.
+    # Assuming graph_encoding can be determined or passed differently if model loading is heavy.
+    # A lightweight way to get metadata if stored separately or if model has a quick metadata fetch:
+    temp_model_for_metadata = load_trained_model(model_path, 'cpu') # Load on CPU to be light
+    graph_encoding = temp_model_for_metadata.metadata['graph_encoding']
+    del temp_model_for_metadata # Free memory
 
     # Prepare arguments for each row for multiprocessing
     args_list_for_pool = []
-    for original_idx, row_series in input_df.iterrows():
+    for original_idx, row_series in input_df.iterrows(): # original_idx is the index label from input_df
         current_id = row_series[id_column]
         structure = row_series[structure_column]
 
         if not isinstance(structure, str):
             print(f"Skipping ID {current_id} (DataFrame index {original_idx}): structure is not a string.")
-            log_information(log_path, {"skipped_invalid_structure_type": f"ID {current_id}"})
+            log_information(log_path, {"skipped_invalid_structure_type": f"ID {current_id} (Row Index {original_idx})"})
             continue
 
         args_list_for_pool.append((
+            original_idx, # Pass the original DataFrame index/label
             current_id,
             structure,
-            model,
+            model_path,  # Pass model_path instead of model instance
             graph_encoding,
             device
         ))
@@ -156,22 +170,25 @@ def generate_embeddings(
 
     # Assemble output rows
     output_rows_list = []
-    input_df_id_indexed = input_df.set_index(id_column)
+    # input_df_id_indexed = input_df.set_index(id_column) # This was problematic if id_column is not unique
 
-    for processed_id, window_start_or_none, emb_str in all_embedding_results:
+    for original_row_idx, processed_id, emb_str in all_embedding_results: # Unpack original_row_idx
         if emb_str == "": 
-            log_information(log_path, {"skipped_empty_embedding": f"ID {processed_id}"})
+            log_information(log_path, {"skipped_empty_embedding": f"ID {processed_id} (Row Index {original_row_idx})"})
             continue
         
         try:
-            original_row_data = input_df_id_indexed.loc[processed_id]
+            # Use original_row_idx to get the specific row from the original input_df
+            # This ensures original_row_data is a Series corresponding to the single processed window/structure
+            original_row_data = input_df.loc[original_row_idx] 
         except KeyError:
-            print(f"Warning: ID {processed_id} from embedding results not found in original DataFrame. Skipping.")
-            log_information(log_path, {"warning": f"ID {processed_id} not found in original DF after processing."})
+            print(f"Warning: ID {processed_id} (Original Row Index {original_row_idx}) from embedding results not found in original DataFrame. Skipping.")
+            log_information(log_path, {"warning": f"ID {processed_id} (Row Index {original_row_idx}) not found in original DF after processing."})
             continue
 
+        # Now original_row_data is a Series, so original_row_data[col] will be a scalar value.
         output_row = {col: original_row_data[col] for col in final_keep_cols if col in original_row_data}
-        output_row[id_column] = processed_id 
+        # output_row[id_column] = processed_id # This is already set correctly if id_column is in final_keep_cols
         
         output_row['embedding_vector'] = emb_str
         output_rows_list.append(output_row)

@@ -46,6 +46,33 @@ if ( !file(params.input).exists() )
     error "Cannot find input TSV: ${params.input}"
 
 // ───────────────────────────────────────────────────────────
+// NEW: Generate windows if requested
+// ───────────────────────────────────────────────────────────
+process GENERATE_WINDOWS {
+    tag "generate_windows"
+    cpus    14
+    input:
+    path orig_tsv
+    output:
+    path "windows.tsv", emit: windowed_structures
+    script:
+    """
+    python3 ${baseDir}/modules/generate_windows.py \
+      --input ${orig_tsv} \
+      --output windows.tsv \
+      --id-column ${params.id_column} \
+      --structure-column-name ${params.structure_column_name} \
+      ${params.structure_column_num ? "--structure_column_num ${params.structure_column_num}" : ''} \
+      --header ${params.header} \
+      --L ${params.L} \
+      ${params.keep_paired_neighbors ? '--keep-paired-neighbors' : ''} \
+      --mask-threshold ${params.mask_threshold} \
+      --keep-cols ${params.id_column} \
+      --num-workers ${task.cpus}
+    """
+}
+
+// ───────────────────────────────────────────────────────────
 // 0)  Extract lightweight metadata (ID → sequences + structure)
 //     Keeps bulky cols out of embeddings.tsv
 // ───────────────────────────────────────────────────────────
@@ -77,11 +104,24 @@ PY
 }
 
 // ───────────────────────────────────────────────────────────
-// Build input batches for embedding
+// Prepare transcript batches as TSV files
 // ───────────────────────────────────────────────────────────
-def batch_ch = Channel
-    .fromPath(params.input)
-    .splitCsv(header: true, by: params.batch_size_embed)
+process PREP_BATCH {
+    tag "prep_batch"
+    input:
+    val rows
+    output:
+    path "batch_${task.index}.tsv", emit: batch_file
+    script:
+    def header = rows[0].keySet().join("\t")
+    def lines = rows.collect { r -> r.values().join("\t") }.join("\n")
+    """
+    cat > batch_${task.index}.tsv << 'EOF'
+${header}
+${lines}
+EOF
+    """
+}
 
 // 1) Generate embeddings per batch
 process GENERATE_EMBEDDINGS {
@@ -89,37 +129,27 @@ process GENERATE_EMBEDDINGS {
     maxForks = 1
 
     input:
-    val rows
+    path batch_tsv
 
     output:
     path "embeddings_batch_${task.index}.tsv", emit: batch_embeddings
 
     script:
-    def header = new File(params.input).withReader { it.readLine() }
-    def lines  = rows.collect { it.values().join('\t') }.join('\n')
+    def struct_col = params.subgraphs ? 'window_sequence' : params.structure_column_name
+    def keepCols = params.subgraphs ? "${params.id_column},window_start,window_end,seq_len" : "${params.id_column},seq_len"
 
     """
-    cat > batch_${task.index}.tsv << 'EOF'
-${header}
-${lines}
-EOF
-
     python3 ${baseDir}/modules/predict_embedding.py \
-      --input batch_${task.index}.tsv \
+      --input ${batch_tsv} \
+      --model-path ${params.model_path} \
       --id-column ${params.id_column} \
-      --model_path ${params.model_path} \
       --output embeddings_batch_${task.index}.tsv \
-      --keep-cols ${params.id_column},seq_len \
-      --structure_column_name ${params.structure_column_name} \
-      ${params.structure_column_num ? "--structure_column_num ${params.structure_column_num}" : ''} \
+      --keep-cols ${keepCols} \
+      --structure-column-name ${struct_col} \
+      ${!params.subgraphs && params.structure_column_num ? "--structure_column_num ${params.structure_column_num}" : ''} \
       --header true \
       --device ${params.device} \
-      --num_workers ${params.num_workers} \
-      ${params.subgraphs            ? '--subgraphs' : ''} \
-      ${params.L                    ? "--L ${params.L}" : ''} \
-      ${params.keep_paired_neighbors? '--keep_paired_neighbors' : ''} \
-      --retries ${params.retries} \
-      --mask-threshold ${params.mask_threshold}
+      --num-workers ${params.num_workers}
     """
 }
 
@@ -441,8 +471,15 @@ workflow {
     // 0) Build the metadata map once
     def meta = EXTRACT_META_MAP(file(params.input))
 
-    // 1-2-3-4-5-6
-    def gen     = GENERATE_EMBEDDINGS(batch_ch)
+    // Split transcripts into batches before windowing
+    def transcript_batches = Channel.fromPath(params.input)
+        .splitCsv(header: true, by: params.batch_size_embed)
+    def batch_files = PREP_BATCH(transcript_batches)
+
+    // If windowing, run per-transcript-batch window generation, else use batch files directly
+    def embed_inputs = params.subgraphs ? GENERATE_WINDOWS(batch_files.batch_file).windowed_structures : batch_files.batch_file
+
+    def gen     = GENERATE_EMBEDDINGS(embed_inputs)
     def merged  = MERGE_EMBEDDINGS(gen.batch_embeddings.collect())
     def idx     = BUILD_FAISS_INDEX(merged.embeddings)
     def dists   = QUERY_FAISS_INDEX(merged.embeddings, idx.faiss_idx, idx.faiss_map)

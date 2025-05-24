@@ -6,6 +6,7 @@ import argparse
 import os
 import pandas as pd
 from tqdm import tqdm
+from torch.multiprocessing import Pool, set_start_method # Added
 
 from src.utils import (
     read_input_data,
@@ -21,7 +22,7 @@ from src.utils import (
 def process_structure_to_windows(
     original_id,
     structure_string,
-    original_seq_len,
+    seq_len, # Renamed from original_seq_len
     other_kept_cols_data, 
     window_size_L,
     keep_paired_neighbors_in_slice,
@@ -74,11 +75,44 @@ def process_structure_to_windows(
             'window_start': start_idx,
             'window_end': start_idx + window_size_L - 1,
             'window_sequence': window_sequence,
-            'original_seq_len': original_seq_len
+            'seq_len': seq_len # Renamed here
         }
         window_rows.append(window_data)
 
     return window_rows
+
+def process_structure_to_windows_wrapper(args_tuple):
+    """Helper function to unpack arguments for process_structure_to_windows for use with Pool."""
+    (
+        original_id,
+        structure_string,
+        seq_len,
+        other_kept_cols_data,
+        window_size_L,
+        keep_paired_neighbors_in_slice,
+        mask_threshold_for_window,
+        id_column_name # Added to correctly structure other_kept_cols_data
+    ) = args_tuple
+
+    # Reconstruct other_cols_data as it was in the serial version
+    # other_kept_cols_data already contains the necessary data, but id needs to be set with the specific id_column_name
+    # The id_column_name itself is passed in other_kept_cols_data if it was in keep-cols.
+    # What's crucial is that original_id is correctly associated with the id_column_name key.
+    
+    # Create a base for data to be passed, ensuring the ID is correctly keyed
+    final_other_kept_cols_data = {id_column_name: original_id}
+    final_other_kept_cols_data.update(other_kept_cols_data)
+
+
+    return process_structure_to_windows(
+        original_id,
+        structure_string,
+        seq_len,
+        final_other_kept_cols_data, # Pass the reconstructed dict
+        window_size_L,
+        keep_paired_neighbors_in_slice,
+        mask_threshold_for_window
+    )
 
 def main():
     parser = argparse.ArgumentParser(
@@ -94,6 +128,7 @@ def main():
     parser.add_argument('--keep-paired-neighbors', action='store_true', help="Include paired neighbors outside the window in slices (affects graph structure for slicing).")
     parser.add_argument('--mask-threshold', type=float, default=0.0, help="Minimum fraction of paired bases per window; windows below this are skipped (0 or negative means no masking).")
     parser.add_argument('--keep-cols', type=str, default="", help="Comma-separated list of additional columns from the input to retain in the output.")
+    parser.add_argument('--num-workers', type=int, default=1, help="Number of worker processes for parallel window generation (default: 1).") # Added
     
     args = parser.parse_args()
     args.header = args.header.lower() == 'true'
@@ -151,61 +186,90 @@ def main():
 
 
     # Determine columns to keep
-    cols_to_keep_in_output = [id_col_for_df_access] # Always keep the ID
+    propagate_col_names = []
     if args.keep_cols:
         additional_keep_cols = [c.strip() for c in args.keep_cols.split(',')]
-        for col in additional_keep_cols:
-            if args.header and col not in input_df.columns:
-                print(f"Warning: Requested keep_col '{col}' not found in input columns. It will be ignored.")
-                log_information(log_path, {"warning": f"Keep_col '{col}' not found and ignored."})
-            elif not args.header: # For no-header, assume col is an index if numeric, or a name if user is careful
+        for col_name_or_idx_str in additional_keep_cols:
+            if args.header:
+                if col_name_or_idx_str in input_df.columns:
+                    if col_name_or_idx_str not in propagate_col_names:
+                        propagate_col_names.append(col_name_or_idx_str)
+                else:
+                    print(f"Warning: Requested keep_col '{col_name_or_idx_str}' not found in input columns. It will be ignored.")
+            else: # No header
                 try:
-                    col_idx = int(col)
+                    col_idx = int(col_name_or_idx_str)
                     if col_idx < len(input_df.columns):
-                         if input_df.columns[col_idx] not in cols_to_keep_in_output:
-                            cols_to_keep_in_output.append(input_df.columns[col_idx])
+                        actual_col_name_in_df = input_df.columns[col_idx]
+                        if actual_col_name_in_df not in propagate_col_names:
+                             propagate_col_names.append(actual_col_name_in_df)
                     else:
-                        print(f"Warning: Requested keep_col index '{col}' is out of bounds. It will be ignored.")
-                except ValueError: # col is not a number string, treat as potential name (less safe for no-header)
-                     if col in input_df.columns and col not in cols_to_keep_in_output: # if pandas assigned some string names
-                        cols_to_keep_in_output.append(col)
-                     else:
-                        print(f"Warning: Requested keep_col '{col}' not found or problematic for headerless input. It will be ignored.")
-            elif col not in cols_to_keep_in_output: # Header and col exists
-                 cols_to_keep_in_output.append(col)
+                        print(f"Warning: Requested keep_col index '{col_idx}' is out of bounds. It will be ignored.")
+                except ValueError:
+                     print(f"Warning: Requested keep_col '{col_name_or_idx_str}' is not a valid index for headerless input. It will be ignored.")
 
 
     all_window_rows = []
-    for _, row in tqdm(input_df.iterrows(), total=len(input_df), desc="Processing structures into windows"):
+    tasks_for_pool = []
+
+    for _, row in input_df.iterrows():
         original_id = row[id_col_for_df_access]
         structure = row[structure_col_name_for_df_access]
         
         if not isinstance(structure, str):
             print(f"Skipping ID {original_id}: structure is not a string (found {type(structure)}).")
+            log_information(log_path, {"skipped_non_string_structure": f"ID {original_id}"})
             continue
 
         original_len = len(structure)
 
-        other_cols_data = {col: row[col] for col in cols_to_keep_in_output if col != id_col_for_df_access and col in row}
-        # Ensure the ID column itself is correctly named in the output, matching the input --id-column arg
-        other_cols_data[args.id_column] = original_id
+        # Prepare data from other columns to be kept.
+        # This data is specific to this row.
+        other_cols_data_for_this_row = {col_name: row[col_name] for col_name in propagate_col_names if col_name in row}
+        # The ID itself (original_id) will be handled by process_structure_to_windows_wrapper
+        # to ensure it's correctly named as args.id_column in the final output structure.
+        # However, process_structure_to_windows expects the ID column data within other_kept_cols_data
+        # with the key being args.id_column.
 
-
-        generated_windows = process_structure_to_windows(
+        task_args = (
             original_id,
             structure,
             original_len,
-            other_cols_data,
+            other_cols_data_for_this_row, # Pass the data for other columns
             args.L,
             args.keep_paired_neighbors,
-            args.mask_threshold
+            args.mask_threshold,
+            args.id_column # Pass the target name for the ID column
         )
-        all_window_rows.extend(generated_windows)
+        tasks_for_pool.append(task_args)
+
+    if tasks_for_pool:
+        if args.num_workers > 1:
+            try:
+                set_start_method('spawn', force=True)
+            except RuntimeError as e:
+                print(f"Note: Could not set multiprocessing start method to 'spawn': {e}")
+                pass
+            
+            with Pool(args.num_workers) as pool:
+                for window_list_result in tqdm(
+                    pool.imap_unordered(process_structure_to_windows_wrapper, tasks_for_pool),
+                    total=len(tasks_for_pool),
+                    desc="Processing structures into windows (parallel)"
+                ):
+                    all_window_rows.extend(window_list_result)
+        else: # Serial execution if num_workers is 1 or less
+            for task_args in tqdm(tasks_for_pool, desc="Processing structures into windows (serial)"):
+                window_list_result = process_structure_to_windows_wrapper(task_args)
+                all_window_rows.extend(window_list_result)
+    else:
+        print("No valid structures found to process.")
+        log_information(log_path, {"info": "No valid structures to process for windowing."})
 
     output_df = pd.DataFrame(all_window_rows)
     
-    # Reorder columns for consistency: ID, window_start, window_end, window_sequence, original_seq_len, then others
-    leading_cols = [args.id_column, 'window_start', 'window_end', 'window_sequence', 'original_seq_len']
+    # Reorder columns for consistency: ID, window_start, window_end, window_sequence, seq_len, then others
+    leading_cols = [args.id_column, 'window_start', 'window_end', 'window_sequence', 'seq_len'] # Renamed here
     # Get other columns that were actually generated
     other_output_cols = [col for col in output_df.columns if col not in leading_cols]
     final_col_order = leading_cols + sorted(other_output_cols) # Sort other cols alphabetically
