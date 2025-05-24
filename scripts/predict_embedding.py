@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
 
-import sys, os
-# TODO: Remove this when the module is properly installed
+import sys
+import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-import time
-import torch
-import pandas as pd
-from tqdm import tqdm
 import argparse
-from pathlib import Path
+import pandas as pd
+import torch
+from tqdm import tqdm
+from torch.multiprocessing import Pool, set_start_method
+from torch_geometric.data import Batch
 
 from src.model.gin_model import GINModel
 from src.utils import (
-    dotbracket_to_forgi_graph,
-    forgi_graph_to_tensor,
-    log_information,
-    log_setup,
     dotbracket_to_graph,
     graph_to_tensor,
+    dotbracket_to_forgi_graph,
+    forgi_graph_to_tensor,
     read_input_data,
     get_structure_column_name,
+    log_setup,
+    log_information,
     is_valid_dot_bracket
 )
 
-from torch.multiprocessing import Pool, set_start_method
-from torch_geometric.data import Batch  # for batched inference
+# Cache for CPU workers
+_cached_model = None
 
 def load_trained_model(model_path, device='cpu'):
     model = GINModel.load_from_checkpoint(model_path, device)
@@ -33,145 +33,142 @@ def load_trained_model(model_path, device='cpu'):
     model.eval()
     return model
 
-def get_gin_embedding(
-        model,
-        graph_encoding,
-        structure,
-        device
-    ):
+def _preprocess(args):
+    """
+    Worker: dot-bracket string → torch_geometric Data
+    args: (idx, uid, struct, graph_encoding, log_path)
+    """
+    idx, uid, struct, graph_encoding, log_path = args
     try:
-        if not is_valid_dot_bracket(structure):
-            raise ValueError("Invalid dot bracket string")
-    except ValueError as e:
-        return [(None, "")]
-    if graph_encoding == "standard":
-        graph = dotbracket_to_graph(structure)
-        tg = graph_to_tensor(graph)
+        if not is_valid_dot_bracket(struct):
+            raise ValueError("Invalid dot-bracket")
+    except ValueError:
+        log_information(log_path, {"skipped_invalid": f"ID {uid}"})
+        return None
+
+    if graph_encoding == 'standard':
+        graph = dotbracket_to_graph(struct)
+        data  = graph_to_tensor(graph)
     else:
-        graph = dotbracket_to_forgi_graph(structure)
-        tg = forgi_graph_to_tensor(graph)
-    if graph is None or tg is None:
-        return [(None, "")]
-    tg = tg.to(device)
+        graph = dotbracket_to_forgi_graph(struct)
+        data  = forgi_graph_to_tensor(graph)
+
+    if graph is None or data is None:
+        log_information(log_path, {"skipped_graph_fail": f"ID {uid}"})
+        return None
+
+    return (idx, uid, data)
+
+def _cpu_embed(args):
+    """
+    Worker: single-graph inference on CPU via forward_once
+    args: (idx, uid, data, model_path, log_path)
+    """
+    idx, uid, data, model_path, log_path = args
+    global _cached_model
+    if _cached_model is None:
+        _cached_model = load_trained_model(model_path, 'cpu')
+    model = _cached_model
+
     with torch.no_grad():
-        emb = model.forward_once(tg)
-        return [(None, ','.join(f'{x:.6f}' for x in emb.cpu().numpy().flatten()))]
-
-def generate_embedding_for_row(args_tuple):
-    # (kept for backward compatibility; not used in batched mode)
-    (
-        original_row_index,
-        unique_id,
-        structure_string,
-        model_path,
-        graph_encoding_method,
-        device_to_use,
-    ) = args_tuple
-
-    model_instance = load_trained_model(model_path, device_to_use)
-    embedding_results = get_gin_embedding(
-        model_instance,
-        graph_encoding_method,
-        structure_string,
-        device_to_use
-    )
-    return [(original_row_index, unique_id, emb_str) for _, emb_str in embedding_results]
+        emb = model.forward_once(data)
+    vec = emb.cpu().numpy().flatten()
+    emb_str = ','.join(f'{x:.6f}' for x in vec)
+    return (idx, uid, emb_str)
 
 def generate_embeddings(
-        input_df,
-        output_path,
-        model_path,
-        log_path,
-        structure_column,
-        id_column,
-        device='cpu',
-        num_workers=4,
-        keep_cols=None
+        input_df: pd.DataFrame,
+        output_path: str,
+        model_path: str,
+        log_path: str,
+        structure_column: str,
+        id_column: str,
+        device: str        = 'cpu',
+        num_workers: int   = 4,
+        batch_size: int    = 32,
+        keep_cols: str     = None
 ):
-    # Resolve columns to carry through
-    final_keep_cols = [id_column]
-    if 'seq_len' in input_df.columns:
-        final_keep_cols.append('seq_len')
-    if keep_cols:
-        for col in [c.strip() for c in keep_cols.split(',')]:
-            if col in input_df.columns and col not in final_keep_cols:
-                final_keep_cols.append(col)
+    # Setup logging
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    log_setup(log_path)
 
-    # Load model once on CPU to get graph encoding metadata
-    temp_model = load_trained_model(model_path, 'cpu')
-    graph_encoding = temp_model.metadata.get('graph_encoding', 'standard')
+    # Decide which columns to carry through
+    final_keep = [id_column]
+    if 'seq_len' in input_df.columns:
+        final_keep.append('seq_len')
+    if keep_cols:
+        for c in [c.strip() for c in keep_cols.split(',')]:
+            if c in input_df.columns and c not in final_keep:
+                final_keep.append(c)
+
+    # Load model once on CPU to inspect metadata
+    temp_model     = load_trained_model(model_path, 'cpu')
+    graph_encoding = getattr(temp_model.metadata, 'graph_encoding', 'standard')
     del temp_model
 
-    # --- Begin: batch feed-forward implementation ---
-    data_list = []
-    meta_list = []
-    for idx, row in input_df.iterrows():
-        uid = row[id_column]
-        struct = row[structure_column]
-        try:
-            if not is_valid_dot_bracket(struct):
-                raise ValueError("Invalid dot-bracket string")
-        except ValueError as e:
-            print(f"Skipping ID {uid}: {e}")
-            log_information(log_path, {"skipped_invalid_structure": f"ID {uid}"})
-            continue
+    # 1) Preprocess all rows in parallel
+    tasks = [
+        (idx, row[id_column], row[structure_column], graph_encoding, log_path)
+        for idx, row in input_df.iterrows()
+    ]
+    with Pool(num_workers) as pool:
+        preproc = pool.map(_preprocess, tasks)
+    preproc = [x for x in preproc if x is not None]
 
-        if graph_encoding == 'standard':
-            graph = dotbracket_to_graph(struct)
-            data = graph_to_tensor(graph)
-        else:
-            graph = dotbracket_to_forgi_graph(struct)
-            data = forgi_graph_to_tensor(graph)
-
-        if graph is None or data is None:
-            print(f"Skipping ID {uid}: graph conversion failed")
-            log_information(log_path, {"skipped_graph_conversion": f"ID {uid}"})
-            continue
-
-        data_list.append(data)
-        meta_list.append((idx, uid))
-
-    if not data_list:
-        print("No valid structures to process for embeddings.")
-        log_information(log_path, {"info": "No valid structures"}, "generate_embeddings")
+    if not preproc:
+        print("No valid structures to process.")
         return
 
-    # Batch all graphs in one forward pass
-    batch = Batch.from_data_list(data_list).to(device)
-    model = load_trained_model(model_path, device)
-    with torch.no_grad():
-        # Depending on model API: .forward_once for single vs .forward for batch
-        try:
-            emb_tensor = model.forward(batch)
-        except TypeError:
-            # fallback to forward_once if batch API not supported
-            emb_tensor = torch.stack([model.forward_once(d.to(device)) for d in data_list], dim=0)
-    emb_np = emb_tensor.cpu().numpy()
+    meta_list = [(idx, uid) for idx, uid, _ in preproc]
+    data_list = [data      for _, _, data in preproc]
 
-    all_embedding_results = []
-    for (orig_idx, uid), vec in zip(meta_list, emb_np):
-        emb_str = ','.join(f'{x:.6f}' for x in vec.flatten())
-        all_embedding_results.append((orig_idx, uid, emb_str))
-    # --- End: batch feed-forward implementation ---
+    # 2) Inference
+    embedding_results = []
 
-    # Assemble and write output
-    output_rows = []
-    for orig_idx, uid, emb_str in all_embedding_results:
-        if emb_str == "":
-            log_information(log_path, {"skipped_empty_embedding": f"ID {uid}"})
+    if device.lower() == 'cpu':
+        # CPU: one worker per graph, using forward_once
+        cpu_tasks = [
+            (idx, uid, data, model_path, log_path)
+            for (idx, uid), data in zip(meta_list, data_list)
+        ]
+        with Pool(num_workers) as pool:
+            embedding_results = pool.map(_cpu_embed, cpu_tasks)
+    else:
+        # GPU: batched forward passes
+        model = load_trained_model(model_path, device)
+        for start in range(0, len(data_list), batch_size):
+            chunk = data_list[start:start + batch_size]
+            metas = meta_list[start:start + batch_size]
+            batch = Batch.from_data_list(chunk).to(device)
+            with torch.no_grad():
+                try:
+                    out = model(batch)
+                except TypeError:
+                    # fallback if .forward accepts only single graphs
+                    out = torch.stack([model.forward_once(d.to(device)) for d in chunk], dim=0)
+            emb_np = out.cpu().numpy()
+            for (idx, uid), vec in zip(metas, emb_np):
+                emb_str = ','.join(f'{x:.6f}' for x in vec.flatten())
+                embedding_results.append((idx, uid, emb_str))
+
+    # 3) Assemble and write output
+    rows = []
+    for idx, uid, emb_str in embedding_results:
+        if not emb_str:
+            log_information(log_path, {"skipped_empty": f"ID {uid}"})
             continue
         try:
-            base = input_df.loc[orig_idx]
+            base = input_df.loc[idx]
         except KeyError:
-            log_information(log_path, {"warning": f"Row {orig_idx} not found after embedding"})
+            log_information(log_path, {"warning": f"Row {idx} missing after embedding"})
             continue
-        row_out = {c: base[c] for c in final_keep_cols if c in base}
-        row_out['embedding_vector'] = emb_str
-        output_rows.append(row_out)
+        out = {c: base[c] for c in final_keep if c in base}
+        out['embedding_vector'] = emb_str
+        rows.append(out)
 
-    out_df = pd.DataFrame(output_rows)
+    out_df = pd.DataFrame(rows)
 
-    # Reorder: id, optional window columns, embedding_vector, then the rest
+    # Reorder: id, optional window_{start,end}, embedding_vector, then the rest
     cols = [id_column]
     if 'window_start' in out_df.columns:
         cols.append('window_start')
@@ -182,8 +179,8 @@ def generate_embeddings(
     out_df = out_df[cols + sorted(others)]
 
     out_df.to_csv(output_path, sep='\t', index=False, na_rep='NaN')
+    log_information(log_path, {"num_embeddings": len(out_df)}, "generate_embeddings")
     print(f"Embeddings saved to {output_path}")
-    log_information(log_path, {"num_embeddings_generated": len(out_df)}, "generate_embeddings")
 
 if __name__ == "__main__":
     try:
@@ -192,39 +189,24 @@ if __name__ == "__main__":
         pass
 
     parser = argparse.ArgumentParser(
-        description="Generate GIN embeddings from RNA secondary structures (batched inference)."
+        description="Generate GIN embeddings from RNA secondary structures."
     )
-    # Input/output arguments
-    parser.add_argument('--input',               type=str, required=True,
-                        help="Path to input TSV/CSV file.")
-    parser.add_argument('--output',              type=str, required=True,
-                        help="Path to output TSV file for embeddings.")
-    parser.add_argument('--model-path',          type=str, required=True,
-                        help="Path to the trained GIN model checkpoint.")
-    # Columns
-    parser.add_argument('--id-column',           type=str, required=True,
-                        help="Name of the column with unique IDs.")
-    parser.add_argument('--structure-column-name', type=str,
-                        help="Name of the column with secondary structures.")
-    parser.add_argument('--structure-column-num',  type=int,
-                        help="0-based index of the structure column, if no header.")
-    parser.add_argument('--header',              type=str, default='True', choices=['True','False','true','false'],
-                        help="Whether the input file has a header row.")
-    parser.add_argument('--keep-cols',           type=str,
-                        help="Comma-separated list of additional columns to carry through.")
-    # Inference settings
-    parser.add_argument('--device',              type=str, default="cpu",
-                        help="Device for model inference ('cpu' or 'cuda').")
-    parser.add_argument('--num-workers',         type=int, default=4,
-                        help="(Unused) Number of worker processes (retained for compatibility).")
+    parser.add_argument('--input',                type=str,   required=True)
+    parser.add_argument('--output',               type=str,   required=True)
+    parser.add_argument('--model-path',           type=str,   required=True)
+    parser.add_argument('--id-column',            type=str,   required=True)
+    parser.add_argument('--structure-column-name',type=str)
+    parser.add_argument('--structure-column-num', type=int)
+    parser.add_argument('--header',               type=str,   default='True',
+                        choices=['True','False','true','false'])
+    parser.add_argument('--keep-cols',            type=str)
+    parser.add_argument('--device',               type=str,   default='cpu',
+                        help="Device for inference: 'cpu' or 'cuda'")
+    parser.add_argument('--num-workers',          type=int,   default=4)
+    parser.add_argument('--batch-size',           type=int,   default=32)
 
     args = parser.parse_args()
     args.header = args.header.lower() == 'true'
-
-    # Prepare logging and data
-    os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
-    log_path = os.path.splitext(args.output)[0] + '.log'
-    log_setup(log_path)
 
     df = read_input_data(
         args.input,
@@ -238,6 +220,7 @@ if __name__ == "__main__":
         col_num=args.structure_column_num
     )
 
+    log_path = os.path.splitext(args.output)[0] + '.log'
     generate_embeddings(
         input_df=df,
         output_path=args.output,
@@ -247,6 +230,6 @@ if __name__ == "__main__":
         id_column=args.id_column,
         device=args.device,
         num_workers=args.num_workers,
+        batch_size=args.batch_size,
         keep_cols=args.keep_cols
     )
-

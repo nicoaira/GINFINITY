@@ -149,7 +149,8 @@ process GENERATE_EMBEDDINGS {
       ${!params.subgraphs && params.structure_column_num ? "--structure_column_num ${params.structure_column_num}" : ''} \
       --header true \
       --device ${params.device} \
-      --num-workers ${params.num_workers}
+      --num-workers ${params.num_workers} \
+      --batch-size 1024 \
     """
 }
 
