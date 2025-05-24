@@ -50,11 +50,17 @@ if ( !file(params.input).exists() )
 // ───────────────────────────────────────────────────────────
 process GENERATE_WINDOWS {
     tag "generate_windows"
-    cpus    14
+    cpus 14
+
+    // initialize BLAS thread limits before running the script
+    beforeScript 'export OMP_NUM_THREADS=1; export MKL_NUM_THREADS=1'
+
     input:
     path orig_tsv
+
     output:
     path "windows.tsv", emit: windowed_structures
+
     script:
     """
     python3 ${baseDir}/modules/generate_windows.py \
@@ -62,7 +68,7 @@ process GENERATE_WINDOWS {
       --output windows.tsv \
       --id-column ${params.id_column} \
       --structure-column-name ${params.structure_column_name} \
-      ${params.structure_column_num ? "--structure_column_num ${params.structure_column_num}" : ''} \
+      ${params.structure_column_num ? "--structure-column-num ${params.structure_column_num}" : ''} \
       --header ${params.header} \
       --L ${params.L} \
       ${params.keep_paired_neighbors ? '--keep-paired-neighbors' : ''} \
@@ -71,6 +77,7 @@ process GENERATE_WINDOWS {
       --num-workers ${task.cpus}
     """
 }
+
 
 // ───────────────────────────────────────────────────────────
 // 0)  Extract lightweight metadata (ID → sequences + structure)
