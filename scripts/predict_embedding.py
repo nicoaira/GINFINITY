@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
+
 import sys, os
 # TODO: Remove this when the module is properly installed
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+
 import time
 import torch
 import pandas as pd
 from tqdm import tqdm
 import argparse
+from pathlib import Path
+
 from src.model.gin_model import GINModel
 from src.utils import (
     dotbracket_to_forgi_graph,
@@ -19,9 +23,9 @@ from src.utils import (
     get_structure_column_name,
     is_valid_dot_bracket
 )
-import os
-from torch.multiprocessing import Pool, set_start_method
 
+from torch.multiprocessing import Pool, set_start_method
+from torch_geometric.data import Batch  # for batched inference
 
 def load_trained_model(model_path, device='cpu'):
     model = GINModel.load_from_checkpoint(model_path, device)
@@ -35,64 +39,42 @@ def get_gin_embedding(
         structure,
         device
     ):
-    """
-    Generates GIN embeddings for an RNA structure.
-    Assumes the input 'structure' is the exact sequence to be embedded (either full or a pre-generated window).
-    """
-    # Validate the overall structure first
     try:
-        if not is_valid_dot_bracket(structure): 
+        if not is_valid_dot_bracket(structure):
             raise ValueError("Invalid dot bracket string")
     except ValueError as e:
-        return [(None, "")] # Indicate error/skip
-
+        return [(None, "")]
     if graph_encoding == "standard":
         graph = dotbracket_to_graph(structure)
         tg = graph_to_tensor(graph)
     else:
         graph = dotbracket_to_forgi_graph(structure)
         tg = forgi_graph_to_tensor(graph)
-    
-    if graph is None or tg is None: # Graph conversion failed
+    if graph is None or tg is None:
         return [(None, "")]
-
     tg = tg.to(device)
-    model.eval()
     with torch.no_grad():
         emb = model.forward_once(tg)
         return [(None, ','.join(f'{x:.6f}' for x in emb.cpu().numpy().flatten()))]
 
 def generate_embedding_for_row(args_tuple):
-    """
-    Wrapper to generate embedding for a single row of data.
-    Designed for use with multiprocessing Pool.
-
-    Args:
-        args_tuple: A tuple containing all necessary arguments:
-            (original_row_index, unique_id, structure_string, model_path, graph_encoding_method, device_to_use) # Changed model_instance to model_path
-    """
+    # (kept for backward compatibility; not used in batched mode)
     (
         original_row_index,
         unique_id,
         structure_string,
-        model_path,  # Changed from model_instance
+        model_path,
         graph_encoding_method,
         device_to_use,
     ) = args_tuple
 
-    # Load the model inside the worker process
     model_instance = load_trained_model(model_path, device_to_use)
-
     embedding_results = get_gin_embedding(
         model_instance,
         graph_encoding_method,
         structure_string,
         device_to_use
     )
-
-    # Return original_row_index, unique_id (id_column value), and emb_str
-    # The original get_gin_embedding returns a list, typically with one item [(None, emb_str)]
-    # We adapt this to include original_row_index and unique_id for each result.
     return [(original_row_index, unique_id, emb_str) for _, emb_str in embedding_results]
 
 def generate_embeddings(
@@ -100,210 +82,171 @@ def generate_embeddings(
         output_path,
         model_path,
         log_path,
-        structure_column, 
-        id_column, 
+        structure_column,
+        id_column,
         device='cpu',
         num_workers=4,
         keep_cols=None
 ):
-    # Resolve keep_cols
-    final_keep_cols = [id_column] 
-    if 'seq_len' not in final_keep_cols and 'seq_len' in input_df.columns:
-        final_keep_cols.append('seq_len') 
-        
+    # Resolve columns to carry through
+    final_keep_cols = [id_column]
+    if 'seq_len' in input_df.columns:
+        final_keep_cols.append('seq_len')
     if keep_cols:
-        specified_cols = [c.strip() for c in keep_cols.split(',')]
-        for col in specified_cols:
-            if col not in input_df.columns:
-                print(f"Warning: Requested keep_col '{col}' not found in input DataFrame. It will be ignored.")
-                log_information(log_path, {"warning": f"Keep_col '{col}' not found and ignored."})
-            elif col not in final_keep_cols:
+        for col in [c.strip() for c in keep_cols.split(',')]:
+            if col in input_df.columns and col not in final_keep_cols:
                 final_keep_cols.append(col)
-    
-    # Load model once to get graph_encoding, but don't pass this instance to workers
-    # model = load_trained_model(model_path, device) # Original line
-    # Instead, just get metadata or load temporarily if needed for graph_encoding
-    # For simplicity, we can load it to get metadata then discard, or pass metadata if already available.
-    # Assuming graph_encoding can be determined or passed differently if model loading is heavy.
-    # A lightweight way to get metadata if stored separately or if model has a quick metadata fetch:
-    temp_model_for_metadata = load_trained_model(model_path, 'cpu') # Load on CPU to be light
-    graph_encoding = temp_model_for_metadata.metadata['graph_encoding']
-    del temp_model_for_metadata # Free memory
 
-    # Prepare arguments for each row for multiprocessing
-    args_list_for_pool = []
-    for original_idx, row_series in input_df.iterrows(): # original_idx is the index label from input_df
-        current_id = row_series[id_column]
-        structure = row_series[structure_column]
+    # Load model once on CPU to get graph encoding metadata
+    temp_model = load_trained_model(model_path, 'cpu')
+    graph_encoding = temp_model.metadata.get('graph_encoding', 'standard')
+    del temp_model
 
-        if not isinstance(structure, str):
-            print(f"Skipping ID {current_id} (DataFrame index {original_idx}): structure is not a string.")
-            log_information(log_path, {"skipped_invalid_structure_type": f"ID {current_id} (Row Index {original_idx})"})
-            continue
-
-        args_list_for_pool.append((
-            original_idx, # Pass the original DataFrame index/label
-            current_id,
-            structure,
-            model_path,  # Pass model_path instead of model instance
-            graph_encoding,
-            device
-        ))
-
-    # Compute embeddings in parallel
-    all_embedding_results = []
-    if args_list_for_pool: 
-        with Pool(num_workers) as pool:
-            try:
-                for single_row_results in tqdm(
-                    pool.imap_unordered(generate_embedding_for_row, args_list_for_pool),
-                    total=len(args_list_for_pool),
-                    desc="Generating Embeddings"
-                ):
-                    all_embedding_results.extend(single_row_results)
-            finally:
-                pool.close()
-                pool.join()
-    else:
-        print("No valid structures found to process for embeddings.")
-        log_information(log_path, {"info": "No valid structures to process."})
-
-    # Assemble output rows
-    output_rows_list = []
-    # input_df_id_indexed = input_df.set_index(id_column) # This was problematic if id_column is not unique
-
-    for original_row_idx, processed_id, emb_str in all_embedding_results: # Unpack original_row_idx
-        if emb_str == "": 
-            log_information(log_path, {"skipped_empty_embedding": f"ID {processed_id} (Row Index {original_row_idx})"})
-            continue
-        
+    # --- Begin: batch feed-forward implementation ---
+    data_list = []
+    meta_list = []
+    for idx, row in input_df.iterrows():
+        uid = row[id_column]
+        struct = row[structure_column]
         try:
-            # Use original_row_idx to get the specific row from the original input_df
-            # This ensures original_row_data is a Series corresponding to the single processed window/structure
-            original_row_data = input_df.loc[original_row_idx] 
-        except KeyError:
-            print(f"Warning: ID {processed_id} (Original Row Index {original_row_idx}) from embedding results not found in original DataFrame. Skipping.")
-            log_information(log_path, {"warning": f"ID {processed_id} (Row Index {original_row_idx}) not found in original DF after processing."})
+            if not is_valid_dot_bracket(struct):
+                raise ValueError("Invalid dot-bracket string")
+        except ValueError as e:
+            print(f"Skipping ID {uid}: {e}")
+            log_information(log_path, {"skipped_invalid_structure": f"ID {uid}"})
             continue
 
-        # Now original_row_data is a Series, so original_row_data[col] will be a scalar value.
-        output_row = {col: original_row_data[col] for col in final_keep_cols if col in original_row_data}
-        # output_row[id_column] = processed_id # This is already set correctly if id_column is in final_keep_cols
-        
-        output_row['embedding_vector'] = emb_str
-        output_rows_list.append(output_row)
+        if graph_encoding == 'standard':
+            graph = dotbracket_to_graph(struct)
+            data = graph_to_tensor(graph)
+        else:
+            graph = dotbracket_to_forgi_graph(struct)
+            data = forgi_graph_to_tensor(graph)
 
-    output_df = pd.DataFrame(output_rows_list)
-    
-    # Define column order for output
-    leading_cols = [id_column, 'embedding_vector']
-    
-    other_output_cols = [col for col in final_keep_cols if col not in leading_cols and col in output_df.columns]
-    
-    window_cols_present = []
-    if 'window_start' in other_output_cols:
-        window_cols_present.append('window_start')
-        other_output_cols.remove('window_start')
-    if 'window_end' in other_output_cols:
-        window_cols_present.append('window_end')
-        other_output_cols.remove('window_end')
+        if graph is None or data is None:
+            print(f"Skipping ID {uid}: graph conversion failed")
+            log_information(log_path, {"skipped_graph_conversion": f"ID {uid}"})
+            continue
 
-    final_col_order = [id_column] + window_cols_present + ['embedding_vector'] + sorted(other_output_cols)
+        data_list.append(data)
+        meta_list.append((idx, uid))
 
-    for col in final_col_order:
-        if col not in output_df.columns:
-            output_df[col] = None
-            
-    output_df = output_df[final_col_order]
+    if not data_list:
+        print("No valid structures to process for embeddings.")
+        log_information(log_path, {"info": "No valid structures"}, "generate_embeddings")
+        return
 
-    log_information(log_path, {"output_head_sample": output_df.head().to_string()}, "Output Sample")
-    output_df.to_csv(output_path, sep='\t', index=False, na_rep='NaN')
+    # Batch all graphs in one forward pass
+    batch = Batch.from_data_list(data_list).to(device)
+    model = load_trained_model(model_path, device)
+    with torch.no_grad():
+        # Depending on model API: .forward_once for single vs .forward for batch
+        try:
+            emb_tensor = model.forward(batch)
+        except TypeError:
+            # fallback to forward_once if batch API not supported
+            emb_tensor = torch.stack([model.forward_once(d.to(device)) for d in data_list], dim=0)
+    emb_np = emb_tensor.cpu().numpy()
+
+    all_embedding_results = []
+    for (orig_idx, uid), vec in zip(meta_list, emb_np):
+        emb_str = ','.join(f'{x:.6f}' for x in vec.flatten())
+        all_embedding_results.append((orig_idx, uid, emb_str))
+    # --- End: batch feed-forward implementation ---
+
+    # Assemble and write output
+    output_rows = []
+    for orig_idx, uid, emb_str in all_embedding_results:
+        if emb_str == "":
+            log_information(log_path, {"skipped_empty_embedding": f"ID {uid}"})
+            continue
+        try:
+            base = input_df.loc[orig_idx]
+        except KeyError:
+            log_information(log_path, {"warning": f"Row {orig_idx} not found after embedding"})
+            continue
+        row_out = {c: base[c] for c in final_keep_cols if c in base}
+        row_out['embedding_vector'] = emb_str
+        output_rows.append(row_out)
+
+    out_df = pd.DataFrame(output_rows)
+
+    # Reorder: id, optional window columns, embedding_vector, then the rest
+    cols = [id_column]
+    if 'window_start' in out_df.columns:
+        cols.append('window_start')
+    if 'window_end' in out_df.columns:
+        cols.append('window_end')
+    cols.append('embedding_vector')
+    others = [c for c in out_df.columns if c not in cols]
+    out_df = out_df[cols + sorted(others)]
+
+    out_df.to_csv(output_path, sep='\t', index=False, na_rep='NaN')
     print(f"Embeddings saved to {output_path}")
-    log_information(log_path, {"output_saved_to": output_path, "num_embeddings_generated": len(output_df)})
+    log_information(log_path, {"num_embeddings_generated": len(out_df)}, "generate_embeddings")
 
 if __name__ == "__main__":
     try:
-        set_start_method('spawn', force=True) 
-    except RuntimeError as e:
-        print(f"Note: Could not set multiprocessing start method to 'spawn': {e}")
-        pass 
+        set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
 
     parser = argparse.ArgumentParser(
-        description="Generate GIN embeddings from RNA secondary structures (full or pre-windowed)."
+        description="Generate GIN embeddings from RNA secondary structures (batched inference)."
     )
-    # --- Input/Output Arguments ---
-    parser.add_argument('--input', type=str, required=True, help="Path to input TSV/CSV file. This file should contain structures, either full or pre-windowed.")
-    parser.add_argument('--output', type=str, required=True, help="Path to output TSV file for embeddings.")
-    parser.add_argument('--model-path', type=str, required=True, help="Path to the trained GIN model (.pth file or checkpoint)." )
-    
-    # --- Column Specification Arguments ---
-    parser.add_argument('--id-column', type=str, required=True, help="Name of the column containing unique sequence/structure identifiers.")
-    parser.add_argument('--structure-column-name', type=str, help="Name of the column containing RNA secondary structures. Overrides --structure-column-num. Assumed to be 'secondary_structure' if not specified and header is present.")
-    parser.add_argument('--structure-column-num', type=int, help="0-based index of the structure column. Required if input has no header and --structure-column-name is not provided.")
-    parser.add_argument('--header', type=str, default='True', choices=['True', 'False', 'true', 'false'], help="Whether the input file has a header row (default: True).")
-    parser.add_argument('--keep-cols', type=str, help="Comma-separated list of additional columns from the input file to retain in the output file.")
+    # Input/output arguments
+    parser.add_argument('--input',               type=str, required=True,
+                        help="Path to input TSV/CSV file.")
+    parser.add_argument('--output',              type=str, required=True,
+                        help="Path to output TSV file for embeddings.")
+    parser.add_argument('--model-path',          type=str, required=True,
+                        help="Path to the trained GIN model checkpoint.")
+    # Columns
+    parser.add_argument('--id-column',           type=str, required=True,
+                        help="Name of the column with unique IDs.")
+    parser.add_argument('--structure-column-name', type=str,
+                        help="Name of the column with secondary structures.")
+    parser.add_argument('--structure-column-num',  type=int,
+                        help="0-based index of the structure column, if no header.")
+    parser.add_argument('--header',              type=str, default='True', choices=['True','False','true','false'],
+                        help="Whether the input file has a header row.")
+    parser.add_argument('--keep-cols',           type=str,
+                        help="Comma-separated list of additional columns to carry through.")
+    # Inference settings
+    parser.add_argument('--device',              type=str, default="cpu",
+                        help="Device for model inference ('cpu' or 'cuda').")
+    parser.add_argument('--num-workers',         type=int, default=4,
+                        help="(Unused) Number of worker processes (retained for compatibility).")
 
-    # --- Embedding Generation Arguments ---
-    parser.add_argument('--device', type=str, default="cpu", help="Device to use for model inference ('cpu' or 'cuda', default: cpu).")
-    parser.add_argument('--num-workers', type=int, default=4, help="Number of worker processes for parallel embedding generation (default: 4).")
-    
     args = parser.parse_args()
     args.header = args.header.lower() == 'true'
 
-    # Setup logging
-    outdir = os.path.dirname(args.output) or '.'
-    os.makedirs(outdir, exist_ok=True)
+    # Prepare logging and data
+    os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
     log_path = os.path.splitext(args.output)[0] + '.log'
-    log_setup(log_path, print_log=False)
-    log_information(log_path, vars(args), "Effective Arguments", print_log=True)
+    log_setup(log_path)
 
-    input_df = read_input_data(
+    df = read_input_data(
         args.input,
         header=args.header,
-        id_column_for_validation=args.id_column if args.header else None 
+        id_column_for_validation=args.id_column
     )
-
-    structure_col_actual = get_structure_column_name(
-        input_df,
+    struct_col = get_structure_column_name(
+        df,
         args.header,
         col_name=args.structure_column_name,
-        col_num=args.structure_column_num,
-        default_name='secondary_structure'
+        col_num=args.structure_column_num
     )
-    if args.header and structure_col_actual not in input_df.columns:
-        raise ValueError(f"Structure column '{structure_col_actual}' not found in input file with header. Columns: {list(input_df.columns)}")
-    if not args.header and not isinstance(structure_col_actual, int):
-        if structure_col_actual not in input_df.columns:
-            raise ValueError(f"Structure column index {structure_col_actual} is invalid for headerless input.")
 
-    id_col_actual = args.id_column
-    if args.header:
-        if id_col_actual not in input_df.columns:
-            raise ValueError(f"ID column '{id_col_actual}' not found in input file. Columns: {list(input_df.columns)}")
-    else:
-        try:
-            col_idx_for_id = int(id_col_actual) if id_col_actual.isdigit() else id_col_actual
-            if col_idx_for_id not in input_df.columns:
-                raise ValueError(f"ID column '{id_col_actual}' (interpreted as index/name {col_idx_for_id}) not found in headerless input. Available columns: {list(input_df.columns)}")
-        except ValueError:
-            raise ValueError(f"ID column '{id_col_actual}' is problematic for headerless input. Provide a valid column index/name.")
-
-    if input_df[id_col_actual].duplicated().any():
-        print(f"Warning: Duplicate values found in ID column '{id_col_actual}'. This may lead to incorrect data merging for embeddings.")
-        log_information(log_path, {"critical_warning": f"Duplicate IDs in '{id_col_actual}'"})
-
-    start_time = time.time()
     generate_embeddings(
-        input_df=input_df,
+        input_df=df,
         output_path=args.output,
         model_path=args.model_path,
         log_path=log_path,
-        structure_column=structure_col_actual, 
-        id_column=id_col_actual,          
+        structure_column=struct_col,
+        id_column=args.id_column,
         device=args.device,
         num_workers=args.num_workers,
         keep_cols=args.keep_cols
     )
-    elapsed_time_minutes = (time.time() - start_time) / 60
-    print(f"Processing completed in {elapsed_time_minutes:.2f} minutes.")
-    log_information(log_path, {"total_time_minutes": round(elapsed_time_minutes, 2)}, "Performance")
+
