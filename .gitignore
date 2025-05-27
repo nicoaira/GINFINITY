@@ -11,6 +11,8 @@ output/
 *.json
 plots/
 data/*
+logs/
+src/hp/hp_results/
 launch.json
 .vscode/
 benchmarking_results-*
