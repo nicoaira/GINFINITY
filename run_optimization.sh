@@ -2,7 +2,7 @@
 #SBATCH --job-name=gin_hp
 #SBATCH --output=logs/%A_%a.out
 #SBATCH --error=logs/%A_%a.err
-#SBATCH --array=0-59
+#SBATCH --array=0-26
 #SBATCH --time=04:00:00          # Hasta 4 horas por combinación
 #SBATCH --mem=20G                # 20 GB de RAM
 #SBATCH --partition=short
