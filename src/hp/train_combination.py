@@ -17,6 +17,7 @@ from train_model import (
     log_setup,
     log_information
 )
+from filelock import FileLock
 
 project_root = get_project_root()
 
@@ -29,7 +30,7 @@ def parse_args():
     parser.add_argument("--val_path", type=str, required=True, default="example_data/val_dataset.csv")
     parser.add_argument("--output_dim", type=int, default=128)
     parser.add_argument("--batch_size", type=int, default=100)
-    parser.add_argument("--num_epochs", type=int, default=3)
+    parser.add_argument("--num_epochs", type=int, default=10)
     parser.add_argument("--patience", type=int, default=2)
     parser.add_argument("--min_delta", type=float, default=0.005)
     parser.add_argument("--graph_encoding", type=str, default="standard")
@@ -38,7 +39,7 @@ def parse_args():
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--decay_rate", type=float, default=0.95)
     parser.add_argument("--results_csv", type=str, default="hp_results/parallel_grid_results.csv")
-    parser.add_argument('--benchmark_datasets', type=str, default='hard_rfam_benchmark_big', help='Benchmark datasets to use for evaluation.')
+    parser.add_argument('--benchmark_datasets', type=str, default='sampled_artificial_structures_evo_3-v1', help='Benchmark datasets to use for evaluation.')
     return parser.parse_args()
 
 def main():
@@ -84,7 +85,7 @@ def main():
     start_time = time.time()
 
     # Entrenamiento
-    train_model_with_early_stopping(
+    triplet_loss = train_model_with_early_stopping(
         model=model,
         model_id=model_id,
         train_loader=train_loader,
@@ -101,8 +102,8 @@ def main():
     )
 
     # Run benchmark and get average AUCs
-    model_checkpoint_path = f"output/{model_id}/{model_id}.pth"
-    benchmark_results_path = os.path.join(output_dir, "benchmark")
+    model_checkpoint_path = f"{output_dir}/{model_id}.pth"
+    benchmark_results_path = os.path.join(output_dir, "benchmark_",model_id)
     average_aucs = run_benchmark(
         embeddings_script=os.path.join(project_root, "predict_embedding.py"),
         benchmark_datasets=[args.benchmark_datasets],  # Pass as a list
@@ -130,19 +131,6 @@ def main():
         # retries=args.retries  # Pass retries argument
     )
 
-    # Extraer métricas desde el log
-    val_loss = None
-    with open(log_path, 'r') as f:
-        lines = f.readlines()
-        for line in reversed(lines):
-            if "Validation Triplet Loss" in line and val_loss is None:
-                try:
-                    val_loss = float(line.split(":")[-1].strip())
-                except:
-                    val_loss = None
-            if val_loss is not None:
-                break
-
     elapsed = round((time.time() - start_time) / 60, 3)
 
     val_auc = sum(average_aucs) / len(average_aucs)
@@ -153,18 +141,19 @@ def main():
         "hidden_dim": args.hidden_dim,
         "output_dim": args.output_dim,
         "gin_layers": args.gin_layers,
-        "val_triplet_loss": val_loss,
+        "val_triplet_loss": triplet_loss,
         "val_auc": val_auc,
         "time_minutes": elapsed
     }
 
-    df_result = pd.DataFrame([results])
-    if not os.path.exists(args.results_csv):
-        df_result.to_csv(args.results_csv, index=False)
-    else:
-        df_result.to_csv(args.results_csv, mode='a', index=False, header=False)
-
-    print(f"✅ {model_id} terminado. AUC={val_auc}, Loss={val_loss}, Tiempo={elapsed} min")
-
+    lock_path = args.results_csv + '.lock'
+    with FileLock(lock_path):
+        df_result = pd.DataFrame([results])
+        if not os.path.exists(args.results_csv):
+            df_result.to_csv(args.results_csv, index=False)
+        else:
+            df_result.to_csv(args.results_csv, mode='a', index=False, header=False)
+    print(f"✅ {model_id} terminado. AUC={val_auc}, Loss={triplet_loss}, Tiempo={elapsed} min")
+    log_information(log_path, results, "Results")
 if __name__ == "__main__":
     main()
