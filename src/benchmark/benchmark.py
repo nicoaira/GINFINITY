@@ -702,11 +702,11 @@ def run_benchmark(embeddings_script,
                 if not os.path.exists(emb_output_dir):
                     os.makedirs(emb_output_dir)
             else:
-                emb_output_dir = "tmp"
+                emb_output_dir = f"tmp_{results_path}"
                 if not os.path.exists(emb_output_dir):
                     os.makedirs(emb_output_dir)
         else:
-            emb_output_dir = "tmp"
+            emb_output_dir = f"tmp_{results_path}"
             if not os.path.exists(emb_output_dir):
                 os.makedirs(emb_output_dir)
 
