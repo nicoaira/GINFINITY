@@ -44,18 +44,17 @@ def train_model_with_early_stopping(
         criterion,
         num_epochs,
         patience,
-        min_delta,  # Added parameter
+        min_delta,
         device,
         log_path,
         save_best_weights=True,
-        decay_rate=0.1  # Add decay_rate parameter
+        decay_rate=0.1
 ):
     """
-    Train a GIN model with early stopping.
+    Train a GIN model with early stopping and return the best validation loss.
     
-    Args:
-        # ...existing args...
-        min_delta (float): Minimum change in validation loss to qualify as improvement
+    Returns:
+        float: Best validation loss observed during training.
     """
     model.to(device)
     early_stopping = EarlyStopping(patience=patience, min_delta=min_delta)
@@ -104,6 +103,7 @@ def train_model_with_early_stopping(
                 progress_bar_val.set_postfix({"Val Loss": val_loss / (i + 1)})
 
         avg_val_loss = val_loss / len(val_loader)
+
         epoch_log = {
             "Epoch": f"{epoch + 1}/{num_epochs}",
             "Training Loss": f"{running_loss / len(train_loader)}",
@@ -111,7 +111,6 @@ def train_model_with_early_stopping(
             "Best Validation Loss": f"{early_stopping.best_loss}",
             "Early Stopping Counter": f"{early_stopping.counter}/{patience}",
             "Learning Rate": f"{optimizer.param_groups[0]['lr']}"
-            
         }
         log_information(log_path, epoch_log)
         print(f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {running_loss / len(train_loader)}, Validation Loss: {avg_val_loss}")
@@ -140,6 +139,8 @@ def train_model_with_early_stopping(
     print("Training complete.")
 
     save_model_to_local(model, optimizer, epoch, model_id, log_path)
+
+    return best_val_loss
 
 def main():
     # Argument parsing
