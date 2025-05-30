@@ -7,11 +7,11 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 import argparse
 from tqdm import tqdm
-from training.early_stopping import EarlyStopping
-from training.gin_rna_dataset import GINRNADataset
-from model.gin_model import GINModel
-from training.triplet_loss import TripletLoss
-from utils import is_valid_dot_bracket, log_information, log_setup
+from ginfinity.training.early_stopping import EarlyStopping
+from ginfinity.training.gin_rna_dataset import GINRNADataset
+from ginfinity.model.gin_model import GINModel
+from ginfinity.training.triplet_loss import TripletLoss
+from ginfinity.utils import is_valid_dot_bracket, log_information, log_setup
 import time
 
 def remove_invalid_structures(df):

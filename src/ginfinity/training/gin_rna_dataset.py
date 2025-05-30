@@ -1,5 +1,5 @@
 from torch.utils.data import Dataset
-from utils import dotbracket_to_forgi_graph, dotbracket_to_graph, forgi_graph_to_tensor, graph_to_tensor
+from ginfinity.utils import dotbracket_to_forgi_graph, dotbracket_to_graph, forgi_graph_to_tensor, graph_to_tensor
 import pandas as pd
 
 class GINRNADataset(Dataset):

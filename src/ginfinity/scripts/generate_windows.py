@@ -8,7 +8,7 @@ import os
 import torch
 import networkx as nx
 
-from utils import (
+from ginfinity.utils import (
     setup_and_read_input,
     dotbracket_to_graph,
     graph_to_tensor,

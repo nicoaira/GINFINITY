@@ -9,8 +9,8 @@ from tqdm import tqdm
 from torch.multiprocessing import Pool, set_start_method
 from torch_geometric.data import Batch
 
-from model.gin_model import GINModel
-from utils import (
+from ginfinity.model.gin_model import GINModel
+from ginfinity.utils import (
     setup_and_read_input,
     dotbracket_to_graph,
     graph_to_tensor,
