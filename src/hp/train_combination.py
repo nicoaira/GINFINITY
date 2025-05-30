@@ -39,7 +39,7 @@ def parse_args():
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--decay_rate", type=float, default=0.95)
     parser.add_argument("--results_csv", type=str, default="hp_results/parallel_grid_results.csv")
-    parser.add_argument('--benchmark_datasets', type=str, default='rna_artificial_clusters_benchmark-evo-3', help='Benchmark datasets to use for evaluation.')
+    parser.add_argument('--benchmark_datasets', type=str, default='rna_artificial_clusters_benchmark-evo-3-v1', help='Benchmark datasets to use for evaluation.')
     return parser.parse_args()
 
 def main():
