@@ -36,5 +36,11 @@ work/*
 .nextflow*
 nextflow/results/todo.txt
 nextflow/dev/optuna_plots*
+<<<<<<< HEAD
 nextflow/run_transcript_pipeline.sh
 nextflow/report*
+=======
+dev/*
+example_data/*.tsv
+example_data/*.json
+>>>>>>> main
