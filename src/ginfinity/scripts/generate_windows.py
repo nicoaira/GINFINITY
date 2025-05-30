@@ -3,28 +3,31 @@
 import argparse
 import pandas as pd
 from tqdm import tqdm
-
 from multiprocessing import Pool
+import os
+import torch
+import networkx as nx
 
-from utils import setup_and_read_input, dotbracket_to_graph, log_information, is_valid_dot_bracket
+from utils import (
+    setup_and_read_input,
+    dotbracket_to_graph,
+    graph_to_tensor,
+    log_information,
+    is_valid_dot_bracket
+)
 
 def should_skip_window_due_to_low_complexity(window_sequence, mask_threshold):
     """
     Determines if a window should be skipped based on its fraction of paired bases.
     Assumes '(' and ')' are the primary pairing characters.
     """
-    if mask_threshold <= 0:  # No masking if threshold is zero or negative
+    if mask_threshold <= 0:
         return False
-    
-    # Count standard paired bases. Extend this if other characters like [], {} are used for pairs.
     paired_bases = window_sequence.count('(') + window_sequence.count(')')
-    
     total_bases = len(window_sequence)
     if total_bases == 0:
-        return True  # Skip empty windows
-    
-    fraction_paired = paired_bases / total_bases
-    return fraction_paired < mask_threshold
+        return True
+    return (paired_bases / total_bases) < mask_threshold
 
 def generate_slices(G, L, keep_paired_neighbors=True):
     slices = []
@@ -35,16 +38,17 @@ def generate_slices(G, L, keep_paired_neighbors=True):
         sub_nodes = set(window_nodes)
         if keep_paired_neighbors:
             for node in window_nodes:
-                for neighbor in G.neighbors(node):
-                    if G.edges[node, neighbor].get('edge_type') == 'base_pair' and neighbor not in window_nodes:
-                        sub_nodes.add(neighbor)
+                for nbr in G.neighbors(node):
+                    if (G.edges[node, nbr].get('edge_type') == 'base_pair'
+                        and nbr not in sub_nodes):
+                        sub_nodes.add(nbr)
         H = G.subgraph(sub_nodes).copy()
         if keep_paired_neighbors:
             for node in list(H.nodes()):
                 if node not in window_nodes:
-                    for neighbor in list(H.neighbors(node)):
-                        if H.edges[node, neighbor].get('edge_type') == 'adjacent':
-                            H.remove_edge(node, neighbor)
+                    for nbr in list(H.neighbors(node)):
+                        if H.edges[node, nbr].get('edge_type') == 'adjacent':
+                            H.remove_edge(node, nbr)
         slices.append((start, H))
     return slices
 
@@ -57,78 +61,64 @@ def process_structure_to_windows(
     mask_threshold_for_window
 ):
     """
-    Generates windowed sequences from a single RNA structure.
+    Generates windowed subgraphs from a single RNA structure.
+    Returns list of (metadata_dict, networkx_subgraph) tuples.
     """
-    # Validate dot‐bracket
     if not is_valid_dot_bracket(structure_string):
-        # invalid → skip
         return []
-
     graph = dotbracket_to_graph(structure_string)
-    if graph is None or len(graph.nodes()) < window_size_L:
+    if graph is None or len(graph) < window_size_L:
         return []
 
-    window_rows = []
-    slices = generate_slices(graph, window_size_L, keep_paired_neighbors_in_slice)
-    for start_idx, _ in slices:
-        window_sequence = structure_string[start_idx:start_idx + window_size_L]
-        if not window_sequence:
+    out = []
+    for start_idx, H in generate_slices(graph, window_size_L, keep_paired_neighbors_in_slice):
+        subseq = structure_string[start_idx:start_idx + window_size_L]
+        if not subseq:
             continue
-        if should_skip_window_due_to_low_complexity(window_sequence, mask_threshold_for_window):
+        if should_skip_window_due_to_low_complexity(subseq, mask_threshold_for_window):
             continue
-
-        row = {
+        meta = {
             **other_kept_cols_data,
-            'window_start':     start_idx,
-            'window_end':       start_idx + window_size_L - 1,
-            'window_sequence':  window_sequence,
-            'seq_len':          seq_len
+            'window_start': start_idx,
+            'window_end':   start_idx + window_size_L - 1,
+            'seq_len':      seq_len
         }
-        window_rows.append(row)
+        out.append((meta, H))
+    return out
 
-    return window_rows
-
-def process_structure_to_windows_wrapper(args_tuple):
-    original_id, structure_string, seq_len, other_cols, window_L, keep_pairs, mask_thresh, id_col_name = args_tuple
-    # ensure the ID is keyed correctly
-    other_cols = {id_col_name: original_id, **other_cols}
+def process_structure_to_windows_wrapper(args):
+    original_id, struct, seq_len, other, L, kp, mt, id_name = args
+    other = {id_name: original_id, **other}
     return process_structure_to_windows(
-        structure_string,
-        seq_len,
-        other_cols,
-        window_L,
-        keep_pairs,
-        mask_thresh
+        struct, seq_len, other, L, kp, mt
     )
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate windowed sequences from RNA secondary structures provided in a TSV/CSV file. " \
-        "This tool slices RNA structures into overlapping windows of a given length, optionally retains " \
-        "paired neighboring bases, and applies masking based on a specified paired-base threshold."
+        description="Generate windowed subgraphs from RNA structures."
     )
-    parser.add_argument('--input', type=str, required=True,
-                        help="Path to the input TSV/CSV file containing RNA structures.")
-    parser.add_argument('--output', type=str, required=True, default= "./secondary_structure_windows.tsv",
-                        help="Name of the output TSV file to save the windowed sequences. Default is 'secondary_structure_windows.tsv'.")
-    parser.add_argument('--id-column', type=str, required=True,
-                        help="Column name in the input file that uniquely identifies each RNA structure.")
-    parser.add_argument('--structure-column-name', type=str, default="secondary_structure",
-                        help="Column name containing the RNA secondary structure in dot-bracket notation. Default is 'secondary_structure'.")
-    parser.add_argument('--L', type=int, required=True, help="Window size (length) to slice the RNA structure into overlapping segments.")
-    parser.add_argument('--keep-paired-neighbors', action='store_true',
-                        help="If set, include neighboring bases paired to the ones in the window even if they lie outside the main window.")
-    parser.add_argument('--mask-threshold', type=float, default=0.0,
-                        help="Threshold for paired bases fraction below which a window is skipped. A value of 0.0 disables masking.")
-    parser.add_argument('--keep-cols', default=None, type=str,
-                        help="Comma-separated list of additional column names to keep in the output.")
-    parser.add_argument('--num-workers', type=int, default=1,
-                        help="Number of parallel worker processes to use for processing. Use values greater than 1 for parallel execution.")
+    parser.add_argument('--input',       type=str, required=True)
+    parser.add_argument('--output-dir',  type=str, default="windows_output")
+    parser.add_argument('--id-column',   type=str, required=True)
+    parser.add_argument('--structure-column-name', type=str, default="secondary_structure")
+    parser.add_argument('--L',           type=int, required=True)
+    parser.add_argument('--keep-paired-neighbors', action='store_true')
+    parser.add_argument('--mask-threshold', type=float, default=0.0)
+    parser.add_argument('--keep-cols',   type=str, default=None)
+    parser.add_argument('--num-workers', type=int, default=1)
+    parser.add_argument('--quiet',       action='store_true',
+                        help="Suppress progress bars")
     args = parser.parse_args()
-    
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    graphs_pt   = os.path.join(args.output_dir, "windows_graphs.pt")
+    meta_tsv    = os.path.join(args.output_dir, "windows_metadata.tsv")
+    args.output = meta_tsv  # for setup_and_read_input
+
     df, log_path, propagate = setup_and_read_input(args, need_model=False)
 
-    # build tasks
+    keep_cols = propagate if args.keep_cols is None else args.keep_cols.split(',')
+
     tasks = []
     for _, row in df.iterrows():
         struct = row[args.structure_column_name]
@@ -147,34 +137,53 @@ def main():
             args.id_column
         ))
 
-    all_rows = []
-    if tasks:
-        if args.num_workers > 1:
-            # compute a reasonable chunksize
-            chunksize = max(1, len(tasks) // (args.num_workers * 4))
-            with Pool(args.num_workers) as pool:
-                for result in tqdm(
-                    pool.imap_unordered(process_structure_to_windows_wrapper, tasks, chunksize=chunksize),
-                    total=len(tasks),
-                    desc="Windowing structures"
-                ):
-                    all_rows.extend(result)
-        else:
-            for args_tuple in tqdm(tasks, desc="Windowing structures (serial)"):
-                all_rows.extend(process_structure_to_windows_wrapper(args_tuple))
+    all_windows = []
+    if args.num_workers > 1:
+        chunksize = max(1, len(tasks)//(args.num_workers*4))
+        with Pool(args.num_workers) as pool:
+            for result in tqdm(
+                pool.imap_unordered(process_structure_to_windows_wrapper, tasks, chunksize),
+                total=len(tasks),
+                desc="Windowing",
+                disable=args.quiet
+            ):
+                all_windows.extend(result)
     else:
-        print("No valid structures found.")
+        for t in tqdm(tasks, desc="Windowing", disable=args.quiet):
+            all_windows.extend(process_structure_to_windows_wrapper(t))
 
-    out_df = pd.DataFrame(all_rows)
-    leading = [args.id_column, 'window_start', 'window_end', 'window_sequence', 'seq_len']
-    for col in leading:
-        if col not in out_df.columns:
-            out_df[col] = pd.NA
-    others = sorted(c for c in out_df.columns if c not in leading)
-    out_df = out_df[leading + others]
-    out_df.to_csv(args.output, sep='\t', index=False, na_rep='NaN')
-    print(f"Windowed sequences saved to {args.output}")
-    log_information(log_path, {"output": args.output, "n_windows": len(out_df)}, "Summary")
+    graph_map = {}
+    meta_list = []
+    for meta, H in all_windows:
+        wid = f"{meta[args.id_column]}_{meta['window_start']}"
+        # --- relabel to 0..N-1 ---
+        H = nx.convert_node_labels_to_integers(H)
+        data = graph_to_tensor(H)
+        # --- validate edge_index ---
+        max_idx = int(data.edge_index.max())
+        num_nodes = data.num_nodes
+        if max_idx >= num_nodes:
+            raise RuntimeError(f"Bad window {wid}: edge_index.max()={max_idx} >= num_nodes={num_nodes}")
+        graph_map[wid] = data
+        meta['window_id'] = wid
+        row = {k: meta[k] for k in ['window_id', args.id_column, 'window_start', 'window_end', 'seq_len'] + keep_cols if k in meta}
+        meta_list.append(row)
+
+    # save graphs
+    torch.save(graph_map, graphs_pt)
+    if not args.quiet:
+        print(f"Saved {len(graph_map)} graphs to {graphs_pt}")
+
+    # save metadata
+    meta_df = pd.DataFrame(meta_list)
+    leading = ['window_id', args.id_column, 'window_start', 'window_end', 'seq_len']
+    others  = [c for c in meta_df.columns if c not in leading]
+    meta_df = meta_df[leading + others]
+    meta_df.to_csv(meta_tsv, sep='\t', index=False, na_rep='NaN')
+    if not args.quiet:
+        print(f"Saved metadata to {meta_tsv}")
+
+    log_information(log_path, {"graphs":graphs_pt, "metadata":meta_tsv, "n_windows":len(meta_df)}, "Summary")
 
 if __name__ == "__main__":
     main()

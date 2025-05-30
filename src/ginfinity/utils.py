@@ -267,8 +267,9 @@ def setup_and_read_input(args, need_model=False):
     # Logging setup
     os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
     log_path = os.path.splitext(args.output)[0] + '.log'
-    log_setup(log_path, print_log=False)
-    log_information(log_path, vars(args), "Arguments", print_log=True)
+    quiet = getattr(args, "quiet", False)
+    log_setup(log_path, print_log=not quiet)
+    log_information(log_path, vars(args), "Arguments", print_log=not quiet)
 
     # Read data
     sep_char = '\t' if args.input.endswith('.tsv') else ','
