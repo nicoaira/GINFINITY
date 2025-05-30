@@ -39,7 +39,7 @@ This script runs the benchmark on the prepared datasets, performing:
 - `--model-path`: Path to the trained model checkpoint (contains weights and metadata)
 
 ### Input/Output Configuration
-- `--embeddings-script`: Path to embeddings script (default: "./predict_embedding.py")
+- `--embeddings-script`: Path to embeddings script (default: "./generate_embeddings.py")
 - `--benchmark-metadata`: Benchmark dataset info JSON (default: 'benchmark_datasets.json')
 - `--datasets-dir`: Benchmark datasets directory (default: 'data/benchmark_datasets')
 - `--results-path`: Results save path (default: "./benchmarking_results")

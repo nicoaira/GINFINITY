@@ -146,7 +146,7 @@ process GENERATE_EMBEDDINGS {
     def keepCols = params.subgraphs ? "${params.id_column},window_start,window_end,seq_len" : "${params.id_column},seq_len"
 
     """
-    python3 ${baseDir}/modules/predict_embedding.py \
+    python3 ${baseDir}/modules/generate_embeddings.py \
       --input ${batch_tsv} \
       --model-path ${params.model_path} \
       --id-column ${params.id_column} \

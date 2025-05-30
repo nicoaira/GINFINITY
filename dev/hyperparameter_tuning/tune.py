@@ -202,7 +202,7 @@ def objective(trial, args):
         # Run benchmark and get average AUCs
         benchmark_results_path = os.path.join(trial_log_dir, "benchmark")
         average_aucs = run_benchmark(
-            embeddings_script=os.path.join(project_root, "scripts/predict_embedding.py"),
+            embeddings_script=os.path.join(project_root, "scripts/generate_embeddings.py"),
             benchmark_datasets=[args.benchmark_datasets],  # Pass as a list
             benchmark_metadata=benchmark_metadata,
             benchmark_metadata_path=os.path.join(project_root, 'data/benchmark_datasets/benchmark_datasets.json'),

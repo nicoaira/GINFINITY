@@ -1,4 +1,4 @@
-# RNA Embedding Prediction Script
+# RNA Embedding Generation Script
 
 ## Overview
 
@@ -39,7 +39,7 @@ For GIN model support, ensure `torch_geometric` is installed following the [inst
 Run the script as follows:
 
 ```bash
-python predict_embeddings.py --input <path_to_input_file> --model_path <path_to_model_checkpoint> [options]
+python generate_embeddings.py --input <path_to_input_file> --model_path <path_to_model_checkpoint> [options]
 ```
 
 #### Required Arguments
@@ -80,7 +80,7 @@ The input file must be a CSV/TSV with one column containing RNA secondary struct
      - Original input columns.
      - `embedding_vector`: Comma-separated embedding vector.
 
-2. **Logs**: Progress and parameters are logged to `output/<model_id>/predict_embedding.log`.
+2. **Logs**: Progress and parameters are logged to `output/<model_id>/generate_embeddings.log`.
 
 ---
 
@@ -89,13 +89,13 @@ The input file must be a CSV/TSV with one column containing RNA secondary struct
 ### Predict Embeddings Using a GIN Model
 
 ```bash
-python predict_embeddings.py --input data/rna_structures.csv --model_path saved_model/gin_model.pth
+python generate_embeddings.py --input data/rna_structures.csv --model_path saved_model/gin_model.pth
 ```
 
 ### Process a Random Sample of 100 Structures
 
 ```bash
-python predict_embeddings.py --input data/rna_structures.csv --samples 100 --model_path saved_model/gin_model.pth
+python generate_embeddings.py --input data/rna_structures.csv --samples 100 --model_path saved_model/gin_model.pth
 ```
 
 ---

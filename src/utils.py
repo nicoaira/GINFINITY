@@ -305,7 +305,7 @@ def get_structure_column_name(df, header, col_name=None, col_num=None, default_n
                 raise ValueError(f"Specified structure column number {col_num} is out of bounds for DataFrame columns: {list(df.columns)}")
             return df.columns[col_num]
         else:
-            # If default_name is not in columns, it's an issue, but predict_embedding handles this by checking existence.
+            # If default_name is not in columns, it's an issue, but generate_embeddings handles this by checking existence.
             # For now, just return default_name; caller should verify.
             return default_name
     else: # No header

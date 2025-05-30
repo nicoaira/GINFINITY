@@ -853,8 +853,8 @@ def main():
     parser = argparse.ArgumentParser(description="Generate embeddings from RNA secondary structures using a trained model and benchmark them.")
 
     parser.add_argument('--embeddings-script', dest='embeddings_script', type=str,
-                        default=os.path.join(project_root, "scripts/predict_embedding.py"),
-                        help='Path to the embeddings generation script. Default: "scripts/predict_embedding.py".')
+                        default=os.path.join(project_root, "scripts/generate_embeddings.py"),
+                        help='Path to the embeddings generation script. Default: "scripts/generate_embeddings.py".')
 
     parser.add_argument('--benchmark-metadata', dest='benchmark_metadata_path', type=str,
                         default=os.path.join(project_root, 'data/benchmark_datasets/benchmark_datasets.json'),

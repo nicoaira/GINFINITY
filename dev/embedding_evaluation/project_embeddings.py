@@ -183,13 +183,13 @@ def save_scatter_2d(output_folder, df, embedding_tsne, column = 'rfam'):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument('--predict_embedding_path', type=str, required=True)
+    parser.add_argument('--generate_embeddings_path', type=str, required=True)
     parser.add_argument('--model_id', required=True, type=str)
     parser.add_argument('--sample_num', type=int)
     args = parser.parse_args()
 
 
-    df = pd.read_csv(args.predict_embedding_path, sep="\t")
+    df = pd.read_csv(args.generate_embeddings_path, sep="\t")
 
     if args.sample_num:
         random_indices = random.sample(range(len(df)), args.sample_num)

@@ -21,7 +21,7 @@ src/ginfinity.egg-info/PKG-INFO
 src/ginfinity.egg-info/SOURCES.txt
 src/ginfinity.egg-info/top_level.txt
 src/ginfinity.egg-info/dependency_links.txt
-tmp/predict_embedding.log
+tmp/generate_embeddings.log
 troubleshoot/*
 src/data_generation/rnafold_prueba.fa
 src/data_generation/forgi_graph/test_structures.txt
