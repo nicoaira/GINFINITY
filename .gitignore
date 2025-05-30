@@ -36,3 +36,6 @@ work/*
 .nextflow*
 nextflow/results/todo.txt
 nextflow/dev/optuna_plots*
+dev/*
+example_data/*.tsv
+example_data/*.json
