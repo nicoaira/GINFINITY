@@ -11,7 +11,7 @@ from training.early_stopping import EarlyStopping
 from training.gin_rna_dataset import GINRNADataset
 from model.gin_model import GINModel
 from training.triplet_loss import TripletLoss
-from utils import is_valid_dot_bracket, log_information, log_setup, get_project_root
+from utils import is_valid_dot_bracket, log_information, log_setup
 import time
 
 def remove_invalid_structures(df):
