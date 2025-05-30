@@ -1,3 +1,7 @@
+# Add missing imports
+import torch
+from ginfinity.utils import log_information
+
 class EarlyStopping:
     def __init__(self, patience=5, min_delta=0.001):
         """
@@ -47,11 +51,20 @@ def train_model_with_early_stopping(
 ):
     model.to(device)
     early_stopping = EarlyStopping(patience=patience, min_delta=0.001)
-    best_val_loss = float('inf')
 
     for epoch in range(num_epochs):
-        # Training phase...
-        # [existing training code remains the same]
+        # Training phase: compute training loss
+        model.train()
+        running_loss = 0.0
+        for inputs, targets in train_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+        avg_train_loss = running_loss / len(train_loader)
 
         # Apply learning rate decay
         for param_group in optimizer.param_groups:
@@ -73,12 +86,12 @@ def train_model_with_early_stopping(
         current_lr = optimizer.param_groups[0]['lr']
         epoch_log = {
             "Epoch": f"{epoch + 1}/{num_epochs}",
-            "Training Loss": f"{running_loss / len(train_loader)}",
+            "Training Loss": f"{avg_train_loss}",
             "Validation Loss": f"{avg_val_loss}",
             "Learning Rate": f"{current_lr}"
         }
         log_information(log_path, epoch_log)
-        print(f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {running_loss / len(train_loader)}, Validation Loss: {avg_val_loss}, Learning Rate: {current_lr}")
+        print(f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {avg_train_loss}, Validation Loss: {avg_val_loss}, Learning Rate: {current_lr}")
 
         # Early stopping check
         early_stopping(avg_val_loss, model)
