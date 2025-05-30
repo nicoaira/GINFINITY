@@ -23,11 +23,25 @@ The repository contains the following key components:
 GINFINITY is packaged using modern Python standards and can be installed directly from its Git repository.
 
 ### Prerequisites
-- Python 3.9 or higher.
+- Conda (recommended for environment management)
+- Python 3.10 (the environment will be set up with this version)
 - `pip` and `git` installed on your system.
-- It is recommended to use a virtual environment (e.g., `venv` or `conda`) to manage dependencies.
 
-### Step 1: Install GINFINITY Package
+### Step 1: Set Up Conda Environment
+
+1.  Create a new conda environment named `ginfinity-env` with Python 3.10:
+    ```sh
+    conda create -n ginfinity-env python=3.10
+    ```
+2.  Activate the newly created environment:
+    ```sh
+    conda activate ginfinity-env
+    ```
+
+### Step 2: Install GINFINITY Package
+
+With the `ginfinity-env` activated, install the GINFINITY package from GitHub.
+
 To install the latest version from the `main` branch:
 ```sh
 pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity
@@ -36,31 +50,61 @@ To install a specific version (e.g., v0.1.0):
 ```sh
 pip install git+https://github.com/nicoaira/GINFINITY.git@v0.1.0#egg=ginfinity
 ```
-
 This command will automatically handle the core dependencies listed in `pyproject.toml`.
 
-### Step 2: Install PyTorch Geometric (Manual Step)
+### Step 3: Install PyTorch Geometric (Manual Step)
 
 **`torch-geometric` and its related packages must be installed manually after installing GINFINITY.** This is because their specific versions depend heavily on your system's PyTorch version and CUDA (if applicable).
 
-Please follow the [official PyTorch Geometric installation instructions](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html) to install `torch-geometric`, `torch-scatter`, `torch-sparse`, `torch-cluster`, and `torch-spline-conv` that match your PyTorch and CUDA setup.
+#### Finding Your CUDA Version
+To ensure you install the correct `torch-geometric` dependencies, first identify your CUDA version:
+
+1.  **From the Terminal (Linux/macOS):**
+    ```bash
+    nvcc --version
+    ```
+    Look for a line like `Cuda compilation tools, release 12.1, V12.1.66`.
+
+2.  **Using `nvidia-smi`:**
+    ```bash
+    nvidia-smi
+    ```
+    The CUDA version is displayed at the top right. (Note: This is the driver-supported version, which is usually sufficient for compatibility checks.)
+
+3.  **From Python (if PyTorch is already installed):**
+    ```python
+    import torch
+    print(torch.version.cuda)
+    ```
+    This shows the CUDA version PyTorch was compiled with.
+
+#### Installing PyTorch Geometric
+Once you know your CUDA version (or if you are on a CPU-only system), follow the [official PyTorch Geometric installation instructions](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html).
 
 Example for PyTorch 2.2.0 and CUDA 12.1:
 ```bash
-# Ensure PyTorch is installed correctly for your CUDA version first
+# Ensure PyTorch is installed correctly for your CUDA version first.
+# If not, install or update PyTorch, e.g.:
 # pip install torch --index-url https://download.pytorch.org/whl/cu121
 
 pip install torch-geometric torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
 ```
+Replace `cu121` and `torch-2.2.0` with the versions appropriate for your system.
 
-### Step 3: (Optional) Install Dependencies for Training
+### Step 4: (Optional) Install Dependencies for Training
 If you intend to train new models, you'll need additional dependencies. You can install them using:
 ```sh
 pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity[train]
 ```
 
-### Step 4: Download Pre-trained Model Weights
-Pre-trained model weights are included within the package in the `src/ginfinity/weights` directory and should be accessible after installation. If you need to use a specific or externally hosted model, ensure it's downloaded to a known location.
+### Step 5: Verify Installation
+Pre-trained model weights are included within the package in the `src/ginfinity/weights` directory and should be accessible after installation. 
+
+To quickly verify that the GINFINITY command-line tools are available, you can try:
+```sh
+ginfinity-embed --help
+```
+This should display the help message for the `generate_embeddings.py` script.
 
 (The previous instruction to download `GIN-Secondary.pth` might be outdated if weights are now packaged. Please verify and update this section if necessary based on your `MANIFEST.in` and `pyproject.toml` setup for including weights.)
 

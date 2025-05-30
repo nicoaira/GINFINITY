@@ -41,3 +41,5 @@ nextflow/report*
 dev/*
 example_data/*.tsv
 example_data/*.json
+test-package
+build*
