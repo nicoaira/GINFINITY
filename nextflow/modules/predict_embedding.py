@@ -1,1 +1,0 @@
-../../scripts/predict_embedding.py
