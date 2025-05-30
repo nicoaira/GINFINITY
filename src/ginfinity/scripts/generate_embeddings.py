@@ -14,8 +14,6 @@ from ginfinity.utils import (
     setup_and_read_input,
     dotbracket_to_graph,
     graph_to_tensor,
-    dotbracket_to_forgi_graph,
-    forgi_graph_to_tensor,
     log_information,
     is_valid_dot_bracket
 )
@@ -47,9 +45,9 @@ def _cpu_embed(args):
 def _preprocess(args):
     """
     Worker: dot-bracket string → torch_geometric Data
-    args: (idx, uid, struct, graph_encoding, log_path)
+    args: (idx, uid, struct, log_path)
     """
-    idx, uid, struct, graph_encoding, log_path = args
+    idx, uid, struct, log_path = args
     try:
         if not is_valid_dot_bracket(struct):
             raise ValueError("Invalid dot-bracket")
@@ -57,12 +55,8 @@ def _preprocess(args):
         log_information(log_path, {"skipped_invalid": f"ID {uid}"})
         return None
 
-    if graph_encoding == 'standard':
-        graph = dotbracket_to_graph(struct)
-        data  = graph_to_tensor(graph)
-    else:
-        graph = dotbracket_to_forgi_graph(struct)
-        data  = forgi_graph_to_tensor(graph)
+    graph = dotbracket_to_graph(struct)
+    data  = graph_to_tensor(graph)
 
     if graph is None or data is None:
         log_information(log_path, {"skipped_graph_fail": f"ID {uid}"})
@@ -93,12 +87,11 @@ def generate_embeddings(
 
     # Load model once on CPU to inspect metadata
     temp_model     = load_trained_model(model_path, 'cpu')
-    graph_encoding = getattr(temp_model.metadata, 'graph_encoding', 'standard')
     del temp_model
 
     # 1) Preprocess all rows in parallel
     tasks = [
-        (idx, row[id_column], row[structure_column], graph_encoding, log_path)
+        (idx, row[id_column], row[structure_column], log_path)
         for idx, row in input_df.iterrows()
     ]
     preproc = []
