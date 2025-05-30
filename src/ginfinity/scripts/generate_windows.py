@@ -2,14 +2,13 @@
 
 import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 import argparse
 import pandas as pd
 from tqdm import tqdm
 
 from multiprocessing import Pool
 
-from src.utils import (
+from utils import (
     read_input_data,
     get_structure_column_name,
     dotbracket_to_graph,

@@ -2,8 +2,6 @@
 
 import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-
 import argparse
 import pandas as pd
 import torch
@@ -11,8 +9,8 @@ from tqdm import tqdm
 from torch.multiprocessing import Pool, set_start_method
 from torch_geometric.data import Batch
 
-from src.model.gin_model import GINModel
-from src.utils import (
+from model.gin_model import GINModel
+from utils import (
     dotbracket_to_graph,
     graph_to_tensor,
     dotbracket_to_forgi_graph,
