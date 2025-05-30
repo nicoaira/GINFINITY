@@ -8,7 +8,7 @@ The repository contains the following key components:
 
 - **`src/model/gin_model.py`**: GIN model implementation
 - **`src/utils.py`**: Utility functions for RNA graph processing
-- **`predict_embedding.py`**: Main script for generating embeddings
+- **`generate_embeddings.py`**: Main script for generating embeddings
 - **`train_model.py`**: Script for training new GIN models
 - **`train_model_optuna.py`**: Hyperparameter optimization script
 - **`src/benchmark/`**: Benchmarking tools and datasets
@@ -74,7 +74,7 @@ The input file should be a CSV containing at least one column with the RNA secon
 To generate embeddings from an RNA dataset:
 
 ```sh
-python predict_embedding.py --input example_data/sample_dataset.csv --output example_data/sample_dataset_with_embeddings.tsv
+python generate_embeddings.py --input example_data/sample_dataset.csv --output example_data/sample_dataset_with_embeddings.tsv
 ```
 
 **Arguments**:
@@ -90,7 +90,7 @@ python predict_embedding.py --input example_data/sample_dataset.csv --output exa
 If your CSV doesn't have a header and the secondary structure is in the 6th column:
 
 ```sh
-python predict_embedding.py --input example_data/sample_dataset.csv --output example_data/sample_dataset_with_embeddings.tsv --structure_column_num 6 --header False --device cuda
+python generate_embeddings.py --input example_data/sample_dataset.csv --output example_data/sample_dataset_with_embeddings.tsv --structure_column_num 6 --header False --device cuda
 ```
 
 ## Running the t-SNE Embedding Tool
