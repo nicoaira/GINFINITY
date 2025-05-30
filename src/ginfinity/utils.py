@@ -212,52 +212,6 @@ def forgi_graph_to_tensor(g):
     data = Data(x=x, edge_index=edge_index)
 
     return data
-
-# ==============================================================================
-# Data Handling / I/O Utilities
-# ==============================================================================
-
-def read_input_data(input_path, samples=None, structure_column_num=None, header=True, id_column_for_validation=None):
-    """Reads input data from CSV or TSV file."""
-    sep_char = '\t' if input_path.endswith('.tsv') else ','
-    if header:
-        df = pd.read_csv(input_path, sep=sep_char, low_memory=False)
-    else:
-        if structure_column_num is None and id_column_for_validation is None: # if no header, a column number is usually needed for structure or id
-            pass # Allow reading without specific column if not strictly needed by caller immediately
-        df = pd.read_csv(input_path, sep=sep_char, header=None)
-    
-    if samples:
-        df = df.sample(n=samples, random_state=42)
-    
-    # Validate ID column if provided
-    if header and id_column_for_validation and id_column_for_validation not in df.columns:
-        raise ValueError(f"ID column '{id_column_for_validation}' not found in input file columns: {list(df.columns)}")
-    # Duplication check for ID column should be done by the caller if critical for the specific script
-
-    return df
-
-def get_structure_column_name(df, header, col_name=None, col_num=None, default_name="secondary_structure"):
-    """Determines the name of the structure column."""
-    if header:
-        if col_name:
-            if col_name not in df.columns:
-                raise ValueError(f"Specified structure column name '{col_name}' not found in DataFrame columns: {list(df.columns)}")
-            return col_name
-        elif col_num is not None:
-            if col_num >= len(df.columns):
-                raise ValueError(f"Specified structure column number {col_num} is out of bounds for DataFrame columns: {list(df.columns)}")
-            return df.columns[col_num]
-        else:
-            # If default_name is not in columns, it's an issue, but generate_embeddings handles this by checking existence.
-            # For now, just return default_name; caller should verify.
-            return default_name
-    else: # No header
-        if col_num is None:
-            raise ValueError("When header is False, structure_column_num must be specified.")
-        if col_num >= len(df.columns):
-            raise ValueError(f"Specified structure column number {col_num} is out of bounds for DataFrame columns (no header): {len(df.columns)} columns exist.")
-        return df.columns[col_num] # This will be the integer index itself if no header
     
 # ==============================================================================
 # Input Data Setup and Validation
