@@ -1,0 +1,2 @@
+graft src/ginfinity/weights
+include src/ginfinity/py.typed # For PEP 561 compliance if you add type hints
