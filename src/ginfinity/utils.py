@@ -2,16 +2,13 @@ from datetime import datetime
 import platform
 import sys
 import GPUtil
-import numpy as np
 import psutil
 import torch
 import networkx as nx
 import os
 from torch_geometric.data import Data
 import forgi.graph.bulge_graph as fgb
-from multiprocessing import Pool
-from tqdm import tqdm
-import pandas as pd # Added import
+import pandas as pd
 
 # ==============================================================================
 # Logging & System Utilities
@@ -124,7 +121,6 @@ def log_information(log_path, info_dict, log_name = None, open_type='a', print_l
             if print_log:
                 print(to_log)
 
-def get_project_root(marker=".git"):
     """
     Finds the root directory of the project by locating the specified marker file.
     """
@@ -189,28 +185,6 @@ def dotbracket_to_graph(dotbracket):
     
     return G
 
-def generate_slices(G, L, keep_paired_neighbors=True):
-    slices = []
-    nodes = sorted(G.nodes())
-    n = len(nodes)
-    for start in range(n - L + 1):
-        window_nodes = list(range(start, start + L))
-        sub_nodes = set(window_nodes)
-        if keep_paired_neighbors:
-            for node in window_nodes:
-                for neighbor in G.neighbors(node):
-                    if G.edges[node, neighbor].get('edge_type') == 'base_pair' and neighbor not in window_nodes:
-                        sub_nodes.add(neighbor)
-        H = G.subgraph(sub_nodes).copy()
-        if keep_paired_neighbors:
-            for node in list(H.nodes()):
-                if node not in window_nodes:
-                    for neighbor in list(H.neighbors(node)):
-                        if H.edges[node, neighbor].get('edge_type') == 'adjacent':
-                            H.remove_edge(node, neighbor)
-        slices.append((start, H))
-    return slices
-
 def graph_to_tensor(G):
     nodes = sorted(G.nodes())
     node_features = [[1.0] if G.nodes[node]['label'] == 'paired' else [0.0] for node in nodes]
@@ -250,24 +224,6 @@ def forgi_graph_to_tensor(g):
     data = Data(x=x, edge_index=edge_index)
 
     return data
-
-def should_skip_window_due_to_low_complexity(window_sequence, mask_threshold):
-    """
-    Determines if a window should be skipped based on its fraction of paired bases.
-    Assumes '(' and ')' are the primary pairing characters.
-    """
-    if mask_threshold <= 0:  # No masking if threshold is zero or negative
-        return False
-    
-    # Count standard paired bases. Extend this if other characters like [], {} are used for pairs.
-    paired_bases = window_sequence.count('(') + window_sequence.count(')')
-    
-    total_bases = len(window_sequence)
-    if total_bases == 0:
-        return True  # Skip empty windows
-    
-    fraction_paired = paired_bases / total_bases
-    return fraction_paired < mask_threshold
 
 # ==============================================================================
 # Data Handling / I/O Utilities
@@ -314,40 +270,3 @@ def get_structure_column_name(df, header, col_name=None, col_num=None, default_n
         if col_num >= len(df.columns):
             raise ValueError(f"Specified structure column number {col_num} is out of bounds for DataFrame columns (no header): {len(df.columns)} columns exist.")
         return df.columns[col_num] # This will be the integer index itself if no header
-
-# ==============================================================================
-# Other Utilities / Domain-Specific
-# ==============================================================================
-
-def calculate_distance_batch(args):
-    # Moved from sample_and_pair.py
-    batch, embeddings_tensor, metric = args
-    results = []
-    for i, j in batch:
-        if metric == 'cosine':
-            distance = 1 - torch.nn.functional.cosine_similarity(embeddings_tensor[i], embeddings_tensor[j], dim=0).item()
-        else:  # squared distance
-            distance = torch.sum((embeddings_tensor[i] - embeddings_tensor[j]) ** 2).item()
-        results.append((i, j, distance))
-    return results
-
-def calculate_distances(embeddings, metric='squared', num_workers=1, batch_size=1000):
-    # Moved from sample_and_pair.py
-    embeddings_tensor = torch.tensor(np.array(embeddings), dtype=torch.float32)
-    num_embeddings = embeddings_tensor.shape[0]
-    
-    total_pairs = num_embeddings * (num_embeddings - 1) // 2
-    pairs = [(i, j) for i in range(num_embeddings) for j in range(i + 1, num_embeddings)]
-    
-    # Split pairs into batches
-    batches = [pairs[i:i + batch_size] for i in range(0, len(pairs), batch_size)]
-    args_list = [(batch, embeddings_tensor, metric) for batch in batches]
-    
-    distances = []
-    with Pool(num_workers) as pool:
-        with tqdm(total=total_pairs, desc="Calculating distances") as pbar:
-            for result in pool.imap_unordered(calculate_distance_batch, args_list):
-                distances.extend(result)
-                pbar.update(len(result))
-    
-    return distances

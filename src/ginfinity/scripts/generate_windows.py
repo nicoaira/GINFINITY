@@ -12,12 +12,50 @@ from utils import (
     read_input_data,
     get_structure_column_name,
     dotbracket_to_graph,
-    generate_slices,
     log_setup,
     log_information,
     is_valid_dot_bracket,
-    should_skip_window_due_to_low_complexity
 )
+
+def should_skip_window_due_to_low_complexity(window_sequence, mask_threshold):
+    """
+    Determines if a window should be skipped based on its fraction of paired bases.
+    Assumes '(' and ')' are the primary pairing characters.
+    """
+    if mask_threshold <= 0:  # No masking if threshold is zero or negative
+        return False
+    
+    # Count standard paired bases. Extend this if other characters like [], {} are used for pairs.
+    paired_bases = window_sequence.count('(') + window_sequence.count(')')
+    
+    total_bases = len(window_sequence)
+    if total_bases == 0:
+        return True  # Skip empty windows
+    
+    fraction_paired = paired_bases / total_bases
+    return fraction_paired < mask_threshold
+
+def generate_slices(G, L, keep_paired_neighbors=True):
+    slices = []
+    nodes = sorted(G.nodes())
+    n = len(nodes)
+    for start in range(n - L + 1):
+        window_nodes = list(range(start, start + L))
+        sub_nodes = set(window_nodes)
+        if keep_paired_neighbors:
+            for node in window_nodes:
+                for neighbor in G.neighbors(node):
+                    if G.edges[node, neighbor].get('edge_type') == 'base_pair' and neighbor not in window_nodes:
+                        sub_nodes.add(neighbor)
+        H = G.subgraph(sub_nodes).copy()
+        if keep_paired_neighbors:
+            for node in list(H.nodes()):
+                if node not in window_nodes:
+                    for neighbor in list(H.neighbors(node)):
+                        if H.edges[node, neighbor].get('edge_type') == 'adjacent':
+                            H.remove_edge(node, neighbor)
+        slices.append((start, H))
+    return slices
 
 def process_structure_to_windows(
     original_id,
