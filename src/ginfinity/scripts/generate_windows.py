@@ -1,21 +1,12 @@
 #!/usr/bin/env python3
 
-import sys
-import os
 import argparse
 import pandas as pd
 from tqdm import tqdm
 
 from multiprocessing import Pool
 
-from utils import (
-    read_input_data,
-    get_structure_column_name,
-    dotbracket_to_graph,
-    log_setup,
-    log_information,
-    is_valid_dot_bracket,
-)
+from utils import setup_and_read_input, dotbracket_to_graph, log_information, is_valid_dot_bracket
 
 def should_skip_window_due_to_low_complexity(window_sequence, mask_threshold):
     """
@@ -58,7 +49,6 @@ def generate_slices(G, L, keep_paired_neighbors=True):
     return slices
 
 def process_structure_to_windows(
-    original_id,
     structure_string,
     seq_len,
     other_kept_cols_data,
@@ -103,7 +93,6 @@ def process_structure_to_windows_wrapper(args_tuple):
     # ensure the ID is keyed correctly
     other_cols = {id_col_name: original_id, **other_cols}
     return process_structure_to_windows(
-        original_id,
         structure_string,
         seq_len,
         other_cols,
@@ -114,58 +103,41 @@ def process_structure_to_windows_wrapper(args_tuple):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate windowed sequences from RNA structures in a TSV/CSV file."
+        description="Generate windowed sequences from RNA secondary structures provided in a TSV/CSV file. " \
+        "This tool slices RNA structures into overlapping windows of a given length, optionally retains " \
+        "paired neighboring bases, and applies masking based on a specified paired-base threshold."
     )
-    parser.add_argument('--input',                required=True)
-    parser.add_argument('--output',               required=True)
-    parser.add_argument('--id-column',            required=True)
-    parser.add_argument('--structure-column-name',help="Overrides col‐num")
-    parser.add_argument('--structure-column-num', type=int)
-    parser.add_argument('--header',     default='True')
-    parser.add_argument('--L',          type=int, required=True)
-    parser.add_argument('--keep-paired-neighbors', action='store_true')
-    parser.add_argument('--mask-threshold', type=float, default=0.0)
-    parser.add_argument('--keep-cols',   default="")
-    parser.add_argument('--num-workers', type=int, default=1)
+    parser.add_argument('--input', type=str, required=True,
+                        help="Path to the input TSV/CSV file containing RNA structures.")
+    parser.add_argument('--output', type=str, required=True, default= "./secondary_structure_windows.tsv",
+                        help="Name of the output TSV file to save the windowed sequences. Default is 'secondary_structure_windows.tsv'.")
+    parser.add_argument('--id-column', type=str, required=True,
+                        help="Column name in the input file that uniquely identifies each RNA structure.")
+    parser.add_argument('--structure-column-name', type=str, default="secondary_structure",
+                        help="Column name containing the RNA secondary structure in dot-bracket notation. Default is 'secondary_structure'.")
+    parser.add_argument('--L', type=int, required=True, help="Window size (length) to slice the RNA structure into overlapping segments.")
+    parser.add_argument('--keep-paired-neighbors', action='store_true',
+                        help="If set, include neighboring bases paired to the ones in the window even if they lie outside the main window.")
+    parser.add_argument('--mask-threshold', type=float, default=0.0,
+                        help="Threshold for paired bases fraction below which a window is skipped. A value of 0.0 disables masking.")
+    parser.add_argument('--keep-cols', default=None, type=str,
+                        help="Comma-separated list of additional column names to keep in the output.")
+    parser.add_argument('--num-workers', type=int, default=1,
+                        help="Number of parallel worker processes to use for processing. Use values greater than 1 for parallel execution.")
     args = parser.parse_args()
-    args.header = args.header.lower() == 'true'
-
-    # logging setup
-    os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
-    log_path = os.path.splitext(args.output)[0] + '.log'
-    log_setup(log_path, print_log=False)
-    log_information(log_path, vars(args), "Arguments", print_log=True)
-
-    # read data
-    df = read_input_data(args.input, header=args.header, id_column_for_validation=(args.id_column if args.header else None))
-    struct_col = get_structure_column_name(df, args.header, args.structure_column_name, args.structure_column_num)
-    id_col     = args.id_column
-
-    # warnings if needed
-    if args.header and id_col not in df.columns:
-        raise ValueError(f"ID column '{id_col}' not in input columns {list(df.columns)}")
-    if df[id_col].duplicated().any():
-        log_information(log_path, {"warning": "duplicate IDs"}, "Warning")
-
-    # determine extra cols to propagate
-    propagate = []
-    if args.keep_cols:
-        for col in [c.strip() for c in args.keep_cols.split(',')]:
-            if args.header and col in df.columns:
-                propagate.append(col)
-            else:
-                print(f"Warning: keep-col '{col}' not found or invalid.")
+    
+    df, log_path, propagate = setup_and_read_input(args, need_model=False)
 
     # build tasks
     tasks = []
     for _, row in df.iterrows():
-        struct = row[struct_col]
+        struct = row[args.structure_column_name]
         if not isinstance(struct, str):
-            print(f"Skipping {row[id_col]}: not a string")
+            print(f"Skipping {row[args.id_column]}: not a string")
             continue
         other = {c: row[c] for c in propagate if c in row}
         tasks.append((
-            row[id_col],
+            row[args.id_column],
             struct,
             len(struct),
             other,

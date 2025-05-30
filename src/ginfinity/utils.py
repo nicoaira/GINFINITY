@@ -121,18 +121,6 @@ def log_information(log_path, info_dict, log_name = None, open_type='a', print_l
             if print_log:
                 print(to_log)
 
-    """
-    Finds the root directory of the project by locating the specified marker file.
-    """
-    current_dir = os.path.abspath(os.path.dirname(__file__))
-    while True:
-        if marker in os.listdir(current_dir):
-            return current_dir
-        parent_dir = os.path.dirname(current_dir)
-        if current_dir == parent_dir:
-            raise FileNotFoundError(f"Project root marker '{marker}' not found.")
-        current_dir = parent_dir
-
 # ==============================================================================
 # RNA Structure Validation & Graph Processing
 # ==============================================================================
@@ -270,3 +258,49 @@ def get_structure_column_name(df, header, col_name=None, col_num=None, default_n
         if col_num >= len(df.columns):
             raise ValueError(f"Specified structure column number {col_num} is out of bounds for DataFrame columns (no header): {len(df.columns)} columns exist.")
         return df.columns[col_num] # This will be the integer index itself if no header
+    
+# ==============================================================================
+# Input Data Setup and Validation
+# ==============================================================================
+
+def setup_and_read_input(args, need_model=False):
+    # Logging setup
+    os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
+    log_path = os.path.splitext(args.output)[0] + '.log'
+    log_setup(log_path, print_log=False)
+    log_information(log_path, vars(args), "Arguments", print_log=True)
+
+    # Read data
+    sep_char = '\t' if args.input.endswith('.tsv') else ','
+    df = pd.read_csv(args.input, sep=sep_char, low_memory=False)
+
+    # Check that the structure column name exists in df, else raise a ValueError
+    if args.structure_column_name not in df.columns:
+        raise ValueError(f"Structure column '{args.structure_column_name}' not found in input data.")
+    # Ensure the ID column exists
+    if args.id_column not in df.columns:
+        raise ValueError(f"ID column '{args.id_column}' not found in input data.")
+    # Check for duplicate IDs
+    if df[args.id_column].duplicated().any():
+        log_information(log_path, {"warning": "duplicate IDs"}, "Warning")
+
+    # Model path existence check (only if needed)
+    if need_model:
+        if not hasattr(args, "model_path"):
+            raise ValueError("need_model=True but args has no model_path attribute.")
+        if not os.path.exists(args.model_path):
+            raise ValueError(f"Model path '{args.model_path}' does not exist.")
+
+    # Determine extra cols to propagate
+    if args.keep_cols:
+        requested_cols = [c.strip() for c in args.keep_cols.split(',')]
+        missing_cols = [col for col in requested_cols if col not in df.columns]
+        if missing_cols:
+            raise ValueError(f"The following columns specified in --keep-cols do not exist in the input file: {missing_cols}")
+        propagate = requested_cols
+    else:
+        propagate = [
+            col for col in df.columns
+            if col not in [args.id_column, args.structure_column_name]
+        ]
+    return df, log_path, propagate

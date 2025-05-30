@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-import sys
-import os
 import argparse
 import pandas as pd
 import torch
@@ -11,13 +9,11 @@ from torch_geometric.data import Batch
 
 from model.gin_model import GINModel
 from utils import (
+    setup_and_read_input,
     dotbracket_to_graph,
     graph_to_tensor,
     dotbracket_to_forgi_graph,
     forgi_graph_to_tensor,
-    read_input_data,
-    get_structure_column_name,
-    log_setup,
     log_information,
     is_valid_dot_bracket
 )
@@ -84,20 +80,14 @@ def generate_embeddings(
         device: str        = 'cpu',
         num_workers: int   = 4,
         batch_size: int    = 32,
-        keep_cols: str     = None
+        keep_cols: list     = None
 ):
-    # Setup logging
-    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
-    log_setup(log_path)
 
     # Decide which columns to carry through
     final_keep = [id_column]
     if 'seq_len' in input_df.columns:
         final_keep.append('seq_len')
-    if keep_cols:
-        for c in [c.strip() for c in keep_cols.split(',')]:
-            if c in input_df.columns and c not in final_keep:
-                final_keep.append(c)
+    final_keep.extend(keep_cols)
 
     # Load model once on CPU to inspect metadata
     temp_model     = load_trained_model(model_path, 'cpu')
@@ -187,47 +177,41 @@ if __name__ == "__main__":
         pass
 
     parser = argparse.ArgumentParser(
-        description="Generate GIN embeddings from RNA secondary structures."
+        description="Generate high-quality embeddings using a pretrained GIN model from RNA secondary structures " \
+        "for comprehensive downstream analysis."
     )
-    parser.add_argument('--input',                type=str,   required=True)
-    parser.add_argument('--output',               type=str,   required=True)
-    parser.add_argument('--model-path',           type=str,   required=True)
-    parser.add_argument('--id-column',            type=str,   required=True)
-    parser.add_argument('--structure-column-name',type=str)
-    parser.add_argument('--structure-column-num', type=int)
-    parser.add_argument('--header',               type=str,   default='True',
-                        choices=['True','False','true','false'])
-    parser.add_argument('--keep-cols',            type=str)
-    parser.add_argument('--device',               type=str,   default='cpu',
+    parser.add_argument('--input', type=str, required=True,
+                        help="Path to the input TSV/CSV file containing RNA structures.")
+    parser.add_argument('--output', type=str, default= "embeddings.tsv",
+                        help="Name of the output TSV file to save the generated embeddings. Default is 'embeddings.tsv'.")
+    parser.add_argument('--model-path', type=str, required=True,
+                         help="Path to the pretrained GIN model checkpoint.")
+    parser.add_argument('--id-column', type=str, required=True,
+                         help="Column name in the input file that uniquely identifies each RNA structure.")
+    parser.add_argument('--structure-column-name',type=str,
+                         default="secondary_structure", help="Column name containing the RNA secondary structure in dot-bracket notation. Default is 'secondary_structure'.")
+    parser.add_argument('--keep-cols', type=str, default=None,
+                         help="Comma-separated list of additional column names to keep in the output. Default is None (only ID and embedding).")
+    parser.add_argument('--device',  type=str,   default='cpu',
                         help="Device for inference: 'cpu' or 'cuda'")
-    parser.add_argument('--num-workers',          type=int,   default=4)
-    parser.add_argument('--batch-size',           type=int,   default=32)
+    parser.add_argument('--num-workers', type=int, default=4,
+                        help="Number of parallel worker processes to use for processing. Use values greater than 1 for parallel execution.")
+    parser.add_argument('--batch-size', type=int, default=32,
+                        help="Batch size for GPU inference. Default is 32. Ignored if device is 'cpu'.")
 
     args = parser.parse_args()
-    args.header = args.header.lower() == 'true'
 
-    df = read_input_data(
-        args.input,
-        header=args.header,
-        id_column_for_validation=args.id_column
-    )
-    struct_col = get_structure_column_name(
-        df,
-        args.header,
-        col_name=args.structure_column_name,
-        col_num=args.structure_column_num
-    )
-
-    log_path = os.path.splitext(args.output)[0] + '.log'
+    df, log_path, propagate = setup_and_read_input(args, need_model=True)
+    
     generate_embeddings(
         input_df=df,
         output_path=args.output,
         model_path=args.model_path,
         log_path=log_path,
-        structure_column=struct_col,
+        structure_column=args.structure_column_name,
         id_column=args.id_column,
         device=args.device,
         num_workers=args.num_workers,
         batch_size=args.batch_size,
-        keep_cols=args.keep_cols
+        keep_cols=propagate
     )
