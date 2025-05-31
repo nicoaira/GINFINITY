@@ -1,1 +1,1 @@
-../../scripts/generate_windows.py
+../../src/ginfinity/scripts/generate_windows.py

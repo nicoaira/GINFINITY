@@ -1,1 +1,1 @@
-../../scripts/generate_embeddings.py
+../../src/ginfinity/scripts/generate_embeddings.py
