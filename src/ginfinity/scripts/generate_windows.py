@@ -117,8 +117,6 @@ def main():
 
     df, log_path, propagate = setup_and_read_input(args, need_model=False)
 
-    keep_cols = propagate if args.keep_cols is None else args.keep_cols.split(',')
-
     tasks = []
     for _, row in df.iterrows():
         struct = row[args.structure_column_name]
@@ -166,7 +164,7 @@ def main():
             raise RuntimeError(f"Bad window {wid}: edge_index.max()={max_idx} >= num_nodes={num_nodes}")
         graph_map[wid] = data
         meta['window_id'] = wid
-        row = {k: meta[k] for k in ['window_id', args.id_column, 'window_start', 'window_end', 'seq_len'] + keep_cols if k in meta}
+        row = {k: meta[k] for k in ['window_id', args.id_column, 'window_start', 'window_end', 'seq_len'] + propagate if k in meta}
         meta_list.append(row)
 
     # save graphs
