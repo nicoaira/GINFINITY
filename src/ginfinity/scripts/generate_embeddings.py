@@ -179,6 +179,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate high-quality embeddings from precomputed graphs or raw dot-bracket TSV."
     )
+
     # raw-TSV mode
     parser.add_argument('--input', help="Path to raw TSV/CSV with dot-bracket structures.")
     # graph-PT mode
@@ -187,8 +188,10 @@ def main():
 
     parser.add_argument('--output', required=True,
                         help="Output TSV for embeddings.")
-    parser.add_argument('--model-path', required=True,
-                        help="Path to pretrained GIN checkpoint.")
+
+    parser.add_argument('--model-path', required=False, default=None,
+                        help="(Optional) Path to pretrained GIN checkpoint. If omitted, uses the built-in default weights from ginfinity.")
+
     parser.add_argument('--id-column', required=True,
                         help="Column name for unique IDs in raw or metadata TSV.")
     parser.add_argument('--structure-column-name', default="secondary_structure",
@@ -204,6 +207,21 @@ def main():
     parser.add_argument('--quiet', action='store_true',
                         help="Suppress progress bars and extra output.")
     args = parser.parse_args()
+
+    if args.model_path is None:
+        # Determine the directory of this script, then go up one level to locate the "weights" folder in ginfinity.
+        # __file__ is something like ".../site-packages/ginfinity/scripts/generate_embeddings.py"
+        script_dir = os.path.dirname(__file__)                # .../site-packages/ginfinity/scripts
+        package_dir = os.path.dirname(script_dir)             # .../site-packages/ginfinity
+        default_weights = os.path.join(package_dir, "weights", "gin_weights_250224.pth")
+
+        if not os.path.exists(default_weights):
+            sys.exit(f"ERROR: Default weights not found at {default_weights}. "
+                     "Please either install ginfinity correctly or pass --model-path.")
+        args.model_path = default_weights
+        # Print a message so the user knows which weights are being used:
+        if not args.quiet:
+            print(f"[generate_embeddings] No --model-path given, using built-in weights at:\n    {args.model_path}\n")
 
     # If using precomputed graphs:
     if args.graph_pt and args.meta_tsv:
@@ -291,7 +309,8 @@ def main():
         device=args.device,
         num_workers=args.num_workers,
         batch_size=args.batch_size,
-        keep_cols=propagate
+        keep_cols=propagate,
+        quiet=args.quiet
     )
 
 if __name__ == "__main__":
