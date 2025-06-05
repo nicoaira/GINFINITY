@@ -1,0 +1,11 @@
+pandas>=2.2,<3.0
+torch>=2.4,<3.0
+tqdm>=4.67,<5.0
+networkx>=3.4,<4.0
+gputil>=1.4,<2.0
+psutil>=7.0,<8.0
+numpy>=1.26,<3.0
+torch-geometric>=2.6.0,<3.0
+
+# Optional (train):
+# scikit-learn>=1.6,<2.0
