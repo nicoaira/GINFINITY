@@ -133,10 +133,7 @@ def generate_embeddings(
             metas = meta_list[start:start + batch_size]
             batch = Batch.from_data_list(chunk).to(device)
             with torch.no_grad():
-                try:
-                    out = model(batch)
-                except TypeError:
-                    out = torch.stack([model.forward_once(d.to(device)) for d in chunk], dim=0)
+                out = model.forward_once(batch)
             emb_np = out.cpu().numpy()
             for (idx, uid), vec in zip(metas, emb_np):
                 emb_str = ','.join(f'{x:.6f}' for x in vec.flatten())
@@ -264,10 +261,7 @@ def main():
                 chunk_md = records[start:start + args.batch_size]
                 batch    = Batch.from_data_list(chunk).to(args.device)
                 with torch.no_grad():
-                    try:
-                        out = model(batch)
-                    except TypeError:
-                        out = torch.stack([model.forward_once(d.to(args.device)) for d in chunk], dim=0)
+                    out = model.forward_once(batch)
                 emb_np = out.cpu().numpy()
                 for vec, md in zip(emb_np, chunk_md):
                     emb_str = ','.join(f'{x:.6f}' for x in vec.flatten())
