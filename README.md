@@ -46,17 +46,77 @@ To install the latest version from the `main` branch:
 ```sh
 pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity
 ```
-To install a specific version (e.g., v0.1.0):
+To install a specific version (e.g., v2.0.1):
 ```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git@v0.1.0#egg=ginfinity
+pip install git+https://github.com/nicoaira/GINFINITY.git@v0.2.1#egg=ginfinity
 ```
 This command will automatically handle the core dependencies listed in `pyproject.toml`.
+
+GINFINITY requires PyTorch Geometric extensions that are hardware-specific. You must install GINFINITY with the appropriate PyTorch Geometric wheel index based on your system configuration.
+
+#### Check Your CUDA Version
+
+First, determine which CUDA version you have (if any):
+
+```sh
+# Check if CUDA is available
+nvidia-smi
+
+# Or check CUDA version specifically
+nvcc --version
+```
+
+#### Choose Your Installation Command
+
+Note that you can install any version older than your CUDA driver. For example, if you have CUDA 12.5, you can install the version for CUDA 12.4 but not for CUDA 12.6
+
+- **For CUDA 12.6 systems (latest):**
+```sh
+pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.6.0+cu126.html
+```
+
+- **For CUDA 12.4 systems:**
+```sh
+pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
+```
+
+- **For CUDA 11.8 systems (legacy clusters):**
+```sh
+pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.6.0+cu118.html
+```
+
+**For CPU-only systems (no GPU):**
+```sh
+pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.6.0+cpu.html
+```
+
+- **To install a specific version (e.g., v2.0.1) with CUDA 12.8:**
+```sh
+pip install git+https://github.com/nicoaira/GINFINITY.git@v2.0.1#egg=ginfinity -f https://data.pyg.org/whl/torch-2.6.0+cu128.html
+```
+
+> **Important**: The `-f` flag specifies the PyTorch Geometric wheel index that matches your CUDA version. This ensures that the PyTorch Geometric extensions (torch-scatter, torch-sparse, torch-cluster, torch-spline-conv) are compiled for your specific CUDA version.
+
+#### Verify CUDA Compatibility
+
+After installation, you can verify that PyTorch detects your GPU correctly:
+
+```python
+import torch
+print(f"CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"CUDA version: {torch.version.cuda}")
+    print(f"GPU count: {torch.cuda.device_count()}")
+    print(f"GPU name: {torch.cuda.get_device_name(0)}")
+```
 
 ### Step 3: (Optional) Install Dependencies for Training
 If you intend to train new models, you'll need additional dependencies. You can install them using:
 ```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity[train]
+pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity[train] -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
 ```
+
+(Replace the wheel index URL with the appropriate one for your CUDA version from the options above)
 
 ### Step 4: Verify Installation
 Pre-trained model weights are included within the package in the `src/ginfinity/weights` directory and should be accessible after installation. 
@@ -88,5 +148,5 @@ ginfinity-embed --input path/to/your/rna_data.csv --output path/to/output_embedd
 
 ## Related Repositories
 
-- **GINflow Nextflow Pipeline**: For scalable and reproducible execution of GINFINITY workflows, please refer to our Nextflow pipeline available at: [https://github.com/nicoaira/GINflow](https://github.com/nicoaira/GINflow)
+- **GINflow Nextflow Pipeline**: For scalable and reproducible execution of GINInfinity workflows, please refer to our Nextflow pipeline available at: [https://github.com/nicoaira/GINflow](https://github.com/nicoaira/GINflow)
 - **GINFINITY API**: For programmatic access to GINFINITY functionalities, an API is under development and will be available at: `[Link to GINFINITY API Repository - Placeholder]`
