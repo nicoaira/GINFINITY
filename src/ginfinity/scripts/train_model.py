@@ -1,5 +1,6 @@
 import os
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torch_geometric.loader import DataLoader as GeoDataLoader
@@ -8,7 +9,7 @@ import pandas as pd
 import argparse
 from tqdm import tqdm
 from ginfinity.training.early_stopping import EarlyStopping
-from ginfinity.training.gin_rna_dataset import GINRNADataset
+from ginfinity.training.gin_rna_dataset import GINRNADataset, GINRNAPairDataset
 from ginfinity.model.gin_model import GINModel
 from ginfinity.training.triplet_loss import TripletLoss
 from ginfinity.utils import is_valid_dot_bracket, log_information, log_setup
@@ -49,7 +50,8 @@ def train_model_with_early_stopping(
         device,
         log_path,
         save_best_weights=True,
-        decay_rate=0.1  # Add decay_rate parameter
+        decay_rate=0.1,  # Add decay_rate parameter
+        training_mode="triplet"
 ):
     """
     Train a GIN model with early stopping.
@@ -78,10 +80,22 @@ def train_model_with_early_stopping(
         progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch + 1}/{num_epochs} - Training")
         for i, batch in progress_bar:
             optimizer.zero_grad()
-            anchor, positive, negative = batch
-            anchor, positive, negative = anchor.to(device), positive.to(device), negative.to(device)
-            anchor_out, positive_out, negative_out = model(anchor, positive, negative)
-            loss = criterion(anchor_out, positive_out, negative_out)
+            if training_mode == "triplet":
+                anchor, positive, negative = batch
+                anchor = anchor.to(device)
+                positive = positive.to(device)
+                negative = negative.to(device)
+                anchor_out, positive_out, negative_out = model(anchor, positive, negative)
+                loss = criterion(anchor_out, positive_out, negative_out)
+            else:
+                anchor, positive, target = batch
+                anchor = anchor.to(device)
+                positive = positive.to(device)
+                target = target.to(device)
+                anchor_out = model.forward_once(anchor)
+                positive_out = model.forward_once(positive)
+                pred = 1 - F.cosine_similarity(anchor_out, positive_out)
+                loss = criterion(pred, target.view(-1))
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
@@ -97,10 +111,22 @@ def train_model_with_early_stopping(
         with torch.no_grad():
             progress_bar_val = tqdm(enumerate(val_loader), total=len(val_loader), desc=f"Epoch {epoch + 1}/{num_epochs} - Validation")
             for i, batch in progress_bar_val:
-                anchor, positive, negative = batch
-                anchor, positive, negative = anchor.to(device), positive.to(device), negative.to(device)
-                anchor_out, positive_out, negative_out = model(anchor, positive, negative)
-                loss = criterion(anchor_out, positive_out, negative_out)
+                if training_mode == "triplet":
+                    anchor, positive, negative = batch
+                    anchor = anchor.to(device)
+                    positive = positive.to(device)
+                    negative = negative.to(device)
+                    anchor_out, positive_out, negative_out = model(anchor, positive, negative)
+                    loss = criterion(anchor_out, positive_out, negative_out)
+                else:
+                    anchor, positive, target = batch
+                    anchor = anchor.to(device)
+                    positive = positive.to(device)
+                    target = target.to(device)
+                    anchor_out = model.forward_once(anchor)
+                    positive_out = model.forward_once(positive)
+                    pred = 1 - F.cosine_similarity(anchor_out, positive_out)
+                    loss = criterion(pred, target.view(-1))
                 val_loss += loss.item()
                 progress_bar_val.set_postfix({"Val Loss": val_loss / (i + 1)})
 
@@ -164,6 +190,8 @@ def main():
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate for the GIN model (default: 0.0).')
     parser.add_argument('--val_fraction', type=float, default=0.2, help='Fraction of data for validation (default: 0.2)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for data splitting (default: 42)')
+    parser.add_argument('--training_mode', choices=['triplet', 'regression'], default='triplet',
+                        help='Use triplet loss or regression on f_total_modifications')
     args = parser.parse_args()
     
     # Process hidden_dim argument
@@ -195,8 +223,14 @@ def main():
         pooling_type=args.pooling_type,  # Pass the new argument
         dropout=args.dropout  # Pass the new argument
     )
-    train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding)
-    val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding)
+    if args.training_mode == "triplet":
+        train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding)
+        val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding)
+        criterion = TripletLoss(margin=1.0)
+    else:
+        train_dataset = GINRNAPairDataset(train_df, graph_encoding=args.graph_encoding)
+        val_dataset = GINRNAPairDataset(val_df, graph_encoding=args.graph_encoding)
+        criterion = torch.nn.MSELoss()
     train_loader = GeoDataLoader(train_dataset,
                                 batch_size=args.batch_size,
                                 shuffle=True,
@@ -208,7 +242,6 @@ def main():
                               pin_memory=True,
                               num_workers=args.num_workers)
 
-    criterion = TripletLoss(margin=1.0)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     start_time = time.time()
@@ -228,9 +261,10 @@ def main():
         "num_epochs": args.num_epochs,
         "patience": args.patience,
         "lr": args.lr,
-        "criterion": "TripletLoss",
+        "criterion": "TripletLoss" if args.training_mode == "triplet" else "MSELoss",
         "gin_layers": args.gin_layers,
-        "graph_encoding": args.graph_encoding
+        "graph_encoding": args.graph_encoding,
+        "training_mode": args.training_mode
     }
 
     log_information(log_path, training_params, "Training params")
@@ -249,7 +283,8 @@ def main():
         device=device,
         log_path=log_path,
         save_best_weights=args.save_best_weights,  # Pass the new argument
-        decay_rate=args.decay_rate  # Pass the new argument
+        decay_rate=args.decay_rate,  # Pass the new argument
+        training_mode=args.training_mode
     )
 
     end_time = time.time()
