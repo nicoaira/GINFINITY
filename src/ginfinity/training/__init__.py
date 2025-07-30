@@ -1,1 +1,1 @@
-# This file makes src/training a Python package
+from .gin_rna_dataset import GINRNADataset, GINRNAPairDataset
