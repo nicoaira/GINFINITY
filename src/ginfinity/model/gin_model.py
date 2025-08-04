@@ -1,6 +1,10 @@
 import torch
 import torch.nn as nn
 from torch_geometric.nn import GINEConv, global_add_pool, Set2Set
+import torch
+from torch_geometric.nn import GINEConv, global_add_pool, Set2Set, global_mean_pool
+
+import torch.nn as nn
 
 class GINModel(nn.Module):
     def __init__(
@@ -20,8 +24,7 @@ class GINModel(nn.Module):
         elif isinstance(hidden_dim, list):
             if len(hidden_dim) != gin_layers and len(hidden_dim) != 1:
                 raise ValueError(
-                    f"hidden_dim list must be of length 1 or {gin_layers}, "
-                    f"got length {len(hidden_dim)}"
+                    f"hidden_dim list must be of length 1 or {gin_layers}, got length {len(hidden_dim)}"
                 )
             hidden_dims = hidden_dim if len(hidden_dim) == gin_layers else hidden_dim * gin_layers
         else:
@@ -49,8 +52,6 @@ class GINModel(nn.Module):
         # Build each GINEConv layer
         self.convs = nn.ModuleList()
         for i in range(gin_layers):
-            # The MLP that processes the sum x_j + edge_attr_embed
-            # Make sure first layer is nn.Linear(...) so GINEConv can infer in_channels
             net = nn.Sequential(
                 nn.Linear(hidden_dims[i], hidden_dims[i]),
                 nn.ReLU(),
@@ -59,8 +60,6 @@ class GINModel(nn.Module):
                 nn.ReLU()
             )
 
-            # GINEConv automatically does edge_attr -> [hidden_dims[i]] 
-            # if you set edge_dim=2
             conv = GINEConv(nn=net, train_eps=True, edge_dim=2)
             self.convs.append(conv)
 
@@ -68,13 +67,15 @@ class GINModel(nn.Module):
         if pooling_type == "set2set":
             self.pooling = Set2Set(hidden_dims[-1], processing_steps=2)
             self.fc = nn.Linear(2 * hidden_dims[-1], output_dim)
+        elif pooling_type == "global_mean_pool":
+            self.pooling = global_mean_pool
+            self.fc = nn.Linear(hidden_dims[-1], output_dim)
         else:
             self.pooling = global_add_pool
             self.fc = nn.Linear(hidden_dims[-1], output_dim)
 
     @staticmethod
     def load_from_checkpoint(checkpoint_path, device='cpu'):
-        """Load model from checkpoint with metadata"""
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         metadata = checkpoint['metadata']
 
@@ -90,7 +91,6 @@ class GINModel(nn.Module):
         return model
 
     def save_checkpoint(self, path, optimizer=None, epoch=None):
-        """Save model checkpoint with metadata"""
         checkpoint = {
             'metadata': self.metadata,
             'state_dict': self.state_dict(),

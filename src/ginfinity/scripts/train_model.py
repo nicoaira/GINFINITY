@@ -186,7 +186,7 @@ def main():
     parser.add_argument('--device', type=str, choices=['cuda', 'cpu'], default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training.')
     parser.add_argument('--min_delta', type=float, default=0.001, help='Minimum validation loss decrease to qualify as improvement (default: 0.001)')
     parser.add_argument('--decay_rate', type=float, default=0.01, help='Decay rate for the learning rate.')
-    parser.add_argument('--pooling_type', type=str, choices=['global_add_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the GIN model.')
+    parser.add_argument('--pooling_type', type=str, choices=['global_add_pool','global_mean_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the GIN model.')
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate for the GIN model (default: 0.0).')
     parser.add_argument('--val_fraction', type=float, default=0.2, help='Fraction of data for validation (default: 0.2)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for data splitting (default: 42)')
