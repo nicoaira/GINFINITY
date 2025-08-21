@@ -192,6 +192,8 @@ def main():
     parser.add_argument('--seed', type=int, default=42, help='Random seed for data splitting (default: 42)')
     parser.add_argument('--training_mode', choices=['triplet', 'regression'], default='triplet',
                         help='Use triplet loss or regression on f_total_modifications')
+    parser.add_argument('--seq_weight', type=float, default=0.0,
+                        help='Weight of nucleotide sequence one-hot features relative to pairing state (0-1).')
     args = parser.parse_args()
     
     # Process hidden_dim argument
@@ -215,21 +217,23 @@ def main():
     device = args.device
 
     # Initialize GIN model with processed hidden_dim
+    node_feature_dim = 1 if args.seq_weight == 0 else 5
     model = GINModel(
         hidden_dim=hidden_dim,
         output_dim=args.output_dim,
         graph_encoding=args.graph_encoding,
         gin_layers=args.gin_layers,
         pooling_type=args.pooling_type,  # Pass the new argument
-        dropout=args.dropout  # Pass the new argument
+        dropout=args.dropout,  # Pass the new argument
+        node_feature_dim=node_feature_dim,
     )
     if args.training_mode == "triplet":
-        train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding)
-        val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding)
+        train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
+        val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
         criterion = TripletLoss(margin=1.0)
     else:
-        train_dataset = GINRNAPairDataset(train_df, graph_encoding=args.graph_encoding)
-        val_dataset = GINRNAPairDataset(val_df, graph_encoding=args.graph_encoding)
+        train_dataset = GINRNAPairDataset(train_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
+        val_dataset = GINRNAPairDataset(val_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
         criterion = torch.nn.MSELoss()
     train_loader = GeoDataLoader(train_dataset,
                                 batch_size=args.batch_size,
@@ -264,7 +268,8 @@ def main():
         "criterion": "TripletLoss" if args.training_mode == "triplet" else "MSELoss",
         "gin_layers": args.gin_layers,
         "graph_encoding": args.graph_encoding,
-        "training_mode": args.training_mode
+        "training_mode": args.training_mode,
+        "seq_weight": args.seq_weight,
     }
 
     log_information(log_path, training_params, "Training params")

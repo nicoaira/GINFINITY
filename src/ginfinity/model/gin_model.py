@@ -1,10 +1,6 @@
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GINEConv, global_add_pool, Set2Set
-import torch
 from torch_geometric.nn import GINEConv, global_add_pool, Set2Set, global_mean_pool
-
-import torch.nn as nn
 
 class GINModel(nn.Module):
     def __init__(
@@ -14,7 +10,8 @@ class GINModel(nn.Module):
         graph_encoding="standard",
         gin_layers=1,
         dropout=0.05,
-        pooling_type="global_add_pool"
+        pooling_type="global_add_pool",
+        node_feature_dim: int = 1,
     ):
         super(GINModel, self).__init__()
 
@@ -37,11 +34,12 @@ class GINModel(nn.Module):
             "graph_encoding": graph_encoding,
             "gin_layers": gin_layers,
             "dropout": dropout,
-            "pooling_type": pooling_type
+            "pooling_type": pooling_type,
+            "node_feature_dim": node_feature_dim,
         }
 
         # 1) Node feature dimension:
-        input_dim = 1 if graph_encoding == "standard" else 7
+        input_dim = node_feature_dim if graph_encoding == "standard" else 7
 
         # 2) Our edges are 2D ([1,0] or [0,1]) => pass edge_dim=2 to GINEConv
         edge_dim = 2  
@@ -85,7 +83,8 @@ class GINModel(nn.Module):
             graph_encoding=metadata['graph_encoding'],
             gin_layers=metadata['gin_layers'],
             dropout=metadata['dropout'],
-            pooling_type=metadata['pooling_type']
+            pooling_type=metadata['pooling_type'],
+            node_feature_dim=metadata.get('node_feature_dim', 1),
         )
         model.load_state_dict(checkpoint['state_dict'])
         return model
