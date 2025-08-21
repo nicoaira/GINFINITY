@@ -141,27 +141,40 @@ def is_valid_dot_bracket(structure):
     # If stack is empty, all parentheses are matched
     return len(stack) == 0
 
-def dotbracket_to_graph(dotbracket):
+def dotbracket_to_graph(dotbracket, sequence=None):
+    """Convert a dot-bracket string (and optional sequence) into a graph.
+
+    Parameters
+    ----------
+    dotbracket : str
+        Dot-bracket representation of the RNA secondary structure.
+    sequence : str, optional
+        Nucleotide sequence corresponding to ``dotbracket``. If provided,
+        each node in the resulting graph will contain a ``base`` attribute
+        with the nucleotide character at that position.
+    """
     G = nx.Graph()
     bases = []
 
     # Add nodes and edges based on dot-bracket structure
     # TODO: Node information is redundant, should it be removed?
     for i, c in enumerate(dotbracket):
+        base = sequence[i] if sequence is not None and i < len(sequence) else None
         if c == '(':
             bases.append(i)
-            G.add_node(i, label='unpaired')
+            G.add_node(i, label='unpaired', base=base)
         elif c == ')':
             if bases:
                 neighbor = bases.pop()
                 G.add_edge(i, neighbor, edge_type='base_pair')
                 G.nodes[i]['label'] = 'paired'
                 G.nodes[neighbor]['label'] = 'paired'
+                G.nodes[i]['base'] = base
             else:
                 print("Mismatched parentheses in input!")
                 return None
         elif c == '.':
-            G.add_node(i, label='unpaired')
+            G.add_node(i, label='unpaired', base=base)
         else:
             print("Input is not in dot-bracket notation!")
             return None
@@ -169,12 +182,46 @@ def dotbracket_to_graph(dotbracket):
         # Adding sequential (adjacent) edges
         if i > 0:
             G.add_edge(i, i - 1, edge_type='adjacent')
-    
+
     return G
 
-def graph_to_tensor(G):
+def _one_hot_base(base):
+    mapping = {
+        'A': [1.0, 0.0, 0.0, 0.0],
+        'C': [0.0, 1.0, 0.0, 0.0],
+        'G': [0.0, 0.0, 1.0, 0.0],
+        'U': [0.0, 0.0, 0.0, 1.0],
+    }
+    if base is None:
+        return [0.0, 0.0, 0.0, 0.0]
+    return mapping.get(base.upper(), [0.0, 0.0, 0.0, 0.0])
+
+def graph_to_tensor(G, seq_weight: float = 0.0):
+    """Convert a NetworkX graph to torch_geometric Data with weighted features.
+
+    Parameters
+    ----------
+    G : nx.Graph
+        Graph produced by :func:`dotbracket_to_graph`.
+    seq_weight : float, optional
+        Weight of the one-hot encoded nucleotide sequence relative to the
+        pairing state. Must be between ``0`` and ``1``. If ``0`` (default),
+        only the pairing information is used.
+    """
+
     nodes = sorted(G.nodes())
-    node_features = [[1.0] if G.nodes[node]['label'] == 'paired' else [0.0] for node in nodes]
+    node_features = []
+    use_sequence = seq_weight > 0
+    pair_weight = 1.0 - seq_weight
+    for node in nodes:
+        pair_val = 1.0 if G.nodes[node]['label'] == 'paired' else 0.0
+        if use_sequence:
+            base_vec = _one_hot_base(G.nodes[node].get('base'))
+            features = [pair_weight * pair_val] + [seq_weight * b for b in base_vec]
+        else:
+            features = [pair_val]
+        node_features.append(features)
+
     x = torch.tensor(node_features, dtype=torch.float)
     edge_indices = [[u, v] for u, v in G.edges()]
     edge_attrs = [[1.0, 0.0] if G.edges[u, v]['edge_type'] == 'adjacent' else [0.0, 1.0] for u, v in G.edges()]
