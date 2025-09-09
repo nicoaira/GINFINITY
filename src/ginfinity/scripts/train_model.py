@@ -168,6 +168,53 @@ def train_model_with_early_stopping(
 
     save_model_to_local(model, optimizer, epoch, model_id, log_path)
 
+
+@torch.no_grad()
+def _fit_node_stats_from_training_loader(model: GINModel, train_loader, device: str, training_mode: str, max_batches=None):
+    """Estimate per-dimension μ/σ of node embeddings on training graphs.
+
+    Computes stats on the output of the graph encoder prior to any optional
+    post-hoc node normalization and before pooling.
+    """
+    model.eval()
+    s = None
+    ss = None
+    n = 0
+    for i, batch in enumerate(train_loader):
+        if max_batches is not None and i >= max_batches:
+            break
+        if training_mode == "triplet":
+            anchor, positive, negative = batch
+            for data in (anchor, positive, negative):
+                data = data.to(device)
+                x = model._node_embeds_no_norm(data)
+                if s is None:
+                    s = x.sum(dim=0)
+                    ss = (x * x).sum(dim=0)
+                else:
+                    s += x.sum(dim=0)
+                    ss += (x * x).sum(dim=0)
+                n += x.size(0)
+        else:
+            anchor, positive, _ = batch
+            for data in (anchor, positive):
+                data = data.to(device)
+                x = model._node_embeds_no_norm(data)
+                if s is None:
+                    s = x.sum(dim=0)
+                    ss = (x * x).sum(dim=0)
+                else:
+                    s += x.sum(dim=0)
+                    ss += (x * x).sum(dim=0)
+                n += x.size(0)
+    if n == 0:
+        raise RuntimeError("No nodes encountered while fitting node stats.")
+    mu = s / n
+    var = ss / n - mu * mu
+    var = torch.clamp(var, min=0.0)
+    sigma = torch.sqrt(var + model.eps)
+    model.set_node_stats(mu, sigma)
+
 def main():
     # Argument parsing
     parser = argparse.ArgumentParser(description="Train a GIN model on RNA secondary structures.")
@@ -188,6 +235,13 @@ def main():
     parser.add_argument('--decay_rate', type=float, default=0.01, help='Decay rate for the learning rate.')
     parser.add_argument('--pooling_type', type=str, choices=['global_add_pool','global_mean_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the GIN model.')
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate for the GIN model (default: 0.0).')
+    # New: normalization + residual config
+    parser.add_argument('--norm_type', type=str, choices=['none','batch','graph','layer','instance'], default='graph', help='Graph-aware normalization inside GIN layers.')
+    parser.add_argument('--node_embed_norm', type=str, choices=['none','l2','zscore','zscore_l2'], default='none', help='Post-hoc node embedding normalization mode.')
+    parser.add_argument('--node_norm_eps', type=float, default=1e-6, help='Epsilon for numerical stability in node normalization.')
+    parser.add_argument('--normalize_nodes_before_pool', action='store_true', help='Apply node normalization before pooling when producing graph embeddings.')
+    parser.add_argument('--disable_residual', action='store_true', help='Disable residual connections within GIN blocks.')
+    parser.add_argument('--fit_node_stats_batches', type=int, default=None, help='Optional cap on batches to use when fitting z-score node stats (None = all).')
     parser.add_argument('--val_fraction', type=float, default=0.2, help='Fraction of data for validation (default: 0.2)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for data splitting (default: 42)')
     parser.add_argument('--training_mode', choices=['triplet', 'regression'], default='triplet',
@@ -221,8 +275,15 @@ def main():
         graph_encoding=args.graph_encoding,
         gin_layers=args.gin_layers,
         pooling_type=args.pooling_type,  # Pass the new argument
-        dropout=args.dropout  # Pass the new argument
+        dropout=args.dropout,  # Pass the new argument
+        node_embed_norm=args.node_embed_norm,
+        eps=args.node_norm_eps,
+        norm_type=args.norm_type,
+        use_residual=(not args.disable_residual),
+        normalize_nodes_before_pool=args.normalize_nodes_before_pool,
     )
+    # Ensure model is on the chosen device before any forward passes (e.g., fitting node stats)
+    model.to(device)
     if args.training_mode == "triplet":
         train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding)
         val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding)
@@ -244,6 +305,13 @@ def main():
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
+    # Configure node normalization defaults and optionally fit stats
+    model.set_node_embed_norm(args.node_embed_norm)
+    model.set_normalize_nodes_before_pool(args.normalize_nodes_before_pool)
+    if args.node_embed_norm in ("zscore", "zscore_l2"):
+        print("Fitting node μ/σ on training graphs for z-score normalization...")
+        _fit_node_stats_from_training_loader(model, train_loader, device, args.training_mode, args.fit_node_stats_batches)
+
     start_time = time.time()
 
     output_folder = f"output/{args.model_id}"
@@ -264,7 +332,12 @@ def main():
         "criterion": "TripletLoss" if args.training_mode == "triplet" else "MSELoss",
         "gin_layers": args.gin_layers,
         "graph_encoding": args.graph_encoding,
-        "training_mode": args.training_mode
+        "training_mode": args.training_mode,
+        "norm_type": args.norm_type,
+        "node_embed_norm": args.node_embed_norm,
+        "node_norm_eps": args.node_norm_eps,
+        "use_residual": not args.disable_residual,
+        "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
     }
 
     log_information(log_path, training_params, "Training params")

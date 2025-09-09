@@ -44,3 +44,4 @@ example_data/*.json
 test-package
 build*
 src/ginfinity.egg-info/*
+run_training.sh
