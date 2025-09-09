@@ -49,6 +49,7 @@ Repository = "https://github.com/nicoaira/GINFINITY"
 
 [project.scripts]
 ginfinity-embed = "ginfinity.scripts.generate_embeddings:main"
+ginfinity-embed-nodes = "ginfinity.scripts.generate_node_embeddings:main"
 ginfinity-generate-windows = "ginfinity.scripts.generate_windows:main"
 ginfinity-compute-distances = "ginfinity.scripts.compute_distances:main"
 ginfinity-train = "ginfinity.scripts.train_model:main"
