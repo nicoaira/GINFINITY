@@ -1,0 +1,1 @@
+python src/ginfinity/scripts/generate_node_embeddings.py --input /home/nicolas/ginfinity_applications/premirnas/merged_premirna_data.csv  --output /home/nicolas/ginfinity_applications/premirnas/premirans_node_embeds.tsv --id-column Name --device cuda --num-workers 1 --structure-column-name DotBracket --keep-cols DotBracket

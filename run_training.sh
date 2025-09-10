@@ -1,0 +1,23 @@
+ginfinity-train \
+    --input_path '/home/nicolas/programs/GINFINITY/dev/data/merged_rna_triplets.csv' \
+    --val_fraction 0.03 \
+    --model_id gin_regression_norm_6 \
+    --training_mode regression \
+    --gin_layers 5 \
+    --graph_encoding standard \
+    --hidden_dim "256,256,256,256,256" \
+    --output_dim 256 \
+    --pooling_type global_mean_pool \
+    --dropout 0.05 \
+    --batch_size 256 \
+    --num_epochs 300 \
+    --patience 20 \
+    --min_delta 0.0001 \
+    --lr 0.00001 \
+    --decay_rate 0.95 \
+    --norm_type graph \
+    --node_embed_norm zscore_l2 \
+    --normalize_nodes_before_pool \
+    --num_workers 8 \
+    --save_best_weights True \
+    --device cuda \
