@@ -45,3 +45,5 @@ test-package
 build*
 src/ginfinity.egg-info/*
 run_training.sh
+generate_premirnas_emb.sh
+run_all_pairwise_alignments.py

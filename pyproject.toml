@@ -34,6 +34,7 @@ dependencies = [
   "gputil >=1.4, <2.0",
   "psutil >=7.0, <8.0",
   "numpy >=1.26, <3.0",
+  "matplotlib >=3.7, <4.0",
   "torch-geometric ==2.6.0",
 
   # PyG C-extension wheels, versions common to 11.8/12.4/12.6/cpu
@@ -53,6 +54,8 @@ ginfinity-embed-nodes = "ginfinity.scripts.generate_node_embeddings:main"
 ginfinity-generate-windows = "ginfinity.scripts.generate_windows:main"
 ginfinity-compute-distances = "ginfinity.scripts.compute_distances:main"
 ginfinity-train = "ginfinity.scripts.train_model:main"
+ginfinity-align-nodes = "ginfinity.scripts.align_node_embeddings:main"
+ginfinity-align-nodes-batch = "ginfinity.scripts.align_node_embeddings_batch:main"
 
 [project.optional-dependencies]
 train = [
