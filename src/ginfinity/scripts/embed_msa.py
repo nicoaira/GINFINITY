@@ -22,7 +22,7 @@ Quick usage
     --dotbracket-col DotBracket --paired-col PairedIndices \
     --out-prefix out/premirnas --topk 20 --consistency-rounds 1 \
     --alpha 6.0 --beta 0.0 --gap-open -10 --gap-extend -0.5 \
-    --stem-gap-bonus -2.0 --tree nj --refine-iters 2 --num-workers 8
+    --tree nj --refine-iters 2 --num-workers 8
 
 Documentation
 - Detailed documentation is available at docs/embed_msa.md.
@@ -163,6 +163,21 @@ def _dotbracket_to_pairs(db: str) -> List[int]:
                 pairs[i] = j
                 pairs[j] = i
     return pairs
+
+
+def _pairs_to_dotbracket(pairs: List[int]) -> str:
+    # Convert partner indices to dot-bracket: '.' for unpaired, '(' for i<j, ')' for i>j
+    L = len(pairs)
+    out = ['.'] * L
+    for i in range(L):
+        j = pairs[i]
+        if j == -1:
+            out[i] = '.'
+        elif j > i:
+            out[i] = '('
+        else:
+            out[i] = ')'
+    return ''.join(out)
 
 
 # ======================
@@ -473,7 +488,8 @@ def consistency_round(sparse_lib: Dict[Tuple[int, int], SparsePairs],
                       neighbors: Optional[Dict[int, List[int]]] = None,
                       lam: float = 0.5,
                       topk: int = 20,
-                      pmin: float = 1e-4) -> Dict[Tuple[int, int], SparsePairs]:
+                      pmin: float = 1e-4,
+                      desc: Optional[str] = None) -> Dict[Tuple[int, int], SparsePairs]:
     N = len(sequences)
     # Build adjacency lists from library
     adj: Dict[int, List[int]] = {i: [] for i in range(N)}
@@ -481,6 +497,16 @@ def consistency_round(sparse_lib: Dict[Tuple[int, int], SparsePairs],
         adj[a].append(b)
         adj[b].append(a)
     out: Dict[Tuple[int, int], SparsePairs] = {}
+
+    # Optional progress bar over unique (a,b) pairs where a<b
+    pbar = None
+    if desc is not None:
+        total_pairs = 0
+        for a in range(N):
+            for b in adj.get(a, []):
+                if a < b:
+                    total_pairs += 1
+        pbar = tqdm(total=total_pairs, desc=desc, unit='pair', position=1, leave=False)
 
     for a in range(N):
         for b in adj.get(a, []):
@@ -568,6 +594,11 @@ def consistency_round(sparse_lib: Dict[Tuple[int, int], SparsePairs],
                     pp.append(v)
             out[(a, b)] = SparsePairs(i=np.array(ii, dtype=np.int32), j=np.array(jj, dtype=np.int32), p=np.array(pp, dtype=np.float32), shape=(La, Lb))
 
+            if pbar is not None:
+                pbar.update(1)
+
+    if pbar is not None:
+        pbar.close()
     return out
 
 
@@ -724,8 +755,15 @@ def _initial_profiles(records: List[SequenceRecord]) -> List[Profile]:
     profiles: List[Profile] = []
     for idx, r in enumerate(records):
         L = r.emb.shape[0]
-        # Start with each sequence as its own profile: one char per column
-        aligned = {idx: ["X"] * L}  # placeholder char; we output gaps in final strings only
+        # Start with each sequence as its own profile: one char per column.
+        # Use dot-bracket if provided or derivable; otherwise fallback to 'X'.
+        if isinstance(r.dotbracket, str) and len(r.dotbracket) == L:
+            base_chars = list(r.dotbracket)
+        elif isinstance(r.paired_idx, list) and len(r.paired_idx) == L:
+            base_chars = list(_pairs_to_dotbracket(r.paired_idx))
+        else:
+            base_chars = ["X"] * L
+        aligned = {idx: base_chars}
         cols = []
         for pos in range(L):
             cols.append(ProfileColumn(mu=r.emb[pos], stem_fraction=(1.0 if (r.paired_idx and r.paired_idx[pos] != -1) else 0.0)))
@@ -740,7 +778,7 @@ def _compatibility_score(ca: ProfileColumn, cb: ProfileColumn, beta_struct: floa
 
 @njit(cache=True)
 def _affine_dp_profile(muA: np.ndarray, muB: np.ndarray, stemA: np.ndarray, stemB: np.ndarray,
-                       go: float, ge: float, stem_bonus: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                       go: float, ge: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     # DP over columns; returns traceback pointers for merging
     La = muA.shape[0]
     Lb = muB.shape[0]
@@ -752,11 +790,9 @@ def _affine_dp_profile(muA: np.ndarray, muB: np.ndarray, stemA: np.ndarray, stem
 
     M[0, 0] = 0.0
     for i in range(1, La + 1):
-        mod = stem_bonus if stemA[i - 1] >= 0.5 else 0.0
-        X[i, 0] = max(M[i - 1, 0] + go + mod, X[i - 1, 0] + ge)
+        X[i, 0] = max(M[i - 1, 0] + go, X[i - 1, 0] + ge)
     for j in range(1, Lb + 1):
-        mod = stem_bonus if stemB[j - 1] >= 0.5 else 0.0
-        Y[0, j] = max(M[0, j - 1] + go + mod, Y[0, j - 1] + ge)
+        Y[0, j] = max(M[0, j - 1] + go, Y[0, j - 1] + ge)
 
     for i in range(1, La + 1):
         for j in range(1, Lb + 1):
@@ -780,13 +816,11 @@ def _affine_dp_profile(muA: np.ndarray, muB: np.ndarray, stemA: np.ndarray, stem
                 tb_code = 0
             M[i, j] = best_prev + s + comp
 
-            modA = stem_bonus if stemA[i - 1] >= 0.5 else 0.0
-            open_x = M[i - 1, j] + go + modA
+            open_x = M[i - 1, j] + go
             ext_x = X[i - 1, j] + ge
             X[i, j] = open_x if open_x > ext_x else ext_x
 
-            modB = stem_bonus if stemB[j - 1] >= 0.5 else 0.0
-            open_y = M[i, j - 1] + go + modB
+            open_y = M[i, j - 1] + go
             ext_y = Y[i, j - 1] + ge
             Y[i, j] = open_y if open_y > ext_y else ext_y
 
@@ -802,7 +836,7 @@ def _affine_dp_profile(muA: np.ndarray, muB: np.ndarray, stemA: np.ndarray, stem
 
 
 def profile_profile_dp(profileA: Profile, profileB: Profile,
-                       gap_open: float, gap_extend: float, stem_gap_bonus: float) -> Profile:
+                       gap_open: float, gap_extend: float) -> Profile:
     La = len(profileA.columns)
     Lb = len(profileB.columns)
     D = profileA.columns[0].mu.shape[0] if La > 0 else profileB.columns[0].mu.shape[0]
@@ -811,7 +845,7 @@ def profile_profile_dp(profileA: Profile, profileB: Profile,
     stemA = np.array([c.stem_fraction for c in profileA.columns], dtype=np.float32)
     stemB = np.array([c.stem_fraction for c in profileB.columns], dtype=np.float32)
 
-    M, X, Y = _affine_dp_profile(muA, muB, stemA, stemB, gap_open, gap_extend, stem_gap_bonus)
+    M, X, Y = _affine_dp_profile(muA, muB, stemA, stemB, gap_open, gap_extend)
 
     # Traceback
     i, j = La, Lb
@@ -845,9 +879,9 @@ def profile_profile_dp(profileA: Profile, profileB: Profile,
             aligned_cols.append(ProfileColumn(mu=mu, stem_fraction=float(stem_fraction)))
             # Propagate chars
             for idx in profileA.member_indices:
-                new_aligned[idx].append('X')
+                new_aligned[idx].append(profileA.aligned_chars[idx][i - 1])
             for idx in profileB.member_indices:
-                new_aligned[idx].append('X')
+                new_aligned[idx].append(profileB.aligned_chars[idx][j - 1])
             i -= 1
             j -= 1
         elif cur_state == 1 and i > 0:
@@ -856,7 +890,7 @@ def profile_profile_dp(profileA: Profile, profileB: Profile,
             stem_fraction = profileA.columns[i - 1].stem_fraction
             aligned_cols.append(ProfileColumn(mu=mu, stem_fraction=float(stem_fraction)))
             for idx in profileA.member_indices:
-                new_aligned[idx].append('X')
+                new_aligned[idx].append(profileA.aligned_chars[idx][i - 1])
             for idx in profileB.member_indices:
                 new_aligned[idx].append('-')
             i -= 1
@@ -868,7 +902,7 @@ def profile_profile_dp(profileA: Profile, profileB: Profile,
             for idx in profileA.member_indices:
                 new_aligned[idx].append('-')
             for idx in profileB.member_indices:
-                new_aligned[idx].append('X')
+                new_aligned[idx].append(profileB.aligned_chars[idx][j - 1])
             j -= 1
 
     aligned_cols.reverse()
@@ -879,14 +913,14 @@ def profile_profile_dp(profileA: Profile, profileB: Profile,
 
 
 def msa_from_tree(tree: GuideTree, seq_profiles: List[Profile],
-                  gap_open: float, gap_extend: float, stem_gap_bonus: float) -> Profile:
+                  gap_open: float, gap_extend: float) -> Profile:
     # Recursively traverse the tree combining profiles
     def build(node: Any) -> Profile:
         if isinstance(node, int):
             return seq_profiles[node]
         left = build(node[0])
         right = build(node[1])
-        return profile_profile_dp(left, right, gap_open, gap_extend, stem_gap_bonus)
+        return profile_profile_dp(left, right, gap_open, gap_extend)
 
     return build(tree.structure)
 
@@ -915,7 +949,7 @@ def iterative_refinement(aln: Profile, tree: GuideTree, params: Dict[str, Any]) 
     best = aln
     best_score = _sp_score(aln)
     random.seed(int(params.get('seed', 42)))
-    for _ in range(iters):
+    for _ in tqdm(range(iters), desc='Refinement', unit='iter'):
         # This is a lightweight placeholder: in practice we would split and realign.
         # We simulate a minor shuffle and keep if score improves (no-op mostly).
         cand = best  # No change for now; refinement hook present
@@ -1013,14 +1047,17 @@ def main():
     ap.add_argument('--embeds-col', default='node_embeddings')
     ap.add_argument('--dotbracket-col', default=None)
     ap.add_argument('--paired-col', default=None)
-    ap.add_argument('--out-prefix', required=True)
+    ap.add_argument(
+        '--out-prefix',
+        default=None,
+        help='Output prefix for result files. If omitted, outputs go under embed_msa_out_YYMMDD_HHMMSS/'
+    )
     ap.add_argument('--topk', type=int, default=20)
     ap.add_argument('--consistency-rounds', type=int, default=1)
     ap.add_argument('--alpha', type=float, default=None)
     ap.add_argument('--beta', type=float, default=None)
     ap.add_argument('--gap-open', type=float, default=-10.0)
     ap.add_argument('--gap-extend', type=float, default=-0.5)
-    ap.add_argument('--stem-gap-bonus', type=float, default=-2.0)
     ap.add_argument('--use-local', action='store_true')
     ap.add_argument('--tree', choices=['nj', 'upgma'], default='nj')
     ap.add_argument('--refine-iters', type=int, default=0)
@@ -1035,6 +1072,13 @@ def main():
 
     t_start = time.time()
 
+    # Determine output prefix (auto timestamped directory if not provided)
+    if args.out_prefix and str(args.out_prefix).strip():
+        out_prefix = args.out_prefix
+    else:
+        out_dir_auto = f"embed_msa_out_{time.strftime('%y%m%d_%H%M%S')}"
+        out_prefix = os.path.join(out_dir_auto, "msa")
+
     # Dummy mode
     if args.input == 'dummy':
         # Generate 5 toy sequences with small lengths
@@ -1045,10 +1089,8 @@ def main():
             L = random.randint(6, 10)
             emb = np.random.randn(L, D).astype(np.float32)
             records.append(SequenceRecord(name=f"seq{i+1}", emb=emb))
-        out_prefix = args.out_prefix if args.out_prefix else "/tmp/embed_msa_dummy"
     else:
         records = load_tsv(args.input, args.name_col, args.embeds_col, args.dotbracket_col, args.paired_col)
-        out_prefix = args.out_prefix
         if len(records) == 0:
             raise SystemExit("No valid records found.")
 
@@ -1113,8 +1155,16 @@ def main():
     # Consistency rounds
     if N >= 3 and args.consistency_rounds > 0:
         print(f"Running {args.consistency_rounds} consistency round(s)...")
-        for _ in range(args.consistency_rounds):
-            sparse_lib = consistency_round(sparse_lib, records, neighbors=None, lam=0.5, topk=args.topk, pmin=1e-4)
+        for r in tqdm(range(args.consistency_rounds), desc='Consistency rounds', unit='round'):
+            sparse_lib = consistency_round(
+                sparse_lib,
+                records,
+                neighbors=None,
+                lam=0.5,
+                topk=args.topk,
+                pmin=1e-4,
+                desc=f"Round {r+1}/{args.consistency_rounds}"
+            )
 
     # Guide tree
     D = build_distance_matrix_from_posteriors(sparse_lib, N)
@@ -1122,7 +1172,7 @@ def main():
 
     # Progressive alignment
     seq_profiles = _initial_profiles(records)
-    aln = msa_from_tree(tree, seq_profiles, args.gap_open, args.gap_extend, args.stem_gap_bonus)
+    aln = msa_from_tree(tree, seq_profiles, args.gap_open, args.gap_extend)
 
     # Iterative refinement
     if args.refine_iters > 0:

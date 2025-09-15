@@ -36,7 +36,7 @@ Robust parsing: invalid rows are skipped with warnings. All sequences must share
 
 ## Outputs
 
-- `out_prefix.fasta`: FASTA alignment. Residue symbols are placeholders (`X`) and `-` for gaps.
+- `out_prefix.fasta`: FASTA alignment. Residue symbols are dot-bracket characters (`().[]{}.`) when structural info is provided, otherwise `X`. Gaps are `-`.
 - `out_prefix.sto`: Stockholm alignment with the same symbols.
 - `out_prefix.aln.tsv`: two-column TSV mapping `Name` → aligned string.
 - `out_prefix.diagnostics/`:
@@ -44,7 +44,7 @@ Robust parsing: invalid rows are skipped with warnings. All sequences must share
   - Optional `pair_A_B.png` heatmaps of sparse posteriors for a few pairs (if `--plot-diagnostics` and matplotlib available).
   - `run_meta.json`: parameters, counts, and timing info.
 
-Note: actual nucleotides are not used; alignment is over embedding positions. Output characters reflect positions (`X`) and gaps (`-`).
+Note: actual nucleotides are not used; alignment is over embedding positions. If `DotBracket` or `PairedIndices` is present, the aligned strings contain the corresponding dot-bracket characters per sequence; otherwise they contain `X` for residues and `-` for gaps.
 
 ## CLI Usage
 
@@ -171,7 +171,7 @@ Note: Optional banding is not implemented yet. The library remains sparse via to
 - Add diagonal banding to pairwise DP for long sequences.
 - Improve backward local-mode normalization for sharper posteriors.
 - Implement real iterative refinement by splitting the guide tree and realigning sub-MSAs.
-- Replace placeholder residue character (`X`) with user-provided sequence characters if available.
+ 
 
 ## Troubleshooting
 
@@ -203,4 +203,3 @@ python src/ginfinity/scripts/embed_msa.py \
   --alpha 6.0 --beta 0.0 --gap-open -10 --gap-extend -0.5 \
   --stem-gap-bonus -2.0 --tree nj --num-workers 8 --plot-diagnostics
 ```
-
