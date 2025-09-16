@@ -44,3 +44,5 @@ example_data/*.json
 test-package
 build*
 src/ginfinity.egg-info/*
+out/premirnas.diagnostics*
+embed_msa_out_*/

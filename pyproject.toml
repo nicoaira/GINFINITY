@@ -52,10 +52,14 @@ ginfinity-embed = "ginfinity.scripts.generate_embeddings:main"
 ginfinity-generate-windows = "ginfinity.scripts.generate_windows:main"
 ginfinity-compute-distances = "ginfinity.scripts.compute_distances:main"
 ginfinity-train = "ginfinity.scripts.train_model:main"
+ginfinity-optimize-msa = "ginfinity.scripts.optimize_embed_msa:main"
 
 [project.optional-dependencies]
 train = [
   "scikit-learn >=1.6, <2.0"
+]
+optuna = [
+  "optuna >=3.6, <4.0"
 ]
 
 [tool.setuptools.packages.find]
