@@ -9,26 +9,16 @@ import numpy as np
 import pandas as pd
 
 
-def read_embeddings_table(path: str) -> pd.DataFrame:
-    """
-    Read TSV/CSV produced by generate_node_embeddings.py.
-    Auto-detects separator for common cases.
-    Expects a column named 'node_embeddings' containing a JSON-encoded LxD matrix.
-    """
-    # Heuristic: use tab if .tsv, else let pandas sniff
+def read_table_auto(path: str) -> pd.DataFrame:
+    """Read TSV/CSV with simple separator heuristics."""
     if path.endswith(".tsv"):
-        df = pd.read_csv(path, sep="\t", low_memory=False)
-    elif path.endswith(".csv"):
-        df = pd.read_csv(path)
-    else:
-        # engine='python' + sep=None enables simple sniffing of separators; avoid low_memory here
-        df = pd.read_csv(path, sep=None, engine="python")
-    if "node_embeddings" not in df.columns:
-        raise ValueError("Input does not contain a 'node_embeddings' column.")
-    return df
+        return pd.read_csv(path, sep="\t", low_memory=False)
+    if path.endswith(".csv"):
+        return pd.read_csv(path)
+    return pd.read_csv(path, sep=None, engine="python")
 
 
-def parse_node_embeddings(cell: str) -> np.ndarray:
+def parse_embeddings(cell: str) -> np.ndarray:
     """
     Parse the JSON-encoded LxD matrix into a numpy array (float32).
     """
@@ -351,6 +341,27 @@ def main():
     parser.add_argument("--id-column", required=True, help="Column name for unique RNA IDs.")
     parser.add_argument("--rna1", required=True, help="ID value of the first RNA.")
     parser.add_argument("--rna2", required=True, help="ID value of the second RNA.")
+    # Optional base (sequence) embeddings
+    parser.add_argument(
+        "--base-input",
+        default=None,
+        help=(
+            "Optional path to TSV/CSV that contains base embeddings (per-position sequence embeddings). "
+            "If omitted, attempts to read base embeddings from --input if the column is present."
+        ),
+    )
+    parser.add_argument(
+        "--base-embeds-col",
+        default="base_embeddings",
+        help="Column name for base (sequence) embeddings if provided.",
+    )
+    parser.add_argument(
+        "--seq-weight",
+        type=float,
+        default=0.0,
+        help=
+        "Weight for base (sequence) similarity in [0,1]. 0=only structural (node) embeddings; 1=only base.",
+    )
     # Gap penalties (affine). Maintain deprecated --gap as alias to --gap-open.
     parser.add_argument("--gap-open", type=float, default=-1.0, help="Gap opening penalty (negative).")
     parser.add_argument("--gap-extend", type=float, default=-1.0, help="Gap extension penalty (negative).")
@@ -382,12 +393,21 @@ def main():
             "If provided, uses this column from --input to emit aligned dot-bracket structures."
         ),
     )
+    parser.add_argument(
+        "--save-components",
+        action="store_true",
+        help="If set and base embeddings are used, also write base/struct component matrices.",
+    )
     args = parser.parse_args()
 
-    df = read_embeddings_table(args.input)
-    for col in [args.id_column, "node_embeddings"]:
-        if col not in df.columns:
-            raise ValueError(f"Required column '{col}' not found in input.")
+    if not (0.0 <= float(args.seq_weight) <= 1.0):
+        raise ValueError("--seq-weight must be in [0,1].")
+
+    df = read_table_auto(args.input)
+    if args.id_column not in df.columns:
+        raise ValueError(f"Required column '{args.id_column}' not found in input.")
+    if "node_embeddings" not in df.columns:
+        raise ValueError("Input does not contain a 'node_embeddings' column.")
 
     rows1 = df[df[args.id_column] == args.rna1]
     rows2 = df[df[args.id_column] == args.rna2]
@@ -400,10 +420,41 @@ def main():
     if len(rows2) > 1:
         raise ValueError(f"Multiple rows found for {args.id_column} == {args.rna2}; expected exactly one.")
 
-    A = parse_node_embeddings(rows1.iloc[0]["node_embeddings"])
-    B = parse_node_embeddings(rows2.iloc[0]["node_embeddings"])
+    A_struct = parse_embeddings(rows1.iloc[0]["node_embeddings"])
+    B_struct = parse_embeddings(rows2.iloc[0]["node_embeddings"])
+    sim_struct = cosine_similarity_matrix(A_struct, B_struct)
 
-    sim = cosine_similarity_matrix(A, B)
+    sim = sim_struct
+    used_base = False
+    A_base = B_base = None
+    if args.seq_weight > 0.0:
+        # Try to get base embeddings either from --base-input or from same df
+        base_df = None
+        if args.base_input:
+            base_df = read_table_auto(args.base_input)
+        else:
+            base_df = df
+        if args.base_embeds_col not in base_df.columns:
+            print(
+                f"[warn] Base embeddings column '{args.base_embeds_col}' not found; continuing with structural only."
+            )
+        else:
+            br1 = base_df[base_df[args.id_column] == args.rna1]
+            br2 = base_df[base_df[args.id_column] == args.rna2]
+            if len(br1) == 1 and len(br2) == 1:
+                A_base = parse_embeddings(br1.iloc[0][args.base_embeds_col])
+                B_base = parse_embeddings(br2.iloc[0][args.base_embeds_col])
+                if A_base.shape[0] != A_struct.shape[0] or B_base.shape[0] != B_struct.shape[0]:
+                    print(
+                        "[warn] Length mismatch between base and structural embeddings; skipping base weighting."
+                    )
+                else:
+                    sim_base = cosine_similarity_matrix(A_base, B_base)
+                    w = float(args.seq_weight)
+                    sim = (1.0 - w) * sim_struct + w * sim_base
+                    used_base = True
+            else:
+                print("[warn] Could not find unique base embeddings rows for both RNAs; skipping base weighting.")
 
     # Alignment
     # Handle deprecated --gap alias
@@ -431,7 +482,13 @@ def main():
 
     save_matrix_tsv(sim, matrix_out)
     if args.plot_matrix:
-        save_matrix_png(sim, matrix_png, title=f"Cosine similarity: {args.rna1} vs {args.rna2}")
+        save_matrix_png(sim, matrix_png, title=f"Cosine similarity (combined): {args.rna1} vs {args.rna2}")
+    if used_base and args.save_components:
+        base_path = args.output_prefix + ".matrix.base.tsv"
+        struct_path = args.output_prefix + ".matrix.struct.tsv"
+        save_matrix_tsv(sim_struct, struct_path)
+        if 'sim_base' in locals():
+            save_matrix_tsv(sim_base, base_path)
 
     # Optional: aligned dot-bracket output from input table
     s1 = s2 = None
@@ -442,13 +499,13 @@ def main():
             )
         s1 = str(rows1.iloc[0][args.structure_column_name])
         s2 = str(rows2.iloc[0][args.structure_column_name])
-        if len(s1) != A.shape[0]:
+        if len(s1) != A_struct.shape[0]:
             print(
-                f"[warning] Length mismatch for RNA1: structure={len(s1)} vs embeddings={A.shape[0]}"
+                f"[warning] Length mismatch for RNA1: structure={len(s1)} vs embeddings={A_struct.shape[0]}"
             )
-        if len(s2) != B.shape[0]:
+        if len(s2) != B_struct.shape[0]:
             print(
-                f"[warning] Length mismatch for RNA2: structure={len(s2)} vs embeddings={B.shape[0]}"
+                f"[warning] Length mismatch for RNA2: structure={len(s2)} vs embeddings={B_struct.shape[0]}"
             )
 
     with open(align_out, "w") as f:
@@ -457,6 +514,8 @@ def main():
         f.write(f"# gap_extend=\"{args.gap_extend}\"\n")
         f.write(f"# rna1=\"{args.rna1}\", rna2=\"{args.rna2}\"\n")
         f.write(f"# total_alignment_score=\"{best_score:.6f}\"\n")
+        if used_base:
+            f.write(f"# seq_weight=\"{args.seq_weight}\"\n")
         if s1 is not None and s2 is not None:
             f.write(f"# aligned_structures_present=\"true\"\n")
         f.write(alignment_to_tsv(path, sim) if s1 is None else alignment_to_tsv(path, sim, s1, s2))
