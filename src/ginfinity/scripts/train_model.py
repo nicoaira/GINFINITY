@@ -30,11 +30,52 @@ def save_model_to_local(model, optimizer, epoch, model_id, log_path):
     """Save model checkpoint with metadata"""
     output_path = f"output/{model_id}/{model_id}.pth"
     model.save_checkpoint(output_path, optimizer, epoch)
-    
+
     save_log = {
         "Model saved path": output_path
     }
     log_information(log_path, save_log)
+
+
+def plot_loss_curves(train_losses, val_losses, output_dir, log_path, saved_epoch=None):
+    """Save a PNG plot with training and validation loss curves."""
+    if not train_losses or not val_losses:
+        return
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:  # pragma: no cover - depends on runtime env
+        log_information(
+            log_path,
+            {"Loss plot": f"Skipped (matplotlib unavailable: {exc})"}
+        )
+        return
+
+    epochs = range(1, len(train_losses) + 1)
+    plt.figure()
+    plt.plot(epochs, train_losses, label="Training Loss")
+    plt.plot(epochs, val_losses, label="Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training and Validation Loss")
+    plt.grid(True, alpha=0.3)
+
+    if saved_epoch is not None:
+        plt.axvline(
+            saved_epoch,
+            linestyle="--",
+            color="red",
+            linewidth=1.0,
+            label="Saved Weights"
+        )
+    plt.legend()
+    plt.tight_layout()
+
+    output_path = os.path.join(output_dir, "loss_curve.png")
+    plt.savefig(output_path)
+    plt.close()
+
+    log_information(log_path, {"Loss plot saved": output_path})
 
 
 def train_model_with_early_stopping(
@@ -68,6 +109,10 @@ def train_model_with_early_stopping(
     interrupted = False
     finished_reason = None
     last_epoch = -1
+    train_losses = []
+    val_losses = []
+    output_dir = os.path.dirname(log_path)
+    saved_epoch_for_plot = None
 
     early_stopping_params = {
         "Early Stopping Parameters": {
@@ -144,10 +189,13 @@ def train_model_with_early_stopping(
                     val_loss += loss.item()
                     progress_bar_val.set_postfix({"Val Loss": val_loss / (i + 1)})
 
+            avg_train_loss = running_loss / len(train_loader)
             avg_val_loss = val_loss / len(val_loader)
+            train_losses.append(avg_train_loss)
+            val_losses.append(avg_val_loss)
             epoch_log = {
                 "Epoch": f"{epoch + 1}/{num_epochs}",
-                "Training Loss": f"{running_loss / len(train_loader)}",
+                "Training Loss": f"{avg_train_loss}",
                 "Validation Loss": f"{avg_val_loss}",
                 "Best Validation Loss": f"{early_stopping.best_loss}",
                 "Early Stopping Counter": f"{early_stopping.counter}/{patience}",
@@ -155,7 +203,7 @@ def train_model_with_early_stopping(
             }
             log_information(log_path, epoch_log)
             print(
-                f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {running_loss / len(train_loader)}, "
+                f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {avg_train_loss}, "
                 f"Validation Loss: {avg_val_loss}"
             )
 
@@ -191,7 +239,9 @@ def train_model_with_early_stopping(
                 if response in ("y", "yes"):
                     model.load_state_dict(best_model_state_dict)
                     epoch_for_save = best_model_epoch if best_model_epoch is not None else last_epoch
-                    save_model_to_local(model, optimizer, max(epoch_for_save, 0), model_id, log_path)
+                    epoch_for_save = max(epoch_for_save, 0)
+                    save_model_to_local(model, optimizer, epoch_for_save, model_id, log_path)
+                    saved_epoch_for_plot = epoch_for_save + 1
                     log_information(log_path, {"Best weights saved after interrupt": True})
                     break
                 if response in ("n", "no", ""):
@@ -201,6 +251,7 @@ def train_model_with_early_stopping(
                 print("Please respond with 'y' or 'n'.")
         else:
             print("No best weights available to save.")
+        plot_loss_curves(train_losses, val_losses, output_dir, log_path, saved_epoch_for_plot)
         return {"interrupted": True, "finished_reason": "Interrupted by user"}
 
     if finished_reason is None:
@@ -216,6 +267,8 @@ def train_model_with_early_stopping(
     print("Training complete.")
 
     save_model_to_local(model, optimizer, epoch_for_save, model_id, log_path)
+    saved_epoch_for_plot = epoch_for_save + 1
+    plot_loss_curves(train_losses, val_losses, output_dir, log_path, saved_epoch_for_plot)
     return {"interrupted": False, "finished_reason": finished_reason}
 
 def main():
