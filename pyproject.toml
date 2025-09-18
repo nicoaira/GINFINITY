@@ -52,7 +52,10 @@ ginfinity-embed = "ginfinity.scripts.generate_embeddings:main"
 ginfinity-generate-windows = "ginfinity.scripts.generate_windows:main"
 ginfinity-compute-distances = "ginfinity.scripts.compute_distances:main"
 ginfinity-train = "ginfinity.scripts.train_model:main"
-ginfinity-optimize-msa = "ginfinity.scripts.optimize_embed_msa:main"
+ginfinity-align-node-embeddings-batch = "ginfinity.scripts.align_node_embeddings_batch:main"
+ginfinity-align-node-embeddings = "ginfinity.scripts.align_node_embeddings:main"
+ginfinity-embed-msa = "ginfinity.scripts.embed_msa:main"
+ginfinity-generate-node-embeddings = "ginfinity.scripts.generate_node_embeddings:main"
 
 [project.optional-dependencies]
 train = [
