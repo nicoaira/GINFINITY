@@ -64,6 +64,10 @@ def train_model_with_early_stopping(
     early_stopping = EarlyStopping(patience=patience, min_delta=min_delta)
     best_val_loss = float('inf')
     best_model_state_dict = None
+    best_model_epoch = None
+    interrupted = False
+    finished_reason = None
+    last_epoch = -1
 
     early_stopping_params = {
         "Early Stopping Parameters": {
@@ -73,44 +77,19 @@ def train_model_with_early_stopping(
     }
     log_information(log_path, early_stopping_params)
 
-    for epoch in range(num_epochs):
-        # Training phase
-        model.train()
-        running_loss = 0.0
-        progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch + 1}/{num_epochs} - Training")
-        for i, batch in progress_bar:
-            optimizer.zero_grad()
-            if training_mode == "triplet":
-                anchor, positive, negative = batch
-                anchor = anchor.to(device)
-                positive = positive.to(device)
-                negative = negative.to(device)
-                anchor_out, positive_out, negative_out = model(anchor, positive, negative)
-                loss = criterion(anchor_out, positive_out, negative_out)
-            else:
-                anchor, positive, target = batch
-                anchor = anchor.to(device)
-                positive = positive.to(device)
-                target = target.to(device)
-                anchor_out = model.forward_once(anchor)
-                positive_out = model.forward_once(positive)
-                pred = 1 - F.cosine_similarity(anchor_out, positive_out)
-                loss = criterion(pred, target.view(-1))
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
-            progress_bar.set_postfix({"Loss": running_loss / (i + 1)})
-
-        # Apply learning rate decay
-        for param_group in optimizer.param_groups:
-            param_group['lr'] *= decay_rate
-
-        # Validation phase
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            progress_bar_val = tqdm(enumerate(val_loader), total=len(val_loader), desc=f"Epoch {epoch + 1}/{num_epochs} - Validation")
-            for i, batch in progress_bar_val:
+    try:
+        for epoch in range(num_epochs):
+            last_epoch = epoch
+            # Training phase
+            model.train()
+            running_loss = 0.0
+            progress_bar = tqdm(
+                enumerate(train_loader),
+                total=len(train_loader),
+                desc=f"Epoch {epoch + 1}/{num_epochs} - Training"
+            )
+            for i, batch in progress_bar:
+                optimizer.zero_grad()
                 if training_mode == "triplet":
                     anchor, positive, negative = batch
                     anchor = anchor.to(device)
@@ -127,46 +106,117 @@ def train_model_with_early_stopping(
                     positive_out = model.forward_once(positive)
                     pred = 1 - F.cosine_similarity(anchor_out, positive_out)
                     loss = criterion(pred, target.view(-1))
-                val_loss += loss.item()
-                progress_bar_val.set_postfix({"Val Loss": val_loss / (i + 1)})
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item()
+                progress_bar.set_postfix({"Loss": running_loss / (i + 1)})
 
-        avg_val_loss = val_loss / len(val_loader)
-        epoch_log = {
-            "Epoch": f"{epoch + 1}/{num_epochs}",
-            "Training Loss": f"{running_loss / len(train_loader)}",
-            "Validation Loss": f"{avg_val_loss}",
-            "Best Validation Loss": f"{early_stopping.best_loss}",
-            "Early Stopping Counter": f"{early_stopping.counter}/{patience}",
-            "Learning Rate": f"{optimizer.param_groups[0]['lr']}"
-            
-        }
-        log_information(log_path, epoch_log)
-        print(f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {running_loss / len(train_loader)}, Validation Loss: {avg_val_loss}")
+            # Apply learning rate decay
+            for param_group in optimizer.param_groups:
+                param_group['lr'] *= decay_rate
 
-        # Early stopping
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            if save_best_weights:
-                best_model_state_dict = model.state_dict()
+            # Validation phase
+            model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                progress_bar_val = tqdm(
+                    enumerate(val_loader),
+                    total=len(val_loader),
+                    desc=f"Epoch {epoch + 1}/{num_epochs} - Validation"
+                )
+                for i, batch in progress_bar_val:
+                    if training_mode == "triplet":
+                        anchor, positive, negative = batch
+                        anchor = anchor.to(device)
+                        positive = positive.to(device)
+                        negative = negative.to(device)
+                        anchor_out, positive_out, negative_out = model(anchor, positive, negative)
+                        loss = criterion(anchor_out, positive_out, negative_out)
+                    else:
+                        anchor, positive, target = batch
+                        anchor = anchor.to(device)
+                        positive = positive.to(device)
+                        target = target.to(device)
+                        anchor_out = model.forward_once(anchor)
+                        positive_out = model.forward_once(positive)
+                        pred = 1 - F.cosine_similarity(anchor_out, positive_out)
+                        loss = criterion(pred, target.view(-1))
+                    val_loss += loss.item()
+                    progress_bar_val.set_postfix({"Val Loss": val_loss / (i + 1)})
 
-        early_stopping(avg_val_loss, model)  # Added model parameter here
-        if early_stopping.early_stop:
-            print("Early stopping")
-            break
+            avg_val_loss = val_loss / len(val_loader)
+            epoch_log = {
+                "Epoch": f"{epoch + 1}/{num_epochs}",
+                "Training Loss": f"{running_loss / len(train_loader)}",
+                "Validation Loss": f"{avg_val_loss}",
+                "Best Validation Loss": f"{early_stopping.best_loss}",
+                "Early Stopping Counter": f"{early_stopping.counter}/{patience}",
+                "Learning Rate": f"{optimizer.param_groups[0]['lr']}"
+            }
+            log_information(log_path, epoch_log)
+            print(
+                f"Epoch {epoch + 1}/{num_epochs}, Training Loss: {running_loss / len(train_loader)}, "
+                f"Validation Loss: {avg_val_loss}"
+            )
 
-        # If early stopping was triggered and we have best weights saved
-        if early_stopping.early_stop and save_best_weights:
-            early_stopping.restore_best_weights(model)
+            # Early stopping
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                if save_best_weights:
+                    best_model_state_dict = model.state_dict()
+                    best_model_epoch = epoch
 
-    # Restore the best model weights if early stopping was triggered and save_best_weights is True
+            early_stopping(avg_val_loss, model)
+            if early_stopping.early_stop:
+                print("Early stopping")
+                finished_reason = "Early stopping"
+                break
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user.")
+        interrupted = True
+
+    if interrupted:
+        log_information(log_path, {"Training finished": "Interrupted by user"})
+        if save_best_weights and best_model_state_dict is not None:
+            while True:
+                try:
+                    response = input(
+                        "Do you want to save the model with the best weights? [y/n]: "
+                    ).strip().lower()
+                except EOFError:
+                    response = "n"
+                except KeyboardInterrupt:
+                    print("\nSkipping save of best weights.")
+                    response = "n"
+                if response in ("y", "yes"):
+                    model.load_state_dict(best_model_state_dict)
+                    epoch_for_save = best_model_epoch if best_model_epoch is not None else last_epoch
+                    save_model_to_local(model, optimizer, max(epoch_for_save, 0), model_id, log_path)
+                    log_information(log_path, {"Best weights saved after interrupt": True})
+                    break
+                if response in ("n", "no", ""):
+                    print("Best weights were not saved.")
+                    log_information(log_path, {"Best weights saved after interrupt": False})
+                    break
+                print("Please respond with 'y' or 'n'.")
+        else:
+            print("No best weights available to save.")
+        return {"interrupted": True, "finished_reason": "Interrupted by user"}
+
+    if finished_reason is None:
+        finished_reason = f"{last_epoch + 1} epochs" if last_epoch >= 0 else "0 epochs"
+
+    epoch_for_save = max(last_epoch, 0)
     if early_stopping.early_stop and save_best_weights and best_model_state_dict is not None:
         model.load_state_dict(best_model_state_dict)
+        if best_model_epoch is not None:
+            epoch_for_save = best_model_epoch
 
-    finished_reason = "Early stopping" if early_stopping.early_stop else f"{epoch+1} epochs"
     log_information(log_path, {"Training finished": finished_reason})
     print("Training complete.")
 
-    save_model_to_local(model, optimizer, epoch, model_id, log_path)
+    save_model_to_local(model, optimizer, epoch_for_save, model_id, log_path)
+    return {"interrupted": False, "finished_reason": finished_reason}
 
 def main():
     # Argument parsing
@@ -194,6 +244,14 @@ def main():
                         help='Use triplet loss or regression on f_total_modifications')
     parser.add_argument('--seq_weight', type=float, default=0.0,
                         help='Weight of nucleotide sequence one-hot features relative to pairing state (0-1).')
+    parser.add_argument('--norm_type', type=str,
+                        choices=['none', 'batch', 'graph', 'layer', 'instance'], default='graph',
+                        help='Normalization layer to apply after each graph convolution.')
+    parser.add_argument('--node_embed_norm', type=str,
+                        choices=['none', 'l2', 'zscore', 'zscore_l2'], default='none',
+                        help='Post-hoc normalization to apply to node embeddings.')
+    parser.add_argument('--normalize_nodes_before_pool', action='store_true',
+                        help='Normalize node embeddings prior to graph pooling.')
     args = parser.parse_args()
     
     # Process hidden_dim argument
@@ -217,7 +275,9 @@ def main():
     device = args.device
 
     # Initialize GIN model with processed hidden_dim
-    node_feature_dim = 1 if args.seq_weight == 0 else 5
+    loop_feature_dim = 2  # loop size + relative position
+    base_feature_dim = 4 if args.seq_weight > 0 else 0
+    node_feature_dim = 1 + loop_feature_dim + base_feature_dim
     model = GINModel(
         hidden_dim=hidden_dim,
         output_dim=args.output_dim,
@@ -226,6 +286,10 @@ def main():
         pooling_type=args.pooling_type,  # Pass the new argument
         dropout=args.dropout,  # Pass the new argument
         node_feature_dim=node_feature_dim,
+        edge_feature_dim=4,
+        norm_type=args.norm_type,
+        node_embed_norm=args.node_embed_norm,
+        normalize_nodes_before_pool=args.normalize_nodes_before_pool,
     )
     if args.training_mode == "triplet":
         train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
@@ -270,12 +334,15 @@ def main():
         "graph_encoding": args.graph_encoding,
         "training_mode": args.training_mode,
         "seq_weight": args.seq_weight,
+        "norm_type": args.norm_type,
+        "node_embed_norm": args.node_embed_norm,
+        "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
     }
 
     log_information(log_path, training_params, "Training params")
     
     # Train the model with early stopping
-    train_model_with_early_stopping(
+    training_outcome = train_model_with_early_stopping(
         model,
         args.model_id,
         train_loader,
@@ -295,10 +362,17 @@ def main():
     end_time = time.time()
     execution_time_minutes = (end_time - start_time) / 60
 
-    print(f"Finished. Total execution time: {execution_time_minutes:.6f} minutes")
-    execution_time = {
-        "Total execution time" : f"{execution_time_minutes:.6f} minutes"
-    }
+    outcome = training_outcome or {}
+    if outcome.get("interrupted"):
+        print(f"Interrupted. Total elapsed time: {execution_time_minutes:.6f} minutes")
+        execution_time = {
+            "Total elapsed time before interrupt": f"{execution_time_minutes:.6f} minutes"
+        }
+    else:
+        print(f"Finished. Total execution time: {execution_time_minutes:.6f} minutes")
+        execution_time = {
+            "Total execution time": f"{execution_time_minutes:.6f} minutes"
+        }
     log_information(log_path, execution_time, "Execution time")
 
 if __name__ == "__main__":

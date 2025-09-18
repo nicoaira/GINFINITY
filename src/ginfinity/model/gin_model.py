@@ -17,6 +17,8 @@ class GINModel(nn.Module):
         norm_type: str = "graph",          # {"none","batch","graph","layer","instance"}
         use_residual: bool = True,
         normalize_nodes_before_pool: bool = False,
+        node_feature_dim: int = None,
+        edge_feature_dim: int = 4,
     ):
         super().__init__()
 
@@ -45,11 +47,16 @@ class GINModel(nn.Module):
             "norm_type": norm_type,
             "use_residual": use_residual,
             "normalize_nodes_before_pool": bool(normalize_nodes_before_pool),
+            "node_feature_dim": int(node_feature_dim) if node_feature_dim is not None else None,
+            "edge_feature_dim": int(edge_feature_dim) if edge_feature_dim is not None else None,
         }
 
         # Node feature dim
-        input_dim = 1 if graph_encoding == "standard" else 7
-        edge_dim = 2
+        if node_feature_dim is None:
+            input_dim = 1 if graph_encoding == "standard" else 7
+        else:
+            input_dim = int(node_feature_dim)
+        edge_dim = int(edge_feature_dim) if edge_feature_dim is not None else 2
 
         # Node encoder
         self.node_encoder = nn.Linear(input_dim, hidden_dims[0])
@@ -117,6 +124,10 @@ class GINModel(nn.Module):
     def load_from_checkpoint(checkpoint_path, device='cpu'):
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         metadata = checkpoint['metadata']
+        node_feature_dim = metadata.get('node_feature_dim')
+        edge_feature_dim = metadata.get('edge_feature_dim')
+        if edge_feature_dim is None:
+            edge_feature_dim = 4 if node_feature_dim is not None else 2
         model = GINModel(
             hidden_dim=metadata['hidden_dims'],
             output_dim=metadata['output_dim'],
@@ -129,6 +140,8 @@ class GINModel(nn.Module):
             norm_type=metadata.get('norm_type', 'none'),
             use_residual=metadata.get('use_residual', False),
             normalize_nodes_before_pool=metadata.get('normalize_nodes_before_pool', False),
+            node_feature_dim=node_feature_dim,
+            edge_feature_dim=edge_feature_dim,
         )
         model.load_state_dict(checkpoint['state_dict'])
         return model

@@ -82,9 +82,10 @@ except Exception:
 @dataclass
 class SequenceRecord:
     name: str
-    emb: np.ndarray  # shape (L, D), float32, L2-normalized rows
+    emb: np.ndarray  # structural/node embeddings, shape (L, D)
     dotbracket: Optional[str] = None
     paired_idx: Optional[List[int]] = None  # length L, partner index or -1
+    base_emb: Optional[np.ndarray] = None  # base/sequence embeddings, shape (L, Db) or None
 
 
 @dataclass
@@ -100,7 +101,8 @@ class SparsePairs:
 
 @dataclass
 class ProfileColumn:
-    mu: np.ndarray  # normalized mean embedding, shape (D,)
+    mu_struct: np.ndarray  # normalized mean structural embedding, shape (Ds,)
+    mu_base: Optional[np.ndarray]  # normalized mean base embedding, shape (Db,) or None
     stem_fraction: float  # in [0, 1]
 
 
@@ -188,7 +190,8 @@ def load_tsv(path: str,
              name_col: str,
              embeds_col: str,
              dotbracket_col: Optional[str] = None,
-             paired_col: Optional[str] = None) -> List[SequenceRecord]:
+             paired_col: Optional[str] = None,
+             base_embeds_col: Optional[str] = None) -> List[SequenceRecord]:
     df = pd.read_csv(path, sep='\t')
     if name_col not in df.columns or embeds_col not in df.columns:
         raise ValueError(f"Missing required columns: {name_col}, {embeds_col}")
@@ -224,13 +227,89 @@ def load_tsv(path: str,
                 dotbracket = db
                 paired_idx = _dotbracket_to_pairs(db)
 
-        records.append(SequenceRecord(name=name, emb=emb, dotbracket=dotbracket, paired_idx=paired_idx))
+        # Optional base embeddings
+        base_arr: Optional[np.ndarray] = None
+        if base_embeds_col and base_embeds_col in df.columns:
+            base_raw = _json_loads_maybe(row[base_embeds_col])
+            if isinstance(base_raw, list):
+                try:
+                    base_arr = np.array(base_raw, dtype=np.float32)
+                except Exception:
+                    base_arr = None
+                if base_arr is not None:
+                    if base_arr.ndim != 2:
+                        base_arr = None
+                    elif base_arr.shape[0] == emb.shape[0] + 2:
+                        # Trim BOS/EOS to match structural length
+                        base_arr = base_arr[1:-1]
+                    elif base_arr.shape[0] != emb.shape[0]:
+                        print(
+                            f"[WARN] Row {idx} ('{name}') base embeddings length mismatch; ignoring base for this sequence."
+                        )
+                        base_arr = None
+
+        records.append(SequenceRecord(name=name, emb=emb, dotbracket=dotbracket, paired_idx=paired_idx, base_emb=base_arr))
     return records
 
 
 def l2_normalize_embeddings(records: List[SequenceRecord]) -> None:
     for r in records:
         r.emb = _l2_normalize_rows(r.emb)
+        if r.base_emb is not None:
+            r.base_emb = _l2_normalize_rows(r.base_emb)
+
+
+def _center_slice_indices(length: int, fraction: float) -> Tuple[int, int]:
+    if length <= 0:
+        return 0, 0
+    frac = max(0.0, min(1.0, fraction))
+    keep = max(1, min(length, int(round(length * frac))))
+    start = (length - keep) // 2
+    end = start + keep
+    if end > length:
+        end = length
+        start = max(0, length - keep)
+    return start, end
+
+
+def apply_center_trim(records: List[SequenceRecord], fraction: float) -> List[Tuple[int, int]]:
+    trims: List[Tuple[int, int]] = []
+    for rec in records:
+        L = rec.emb.shape[0]
+        start, end = _center_slice_indices(L, fraction)
+        trims.append((start, end))
+        if start <= 0 and end >= L:
+            continue
+
+        rec.emb = rec.emb[start:end].copy()
+
+        if rec.base_emb is not None:
+            rec.base_emb = rec.base_emb[start:end].copy()
+
+        pairs_source: Optional[List[int]]
+        if rec.paired_idx is not None:
+            pairs_source = rec.paired_idx
+        elif rec.dotbracket is not None:
+            pairs_source = _dotbracket_to_pairs(rec.dotbracket)
+        else:
+            pairs_source = None
+
+        if pairs_source is not None:
+            new_pairs: List[int] = []
+            for idx in range(start, end):
+                partner = pairs_source[idx]
+                if partner < start or partner >= end or partner < 0:
+                    new_pairs.append(-1)
+                else:
+                    new_pairs.append(partner - start)
+            rec.paired_idx = new_pairs
+            rec.dotbracket = _pairs_to_dotbracket(new_pairs)
+        elif rec.dotbracket is not None:
+            rec.dotbracket = rec.dotbracket[start:end]
+        else:
+            rec.paired_idx = None
+
+    return trims
 
 
 # ==================================
@@ -731,28 +810,34 @@ def build_guide_tree(D: np.ndarray, method: str = "nj") -> GuideTree:
 # =====================================
 
 def _column_from_indices(cols_chars: List[str], emb: np.ndarray, paired: Optional[List[int]]) -> ProfileColumn:
-    # Build column embedding as mean of non-gap embeddings then L2 normalize
+    # Build column embedding as mean of non-gap embeddings then L2 normalize (struct only)
     idxs = [k for k, c in enumerate(cols_chars) if c != '-']
     if len(idxs) == 0:
-        # Gap-only column: zero vector; handled in scoring as 0 dot
-        mu = np.zeros(emb.shape[1], dtype=np.float32)
+        mu_s = np.zeros(emb.shape[1], dtype=np.float32)
         stem_fraction = 0.0
-        return ProfileColumn(mu=mu, stem_fraction=stem_fraction)
+        return ProfileColumn(mu_struct=mu_s, mu_base=None, stem_fraction=stem_fraction)
     vecs = emb[idxs]
-    mu = vecs.mean(axis=0)
-    nrm = np.linalg.norm(mu) + 1e-8
-    mu = (mu / nrm).astype(np.float32)
+    mu_s = vecs.mean(axis=0)
+    nrm = np.linalg.norm(mu_s) + 1e-8
+    mu_s = (mu_s / nrm).astype(np.float32)
     # Estimate stem fraction if pairing available
     if paired is not None:
         n_stem = sum(1 for i in idxs if paired[i] != -1)
         stem_fraction = n_stem / float(len(idxs))
     else:
         stem_fraction = 0.0
-    return ProfileColumn(mu=mu, stem_fraction=stem_fraction)
+    return ProfileColumn(mu_struct=mu_s, mu_base=None, stem_fraction=stem_fraction)
 
 
 def _initial_profiles(records: List[SequenceRecord]) -> List[Profile]:
     profiles: List[Profile] = []
+    # Determine global base embedding dimension if present
+    base_dim = 0
+    for r in records:
+        if r.base_emb is not None:
+            base_dim = int(r.base_emb.shape[1])
+            break
+
     for idx, r in enumerate(records):
         L = r.emb.shape[0]
         # Start with each sequence as its own profile: one char per column.
@@ -764,9 +849,19 @@ def _initial_profiles(records: List[SequenceRecord]) -> List[Profile]:
         else:
             base_chars = ["X"] * L
         aligned = {idx: base_chars}
-        cols = []
+        cols: List[ProfileColumn] = []
         for pos in range(L):
-            cols.append(ProfileColumn(mu=r.emb[pos], stem_fraction=(1.0 if (r.paired_idx and r.paired_idx[pos] != -1) else 0.0)))
+            mu_s = r.emb[pos]
+            if base_dim > 0:
+                if r.base_emb is not None:
+                    mu_b = r.base_emb[pos]
+                    # Ensure normalized (should be already L2 normalized row-wise)
+                else:
+                    mu_b = np.zeros(base_dim, dtype=np.float32)
+            else:
+                mu_b = None
+            stemf = 1.0 if (r.paired_idx and r.paired_idx[pos] != -1) else 0.0
+            cols.append(ProfileColumn(mu_struct=mu_s, mu_base=mu_b, stem_fraction=float(stemf)))
         profiles.append(Profile(columns=cols, member_indices=[idx], aligned_chars=aligned))
     return profiles
 
@@ -797,7 +892,7 @@ def _affine_dp_profile(muA: np.ndarray, muB: np.ndarray, stemA: np.ndarray, stem
     for i in range(1, La + 1):
         for j in range(1, Lb + 1):
             s = 0.0
-            # dot product
+            # dot product on structural embeddings
             for d in range(muA.shape[1]):
                 s += muA[i - 1, d] * muB[j - 1, d]
             # structural compatibility bonus
@@ -835,17 +930,106 @@ def _affine_dp_profile(muA: np.ndarray, muB: np.ndarray, stemA: np.ndarray, stem
     return M, X, Y
 
 
+@njit(cache=True)
+def _affine_dp_profile_dual(muAs: np.ndarray, muBs: np.ndarray, muAb: np.ndarray, muBb: np.ndarray,
+                            w_seq: float, stemA: np.ndarray, stemB: np.ndarray,
+                            go: float, ge: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    # Dual-modality DP over columns; score = (1-w)*dot(struct) + w*dot(base) + comp
+    La = muAs.shape[0]
+    Lb = muBs.shape[0]
+    NEG = -1e30
+    M = np.full((La + 1, Lb + 1), NEG, dtype=np.float32)
+    X = np.full((La + 1, Lb + 1), NEG, dtype=np.float32)
+    Y = np.full((La + 1, Lb + 1), NEG, dtype=np.float32)
+
+    M[0, 0] = 0.0
+    for i in range(1, La + 1):
+        X[i, 0] = max(M[i - 1, 0] + go, X[i - 1, 0] + ge)
+    for j in range(1, Lb + 1):
+        Y[0, j] = max(M[0, j - 1] + go, Y[0, j - 1] + ge)
+
+    for i in range(1, La + 1):
+        for j in range(1, Lb + 1):
+            s_struct = 0.0
+            for d in range(muAs.shape[1]):
+                s_struct += muAs[i - 1, d] * muBs[j - 1, d]
+            s_base = 0.0
+            # muAb and muBb may have zero columns
+            for d in range(muAb.shape[1]):
+                s_base += muAb[i - 1, d] * muBb[j - 1, d]
+            s = (1.0 - w_seq) * s_struct + w_seq * s_base
+            # structural compatibility bonus (reuse same heuristic)
+            comp = 0.2 if ((stemA[i - 1] >= 0.5 and stemB[j - 1] >= 0.5) or (stemA[i - 1] < 0.5 and stemB[j - 1] < 0.5)) else 0.0
+
+            m_val = M[i - 1, j - 1]
+            x_val = X[i - 1, j - 1]
+            y_val = Y[i - 1, j - 1]
+            best_prev = m_val
+            if x_val > best_prev:
+                best_prev = x_val
+            if y_val > best_prev:
+                best_prev = y_val
+            M[i, j] = best_prev + s + comp
+
+            open_x = M[i - 1, j] + go
+            ext_x = X[i - 1, j] + ge
+            X[i, j] = open_x if open_x > ext_x else ext_x
+
+            open_y = M[i, j - 1] + go
+            ext_y = Y[i, j - 1] + ge
+            Y[i, j] = open_y if open_y > ext_y else ext_y
+
+            # Do not fold gap scores back into M; keep state scores separate so
+            # the traceback can prefer insertion states when they are better.
+
+    return M, X, Y
+
+
 def profile_profile_dp(profileA: Profile, profileB: Profile,
-                       gap_open: float, gap_extend: float) -> Profile:
+                       gap_open: float, gap_extend: float,
+                       seq_weight: float = 0.0) -> Profile:
     La = len(profileA.columns)
     Lb = len(profileB.columns)
-    D = profileA.columns[0].mu.shape[0] if La > 0 else profileB.columns[0].mu.shape[0]
-    muA = np.stack([c.mu for c in profileA.columns], axis=0).astype(np.float32)
-    muB = np.stack([c.mu for c in profileB.columns], axis=0).astype(np.float32)
+    # Structural embedding arrays
+    muA_s = np.stack([c.mu_struct for c in profileA.columns], axis=0).astype(np.float32)
+    muB_s = np.stack([c.mu_struct for c in profileB.columns], axis=0).astype(np.float32)
+    # Base embedding arrays (may be absent)
+    base_dim = 0
+    for c in profileA.columns:
+        if c.mu_base is not None:
+            base_dim = int(c.mu_base.shape[0])
+            break
+    if base_dim == 0:
+        for c in profileB.columns:
+            if c.mu_base is not None:
+                base_dim = int(c.mu_base.shape[0])
+                break
+    if base_dim > 0:
+        tmpA = []
+        tmpB = []
+        for c in profileA.columns:
+            if c.mu_base is not None:
+                tmpA.append(c.mu_base)
+            else:
+                tmpA.append(np.zeros(base_dim, dtype=np.float32))
+        for c in profileB.columns:
+            if c.mu_base is not None:
+                tmpB.append(c.mu_base)
+            else:
+                tmpB.append(np.zeros(base_dim, dtype=np.float32))
+        muA_b = np.stack(tmpA, axis=0).astype(np.float32)
+        muB_b = np.stack(tmpB, axis=0).astype(np.float32)
+    else:
+        muA_b = np.zeros((La, 0), dtype=np.float32)
+        muB_b = np.zeros((Lb, 0), dtype=np.float32)
+
     stemA = np.array([c.stem_fraction for c in profileA.columns], dtype=np.float32)
     stemB = np.array([c.stem_fraction for c in profileB.columns], dtype=np.float32)
 
-    M, X, Y = _affine_dp_profile(muA, muB, stemA, stemB, gap_open, gap_extend)
+    if seq_weight > 0.0 and base_dim > 0:
+        M, X, Y = _affine_dp_profile_dual(muA_s, muB_s, muA_b, muB_b, float(seq_weight), stemA, stemB, gap_open, gap_extend)
+    else:
+        M, X, Y = _affine_dp_profile(muA_s, muB_s, stemA, stemB, gap_open, gap_extend)
 
     # Traceback
     i, j = La, Lb
@@ -872,11 +1056,26 @@ def profile_profile_dp(profileA: Profile, profileB: Profile,
         if cur_state == 0:
             # Match columns i-1 and j-1
             # Merge columns
-            mu = profileA.columns[i - 1].mu + profileB.columns[j - 1].mu
-            nrm = np.linalg.norm(mu) + 1e-8
-            mu = (mu / nrm).astype(np.float32)
+            mu_s = profileA.columns[i - 1].mu_struct + profileB.columns[j - 1].mu_struct
+            nrm = np.linalg.norm(mu_s) + 1e-8
+            mu_s = (mu_s / nrm).astype(np.float32)
+            # base
+            cAb = profileA.columns[i - 1].mu_base
+            cBb = profileB.columns[j - 1].mu_base
+            if (cAb is not None) or (cBb is not None):
+                # determine base dim from available
+                Db = cAb.shape[0] if cAb is not None else (cBb.shape[0] if cBb is not None else 0)
+                vb = np.zeros(Db, dtype=np.float32)
+                if cAb is not None:
+                    vb += cAb
+                if cBb is not None:
+                    vb += cBb
+                nb = np.linalg.norm(vb) + 1e-8
+                mu_b = (vb / nb).astype(np.float32)
+            else:
+                mu_b = None
             stem_fraction = (profileA.columns[i - 1].stem_fraction + profileB.columns[j - 1].stem_fraction) / 2.0
-            aligned_cols.append(ProfileColumn(mu=mu, stem_fraction=float(stem_fraction)))
+            aligned_cols.append(ProfileColumn(mu_struct=mu_s, mu_base=mu_b, stem_fraction=float(stem_fraction)))
             # Propagate chars
             for idx in profileA.member_indices:
                 new_aligned[idx].append(profileA.aligned_chars[idx][i - 1])
@@ -886,9 +1085,11 @@ def profile_profile_dp(profileA: Profile, profileB: Profile,
             j -= 1
         elif cur_state == 1 and i > 0:
             # Gap in B; take A column alone
-            mu = profileA.columns[i - 1].mu.copy()
+            mu_s = profileA.columns[i - 1].mu_struct.copy()
+            cAb = profileA.columns[i - 1].mu_base
+            mu_b = cAb.copy() if cAb is not None else None
             stem_fraction = profileA.columns[i - 1].stem_fraction
-            aligned_cols.append(ProfileColumn(mu=mu, stem_fraction=float(stem_fraction)))
+            aligned_cols.append(ProfileColumn(mu_struct=mu_s, mu_base=mu_b, stem_fraction=float(stem_fraction)))
             for idx in profileA.member_indices:
                 new_aligned[idx].append(profileA.aligned_chars[idx][i - 1])
             for idx in profileB.member_indices:
@@ -896,9 +1097,11 @@ def profile_profile_dp(profileA: Profile, profileB: Profile,
             i -= 1
         else:
             # Gap in A; take B column alone
-            mu = profileB.columns[j - 1].mu.copy()
+            mu_s = profileB.columns[j - 1].mu_struct.copy()
+            cBb = profileB.columns[j - 1].mu_base
+            mu_b = cBb.copy() if cBb is not None else None
             stem_fraction = profileB.columns[j - 1].stem_fraction
-            aligned_cols.append(ProfileColumn(mu=mu, stem_fraction=float(stem_fraction)))
+            aligned_cols.append(ProfileColumn(mu_struct=mu_s, mu_base=mu_b, stem_fraction=float(stem_fraction)))
             for idx in profileA.member_indices:
                 new_aligned[idx].append('-')
             for idx in profileB.member_indices:
@@ -913,14 +1116,15 @@ def profile_profile_dp(profileA: Profile, profileB: Profile,
 
 
 def msa_from_tree(tree: GuideTree, seq_profiles: List[Profile],
-                  gap_open: float, gap_extend: float) -> Profile:
+                  gap_open: float, gap_extend: float,
+                  seq_weight: float = 0.0) -> Profile:
     # Recursively traverse the tree combining profiles
     def build(node: Any) -> Profile:
         if isinstance(node, int):
             return seq_profiles[node]
         left = build(node[0])
         right = build(node[1])
-        return profile_profile_dp(left, right, gap_open, gap_extend)
+        return profile_profile_dp(left, right, gap_open, gap_extend, seq_weight=seq_weight)
 
     return build(tree.structure)
 
@@ -934,7 +1138,7 @@ def _sp_score(profile: Profile, beta_struct: float = 0.2) -> float:
     members = profile.member_indices
     score = 0.0
     for col in profile.columns:
-        mu = col.mu
+        mu = col.mu_struct
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
                 # approximate: use mu dot mu as a proxy for similarity contributed by this column
@@ -1045,6 +1249,7 @@ def main():
     ap.add_argument('--input', required=True, help='Input TSV path or "dummy"')
     ap.add_argument('--name-col', default='Name')
     ap.add_argument('--embeds-col', default='node_embeddings')
+    ap.add_argument('--base-embeds-col', default=None, help='Optional column with base (sequence) embeddings (JSON LxD)')
     ap.add_argument('--dotbracket-col', default=None)
     ap.add_argument('--paired-col', default=None)
     ap.add_argument(
@@ -1056,8 +1261,11 @@ def main():
     ap.add_argument('--consistency-rounds', type=int, default=1)
     ap.add_argument('--alpha', type=float, default=None)
     ap.add_argument('--beta', type=float, default=None)
+    ap.add_argument('--seq-weight', type=float, default=0.0, help='Weight of base embeddings in [0,1] (0=struct only)')
     ap.add_argument('--gap-open', type=float, default=-10.0)
     ap.add_argument('--gap-extend', type=float, default=-0.5)
+    ap.add_argument('--use-center', type=float, default=None,
+                    help='If provided, keep only this centered fraction of each sequence for MSA (0 < f ≤ 1).')
     ap.add_argument('--use-local', action='store_true')
     ap.add_argument('--tree', choices=['nj', 'upgma'], default='nj')
     ap.add_argument('--refine-iters', type=int, default=0)
@@ -1080,6 +1288,8 @@ def main():
         out_prefix = os.path.join(out_dir_auto, "msa")
 
     # Dummy mode
+    trim_bounds: Optional[List[Tuple[int, int]]] = None
+
     if args.input == 'dummy':
         # Generate 5 toy sequences with small lengths
         N = 5
@@ -1090,9 +1300,25 @@ def main():
             emb = np.random.randn(L, D).astype(np.float32)
             records.append(SequenceRecord(name=f"seq{i+1}", emb=emb))
     else:
-        records = load_tsv(args.input, args.name_col, args.embeds_col, args.dotbracket_col, args.paired_col)
+        if not (0.0 <= float(args.seq_weight) <= 1.0):
+            raise SystemExit("--seq-weight must be in [0,1]")
+        records = load_tsv(
+            args.input,
+            args.name_col,
+            args.embeds_col,
+            args.dotbracket_col,
+            args.paired_col,
+            args.base_embeds_col,
+        )
         if len(records) == 0:
             raise SystemExit("No valid records found.")
+
+    if args.use_center is not None:
+        frac = float(args.use_center)
+        if not (0.0 < frac <= 1.0):
+            raise SystemExit("--use-center must be in (0,1].")
+        print(f"Center trimming sequences to {frac:.3f} of their length for MSA computation.")
+        trim_bounds = apply_center_trim(records, frac)
 
     # Normalize
     l2_normalize_embeddings(records)
@@ -1119,8 +1345,13 @@ def main():
 
     # Parallel worker
     def _compute_pair(a: int, b: int) -> Tuple[Tuple[int, int], SparsePairs, float, Optional[SparsePairs]]:
-        Ea, Eb = records[a].emb, records[b].emb
-        S = cosine_similarity_matrix(Ea, Eb)
+        Ea_s, Eb_s = records[a].emb, records[b].emb
+        S_struct = cosine_similarity_matrix(Ea_s, Eb_s)
+        S = S_struct
+        if args.seq_weight > 0.0 and (records[a].base_emb is not None) and (records[b].base_emb is not None):
+            if records[a].base_emb.shape[0] == Ea_s.shape[0] and records[b].base_emb.shape[0] == Eb_s.shape[0]:
+                S_base = cosine_similarity_matrix(records[a].base_emb, records[b].base_emb)
+                S = (1.0 - float(args.seq_weight)) * S_struct + float(args.seq_weight) * S_base
         L = calibrate_log_odds(S, alpha, beta)
         mode = 'local' if args.use_local else 'global'
         P = forward_backward_affine_logspace(L, args.gap_open, args.gap_extend, mode=mode)
@@ -1172,21 +1403,53 @@ def main():
 
     # Progressive alignment
     seq_profiles = _initial_profiles(records)
-    aln = msa_from_tree(tree, seq_profiles, args.gap_open, args.gap_extend)
+    aln = msa_from_tree(tree, seq_profiles, args.gap_open, args.gap_extend, seq_weight=float(args.seq_weight))
 
     # Iterative refinement
     if args.refine_iters > 0:
         aln = iterative_refinement(aln, tree, {"refine_iters": args.refine_iters, "seed": args.seed})
 
     # Outputs
+    run_parameters: Dict[str, Any] = vars(args).copy()
+    run_parameters.update({
+        'alpha_effective': alpha,
+        'beta_effective': beta,
+        'out_prefix_resolved': out_prefix,
+        'num_sequences': N,
+        'embedding_dim': int(dims[0]) if dims else None,
+    })
+
     diagnostics: Dict[str, Any] = {
         'expected_scores': expected_scores.tolist(),
         'num_pairs': len(pairs),
         'N': N,
         'alpha': alpha,
         'beta': beta,
+        'seq_weight': float(args.seq_weight),
+        'input_path': args.input,
+        'out_prefix': out_prefix,
+        'name_column': args.name_col,
+        'embeds_column': args.embeds_col,
+        'dotbracket_column': args.dotbracket_col,
+        'paired_column': args.paired_col,
+        'base_embeds_column': args.base_embeds_col,
+        'topk': args.topk,
+        'consistency_rounds': args.consistency_rounds,
+        'gap_open': args.gap_open,
+        'gap_extend': args.gap_extend,
+        'tree_method': args.tree,
+        'refine_iters': args.refine_iters,
+        'seed': args.seed,
+        'max_pairs': args.max_pairs,
+        'num_workers': args.num_workers,
+        'use_local': bool(args.use_local),
         'timing_sec': time.time() - t_start,
+        'run_parameters': run_parameters,
     }
+    if args.use_center is not None:
+        diagnostics['use_center_fraction'] = float(args.use_center)
+        if trim_bounds is not None:
+            diagnostics['center_trim_bounds'] = [[int(s), int(e)] for (s, e) in trim_bounds]
     if args.plot_diagnostics:
         diagnostics['posteriors_heatmaps'] = heatmaps
     write_outputs(aln, names, out_prefix, diagnostics)

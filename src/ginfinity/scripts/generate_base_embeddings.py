@@ -22,10 +22,12 @@ def _serialize_matrix(mat: torch.Tensor) -> str:
 def _load_rinalmo(model_name: str = "giga-v1", device: str = "cpu"):
     try:
         from rinalmo.pretrained import get_pretrained_model  # type: ignore
-    except Exception as e:  # pragma: no cover
+    except ImportError as e:  # pragma: no cover
         raise SystemExit(
-            "RiNALMo not installed. Please 'pip install rinalmo' and try again."
+            "RiNALMo not installed. Please 'pip install rinalmo' in this Python environment."
         ) from e
+    except Exception as e:  # pragma: no cover
+        raise SystemExit(f"RiNALMo import failed: {e.__class__.__name__}: {e}") from e
 
     model, alphabet = get_pretrained_model(model_name=model_name)
     dev = torch.device(device)
@@ -44,6 +46,7 @@ def generate_base_embeddings(
     device: str = "cpu",
     batch_size: int = 8,
     use_amp: bool = True,
+    trim_special: bool = True,
     quiet: bool = False,
 ):
     if id_column not in df.columns:
@@ -91,6 +94,17 @@ def generate_base_embeddings(
 
         for i, uid in enumerate(ids):
             mat = reps[i]
+            # Trim BOS/EOS if present (common for LMs)
+            Lr = int(mat.shape[0])
+            Ls = len(seqs[i])
+            if trim_special and Lr == Ls + 2:
+                mat = mat[1:-1]
+            elif trim_special and Lr != Ls and Lr > Ls and Ls > 0:
+                # Conservative fallback: center-crop to sequence length
+                start_idx = max(0, (Lr - Ls) // 2)
+                end_idx = min(Lr, start_idx + Ls)
+                if end_idx - start_idx == Ls:
+                    mat = mat[start_idx:end_idx]
             # L2-normalize rows for cosine use downstream? Keep raw here; aligners normalize.
             out = {c: batch[i][c] for c in final_keep if c in batch[i]}
             out[id_column] = uid
@@ -131,6 +145,7 @@ def main():
     ap.add_argument("--device", default="cpu", help="Device: cpu or cuda:0")
     ap.add_argument("--batch-size", type=int, default=8, help="Batch size for inference.")
     ap.add_argument("--no-amp", action="store_true", help="Disable AMP on CUDA.")
+    ap.add_argument("--no-trim-special", action="store_true", help="Do not trim BOS/EOS special tokens (keep model length).")
     ap.add_argument("--quiet", action="store_true", help="Suppress progress bar.")
     args = ap.parse_args()
 
@@ -156,10 +171,10 @@ def main():
         device=args.device,
         batch_size=args.batch_size,
         use_amp=not args.no_amp,
+        trim_special=not args.no_trim_special,
         quiet=args.quiet,
     )
 
 
 if __name__ == "__main__":
     main()
-

@@ -46,3 +46,10 @@ build*
 src/ginfinity.egg-info/*
 out/premirnas.diagnostics*
 embed_msa_out_*/
+archive/
+run_msa.sh
+run_genereate_base_emb.sh
+test_seq_weight.sh
+optuna_embed_msa.db
+loop_features.py
+src/ginfinity/scripts/count_parameters.py

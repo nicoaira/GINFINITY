@@ -156,13 +156,62 @@ def dotbracket_to_graph(dotbracket, sequence=None):
     G = nx.Graph()
     bases = []
 
+    # Pre-compute loop membership metadata for unpaired positions
+    seq_len = len(dotbracket)
+    loop_meta = {}
+    current_loop = []
+    for idx, char in enumerate(dotbracket):
+        if char == '.':
+            current_loop.append(idx)
+            continue
+        if current_loop:
+            loop_size = len(current_loop)
+            norm_denom = max(1, seq_len)
+            loop_size_norm = loop_size / norm_denom
+            for pos_in_loop, node_idx in enumerate(current_loop):
+                if loop_size > 1:
+                    rel_pos = pos_in_loop / (loop_size - 1)
+                else:
+                    rel_pos = 0.5
+                loop_meta[node_idx] = {
+                    'loop_size': loop_size,
+                    'loop_pos': pos_in_loop,
+                    'loop_size_norm': loop_size_norm,
+                    'loop_pos_norm': rel_pos,
+                }
+            current_loop = []
+    if current_loop:
+        loop_size = len(current_loop)
+        norm_denom = max(1, seq_len)
+        loop_size_norm = loop_size / norm_denom
+        for pos_in_loop, node_idx in enumerate(current_loop):
+            if loop_size > 1:
+                rel_pos = pos_in_loop / (loop_size - 1)
+            else:
+                rel_pos = 0.5
+            loop_meta[node_idx] = {
+                'loop_size': loop_size,
+                'loop_pos': pos_in_loop,
+                'loop_size_norm': loop_size_norm,
+                'loop_pos_norm': rel_pos,
+            }
+
     # Add nodes and edges based on dot-bracket structure
-    # TODO: Node information is redundant, should it be removed?
     for i, c in enumerate(dotbracket):
         base = sequence[i] if sequence is not None and i < len(sequence) else None
+        loop_info = loop_meta.get(i)
+        node_attrs = {
+            'label': 'unpaired',
+            'base': base,
+            'loop_size': loop_info['loop_size'] if loop_info else 0,
+            'loop_pos': loop_info['loop_pos'] if loop_info else 0,
+            'loop_size_norm': loop_info['loop_size_norm'] if loop_info else 0.0,
+            'loop_pos_norm': loop_info['loop_pos_norm'] if loop_info else 0.0,
+        }
+        G.add_node(i, **node_attrs)
+
         if c == '(':
             bases.append(i)
-            G.add_node(i, label='unpaired', base=base)
         elif c == ')':
             if bases:
                 neighbor = bases.pop()
@@ -174,7 +223,7 @@ def dotbracket_to_graph(dotbracket, sequence=None):
                 print("Mismatched parentheses in input!")
                 return None
         elif c == '.':
-            G.add_node(i, label='unpaired', base=base)
+            pass
         else:
             print("Input is not in dot-bracket notation!")
             return None
@@ -214,19 +263,38 @@ def graph_to_tensor(G, seq_weight: float = 0.0):
     use_sequence = seq_weight > 0
     pair_weight = 1.0 - seq_weight
     for node in nodes:
-        pair_val = 1.0 if G.nodes[node]['label'] == 'paired' else 0.0
+        node_data = G.nodes[node]
+        pair_val = 1.0 if node_data['label'] == 'paired' else 0.0
+        loop_size_norm = float(node_data.get('loop_size_norm', 0.0))
+        loop_pos_norm = float(node_data.get('loop_pos_norm', 0.0))
+
+        features = [pair_weight * pair_val, loop_size_norm, loop_pos_norm]
         if use_sequence:
-            base_vec = _one_hot_base(G.nodes[node].get('base'))
-            features = [pair_weight * pair_val] + [seq_weight * b for b in base_vec]
-        else:
-            features = [pair_val]
+            base_vec = _one_hot_base(node_data.get('base'))
+            features.extend(seq_weight * b for b in base_vec)
         node_features.append(features)
 
     x = torch.tensor(node_features, dtype=torch.float)
-    edge_indices = [[u, v] for u, v in G.edges()]
-    edge_attrs = [[1.0, 0.0] if G.edges[u, v]['edge_type'] == 'adjacent' else [0.0, 1.0] for u, v in G.edges()]
-    edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
-    edge_attr = torch.tensor(edge_attrs, dtype=torch.float)
+
+    edge_indices = []
+    edge_attrs = []
+    for u, v, data in G.edges(data=True):
+        edge_type = data.get('edge_type', 'adjacent')
+        attr_base = [1.0 if edge_type == 'adjacent' else 0.0,
+                     1.0 if edge_type == 'base_pair' else 0.0]
+
+        for src, dst in ((u, v), (v, u)):
+            is_forward = 1.0 if src < dst else 0.0
+            is_backward = 1.0 - is_forward
+            edge_indices.append([src, dst])
+            edge_attrs.append(attr_base + [is_forward, is_backward])
+
+    if edge_indices:
+        edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+        edge_attr = torch.tensor(edge_attrs, dtype=torch.float)
+    else:
+        edge_index = torch.empty((2, 0), dtype=torch.long)
+        edge_attr = torch.empty((0, 4), dtype=torch.float)
     return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
 # ==============================================================================

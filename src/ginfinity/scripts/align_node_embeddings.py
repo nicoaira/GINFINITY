@@ -445,14 +445,24 @@ def main():
                 A_base = parse_embeddings(br1.iloc[0][args.base_embeds_col])
                 B_base = parse_embeddings(br2.iloc[0][args.base_embeds_col])
                 if A_base.shape[0] != A_struct.shape[0] or B_base.shape[0] != B_struct.shape[0]:
-                    print(
-                        "[warn] Length mismatch between base and structural embeddings; skipping base weighting."
-                    )
-                else:
+                    trimmed = False
+                    if A_base.shape[0] == A_struct.shape[0] + 2 and B_base.shape[0] == B_struct.shape[0] + 2:
+                        A_base = A_base[1:-1]
+                        B_base = B_base[1:-1]
+                        trimmed = True
+                        print("[info] Trimmed BOS/EOS from base embeddings to match structural length.")
+                    if not trimmed:
+                        print(
+                            "[warn] Length mismatch between base and structural embeddings; skipping base weighting."
+                        )
+                if A_base.shape[0] == A_struct.shape[0] and B_base.shape[0] == B_struct.shape[0]:
                     sim_base = cosine_similarity_matrix(A_base, B_base)
                     w = float(args.seq_weight)
                     sim = (1.0 - w) * sim_struct + w * sim_base
                     used_base = True
+                    print(
+                        f"[info] Using base embeddings with seq_weight={w:.3f}; struct_shape={sim_struct.shape}, base_shape={sim_base.shape}"
+                    )
             else:
                 print("[warn] Could not find unique base embeddings rows for both RNAs; skipping base weighting.")
 
