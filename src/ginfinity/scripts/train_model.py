@@ -14,6 +14,8 @@ from ginfinity.model.gin_model import GINModel
 from ginfinity.training.triplet_loss import TripletLoss
 from ginfinity.utils import is_valid_dot_bracket, log_information, log_setup
 import time
+from datetime import datetime
+from typing import Optional
 
 def remove_invalid_structures(df):
     valid_structures = (
@@ -22,9 +24,6 @@ def remove_invalid_structures(df):
         df["negative_structure"].apply(is_valid_dot_bracket)
     )
     return df[valid_structures]
-
-import torch
-from datetime import datetime
 
 def save_model_to_local(model, optimizer, epoch, model_id, log_path):
     """Save model checkpoint with metadata"""
@@ -35,6 +34,42 @@ def save_model_to_local(model, optimizer, epoch, model_id, log_path):
         "Model saved path": output_path
     }
     log_information(log_path, save_log)
+
+
+def compute_average_loss(dataloader, model, criterion, device, training_mode, desc: Optional[str] = None):
+    """Return the average loss over a dataloader without gradient updates."""
+    if len(dataloader) == 0:
+        return float("nan")
+
+    iterator = enumerate(dataloader)
+    if desc:
+        iterator = tqdm(iterator, total=len(dataloader), desc=desc)
+
+    total_loss = 0.0
+    model.eval()
+    with torch.no_grad():
+        for i, batch in iterator:
+            if training_mode == "triplet":
+                anchor, positive, negative = batch
+                anchor = anchor.to(device)
+                positive = positive.to(device)
+                negative = negative.to(device)
+                anchor_out, positive_out, negative_out = model(anchor, positive, negative)
+                loss = criterion(anchor_out, positive_out, negative_out)
+            else:
+                anchor, positive, target = batch
+                anchor = anchor.to(device)
+                positive = positive.to(device)
+                target = target.to(device)
+                anchor_out = model.forward_once(anchor)
+                positive_out = model.forward_once(positive)
+                pred = 1 - F.cosine_similarity(anchor_out, positive_out)
+                loss = criterion(pred, target.view(-1))
+            total_loss += loss.item()
+            if desc:
+                iterator.set_postfix({"Loss": total_loss / (i + 1)})
+
+    return total_loss / len(dataloader)
 
 
 def plot_loss_curves(train_losses, val_losses, output_dir, log_path, saved_epoch=None):
@@ -51,7 +86,7 @@ def plot_loss_curves(train_losses, val_losses, output_dir, log_path, saved_epoch
         )
         return
 
-    epochs = range(1, len(train_losses) + 1)
+    epochs = list(range(len(train_losses)))
     plt.figure()
     plt.plot(epochs, train_losses, label="Training Loss")
     plt.plot(epochs, val_losses, label="Validation Loss")
@@ -122,6 +157,47 @@ def train_model_with_early_stopping(
     }
     log_information(log_path, early_stopping_params)
 
+    initial_train_loss = compute_average_loss(
+        train_loader,
+        model,
+        criterion,
+        device,
+        training_mode,
+        desc="Initial Evaluation - Training"
+    )
+    initial_val_loss = compute_average_loss(
+        val_loader,
+        model,
+        criterion,
+        device,
+        training_mode,
+        desc="Initial Evaluation - Validation"
+    )
+
+    best_val_loss = initial_val_loss
+    if save_best_weights:
+        best_model_state_dict = model.state_dict()
+        best_model_epoch = -1
+    train_losses.append(initial_train_loss)
+    val_losses.append(initial_val_loss)
+    early_stopping.best_loss = initial_val_loss
+    early_stopping.best_state_dict = model.state_dict().copy()
+    early_stopping.counter = 0
+
+    initial_log = {
+        "Epoch": f"0/{num_epochs}",
+        "Training Loss": f"{initial_train_loss}",
+        "Validation Loss": f"{initial_val_loss}",
+        "Best Validation Loss": f"{best_val_loss}",
+        "Early Stopping Counter": f"{early_stopping.counter}/{patience}",
+        "Learning Rate": f"{optimizer.param_groups[0]['lr']}"
+    }
+    log_information(log_path, initial_log)
+    print(
+        f"Epoch 0/{num_epochs}, Training Loss: {initial_train_loss}, "
+        f"Validation Loss: {initial_val_loss}"
+    )
+
     try:
         for epoch in range(num_epochs):
             last_epoch = epoch
@@ -160,44 +236,30 @@ def train_model_with_early_stopping(
             for param_group in optimizer.param_groups:
                 param_group['lr'] *= decay_rate
 
-            # Validation phase
-            model.eval()
-            val_loss = 0.0
-            with torch.no_grad():
-                progress_bar_val = tqdm(
-                    enumerate(val_loader),
-                    total=len(val_loader),
-                    desc=f"Epoch {epoch + 1}/{num_epochs} - Validation"
-                )
-                for i, batch in progress_bar_val:
-                    if training_mode == "triplet":
-                        anchor, positive, negative = batch
-                        anchor = anchor.to(device)
-                        positive = positive.to(device)
-                        negative = negative.to(device)
-                        anchor_out, positive_out, negative_out = model(anchor, positive, negative)
-                        loss = criterion(anchor_out, positive_out, negative_out)
-                    else:
-                        anchor, positive, target = batch
-                        anchor = anchor.to(device)
-                        positive = positive.to(device)
-                        target = target.to(device)
-                        anchor_out = model.forward_once(anchor)
-                        positive_out = model.forward_once(positive)
-                        pred = 1 - F.cosine_similarity(anchor_out, positive_out)
-                        loss = criterion(pred, target.view(-1))
-                    val_loss += loss.item()
-                    progress_bar_val.set_postfix({"Val Loss": val_loss / (i + 1)})
-
             avg_train_loss = running_loss / len(train_loader)
-            avg_val_loss = val_loss / len(val_loader)
+            avg_val_loss = compute_average_loss(
+                val_loader,
+                model,
+                criterion,
+                device,
+                training_mode,
+                desc=f"Epoch {epoch + 1}/{num_epochs} - Validation"
+            )
             train_losses.append(avg_train_loss)
             val_losses.append(avg_val_loss)
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                if save_best_weights:
+                    best_model_state_dict = model.state_dict()
+                    best_model_epoch = epoch
+
+            early_stopping(avg_val_loss, model)
+
             epoch_log = {
                 "Epoch": f"{epoch + 1}/{num_epochs}",
                 "Training Loss": f"{avg_train_loss}",
                 "Validation Loss": f"{avg_val_loss}",
-                "Best Validation Loss": f"{early_stopping.best_loss}",
+                "Best Validation Loss": f"{best_val_loss}",
                 "Early Stopping Counter": f"{early_stopping.counter}/{patience}",
                 "Learning Rate": f"{optimizer.param_groups[0]['lr']}"
             }
@@ -207,14 +269,6 @@ def train_model_with_early_stopping(
                 f"Validation Loss: {avg_val_loss}"
             )
 
-            # Early stopping
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                if save_best_weights:
-                    best_model_state_dict = model.state_dict()
-                    best_model_epoch = epoch
-
-            early_stopping(avg_val_loss, model)
             if early_stopping.early_stop:
                 print("Early stopping")
                 finished_reason = "Early stopping"
@@ -266,6 +320,7 @@ def train_model_with_early_stopping(
     log_information(log_path, {"Training finished": finished_reason})
     print("Training complete.")
 
+    epoch_for_save = max(epoch_for_save, 0)
     save_model_to_local(model, optimizer, epoch_for_save, model_id, log_path)
     saved_epoch_for_plot = epoch_for_save + 1
     plot_loss_curves(train_losses, val_losses, output_dir, log_path, saved_epoch_for_plot)
