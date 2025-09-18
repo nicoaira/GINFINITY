@@ -36,7 +36,7 @@ class GINModel(nn.Module):
 
         # Store metadata for checkpointing
         self.metadata = {
-            "hidden_dims": hidden_dims,
+            "hidden_dims": list(hidden_dims),
             "output_dim": output_dim,
             "graph_encoding": graph_encoding,
             "gin_layers": gin_layers,
@@ -58,6 +58,8 @@ class GINModel(nn.Module):
             input_dim = int(node_feature_dim)
         edge_dim = int(edge_feature_dim) if edge_feature_dim is not None else 2
 
+        self.hidden_dims = list(hidden_dims)
+
         # Node encoder
         self.node_encoder = nn.Linear(input_dim, hidden_dims[0])
 
@@ -67,16 +69,23 @@ class GINModel(nn.Module):
         self.dropouts = nn.ModuleList()
 
         for i in range(gin_layers):
+            in_dim = hidden_dims[i - 1] if i > 0 else hidden_dims[0]
+            out_dim = hidden_dims[i]
+
             # MLP inside GINEConv (simple 2-layer MLP; keep norms outside for graph-aware ops)
-            net = nn.Sequential(
-                nn.Linear(hidden_dims[i], hidden_dims[i]),
+            net_layers = [
+                nn.Linear(in_dim, out_dim),
                 nn.ReLU(),
-                nn.Dropout(p=dropout) if dropout > 0 else nn.Identity(),
-                nn.Linear(hidden_dims[i], hidden_dims[i]),
+            ]
+            if dropout > 0:
+                net_layers.append(nn.Dropout(p=dropout))
+            net_layers.extend([
+                nn.Linear(out_dim, out_dim),
                 nn.ReLU(),
-            )
+            ])
+            net = nn.Sequential(*net_layers)
             self.convs.append(GINEConv(nn=net, train_eps=True, edge_dim=edge_dim))
-            self.norms.append(self._make_norm(norm_type, hidden_dims[i]))
+            self.norms.append(self._make_norm(norm_type, out_dim))
             self.dropouts.append(nn.Dropout(p=dropout) if dropout > 0 else nn.Identity())
 
         # Pooling head
