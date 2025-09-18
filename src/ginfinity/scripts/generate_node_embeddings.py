@@ -258,7 +258,7 @@ def main():
         # Resolve default weights relative to installed package
         script_dir = os.path.dirname(__file__)  # .../ginfinity/scripts
         package_dir = os.path.dirname(script_dir)
-        default_weights = os.path.join(package_dir, "weights", "gin_weights_regression_090925.pth")
+        default_weights = os.path.join(package_dir, "weights", "gin_weights_regression_180925.pth")
         if not os.path.exists(default_weights):
             sys.exit(
                 "ERROR: Default weights not found at %s. Please install ginfinity correctly or pass --model-path." % default_weights
