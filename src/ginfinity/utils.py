@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime
 import platform
 import sys
@@ -125,36 +126,58 @@ def log_information(log_path, info_dict, log_name = None, open_type='a', print_l
 # ==============================================================================
 
 def is_valid_dot_bracket(structure):
+    """Validate that an extended dot-bracket string is well-formed.
+
+    Supports classical pairs ``()`` and common pseudoknot annotations using
+    paired symbols (``[]``, ``{}``, ``<>``) as well as matching upper/lowercase
+    letter pairs such as ``A``/``a``.
     """
-    Check if a dot-bracket RNA structure has matching open and closing parentheses.
-    It does not accepts pseudoknots or other types of base pairs.
-    """
-    stack = []
-    for char in structure:
-        if char == '(':
-            stack.append(char)
-        elif char == ')':
-            if not stack:
+    bracket_pairs = {')': '(', ']': '[', '}': '{', '>': '<'}
+    stacks = defaultdict(list)
+
+    for pos, char in enumerate(structure):
+        if char == '.':
+            continue
+        if char in bracket_pairs.values():
+            stacks[char].append(pos)
+            continue
+        if char in bracket_pairs:
+            opener = bracket_pairs[char]
+            if not stacks[opener]:
                 return False
-            stack.pop()
-    
-    # If stack is empty, all parentheses are matched
-    return len(stack) == 0
+            stacks[opener].pop()
+            continue
+        if 'A' <= char <= 'Z':
+            stacks[char].append(pos)
+            continue
+        if 'a' <= char <= 'z':
+            opener = char.upper()
+            if not stacks[opener]:
+                return False
+            stacks[opener].pop()
+            continue
+        return False
+
+    return all(len(stack) == 0 for stack in stacks.values())
 
 def dotbracket_to_graph(dotbracket, sequence=None):
-    """Convert a dot-bracket string (and optional sequence) into a graph.
+    """Convert an extended dot-bracket string (and optional sequence) into a graph.
 
     Parameters
     ----------
     dotbracket : str
-        Dot-bracket representation of the RNA secondary structure.
+        Dot-bracket representation of the RNA secondary structure. Supports
+        classical ``()`` pairs as well as pseudoknot annotations denoted by
+        ``[]``, ``{}``, ``<>`` and matching upper-/lowercase letter pairs
+        such as ``A``/``a``.
     sequence : str, optional
         Nucleotide sequence corresponding to ``dotbracket``. If provided,
         each node in the resulting graph will contain a ``base`` attribute
         with the nucleotide character at that position.
     """
     G = nx.Graph()
-    bases = []
+    pair_stacks = defaultdict(list)
+    bracket_pairs = {')': '(', ']': '[', '}': '{', '>': '<'}
 
     # Pre-compute loop membership metadata for unpaired positions
     seq_len = len(dotbracket)
@@ -210,20 +233,32 @@ def dotbracket_to_graph(dotbracket, sequence=None):
         }
         G.add_node(i, **node_attrs)
 
-        if c == '(':
-            bases.append(i)
-        elif c == ')':
-            if bases:
-                neighbor = bases.pop()
-                G.add_edge(i, neighbor, edge_type='base_pair')
-                G.nodes[i]['label'] = 'paired'
-                G.nodes[neighbor]['label'] = 'paired'
-                G.nodes[i]['base'] = base
-            else:
-                print("Mismatched parentheses in input!")
-                return None
-        elif c == '.':
+        if c == '.':
             pass
+        elif c in bracket_pairs.values():
+            pair_stacks[c].append(i)
+        elif c in bracket_pairs:
+            opener = bracket_pairs[c]
+            if not pair_stacks[opener]:
+                print("Mismatched base-pair symbols in input!")
+                return None
+            neighbor = pair_stacks[opener].pop()
+            G.add_edge(i, neighbor, edge_type='base_pair')
+            G.nodes[i]['label'] = 'paired'
+            G.nodes[neighbor]['label'] = 'paired'
+            G.nodes[i]['base'] = base
+        elif 'A' <= c <= 'Z':
+            pair_stacks[c].append(i)
+        elif 'a' <= c <= 'z':
+            opener = c.upper()
+            if not pair_stacks[opener]:
+                print("Mismatched pseudoknot symbols in input!")
+                return None
+            neighbor = pair_stacks[opener].pop()
+            G.add_edge(i, neighbor, edge_type='base_pair')
+            G.nodes[i]['label'] = 'paired'
+            G.nodes[neighbor]['label'] = 'paired'
+            G.nodes[i]['base'] = base
         else:
             print("Input is not in dot-bracket notation!")
             return None
