@@ -172,21 +172,22 @@ The default `--output-dir` is `windows_output/`.
 
 ## train_model.py
 
-**Purpose**  
-Train a GIN on RNA embeddings using triplet loss, with optional hyperparameter tuning via Optuna.
+**Purpose**
+Train a GIN on RNA secondary structures. Supported training modes include:
 
-**Usage**
-```bash
-python train_model.py \\
-  --train-data <train.tsv> \\
-  --val-data <val.tsv> \\
-  [--batch-size N] \\
-  [--epochs N] \\
-  [--lr FLOAT] \\
-  [--early-stopping-patience N] \\
-  [--output-model <out.pth>] \\
-  [--quiet]
-```
+- `triplet`: original triplet-loss optimisation using anchor/positive/negative structures.
+- `regression`: cosine-distance regression against a scalar target.
+- `alignment`: contrastive training on simulated evolutionary alignments with conserved node mappings.
+
+**Key arguments**
+
+- `--training_mode {triplet,regression,alignment}`: select the optimisation objective.
+- `--alignment_map_path`: (alignment mode) JSON file mapping conserved alignment positions to node indices per structure.
+- `--alignment_margin`: (alignment mode) cosine margin applied to negative node pairs.
+- `--alignment_unaligned_per_graph`: (alignment mode) number of unaligned nodes sampled from each structure as negatives.
+
+All other arguments (hidden dimensions, pooling, sequencing weight, etc.) remain available for advanced configuration. See
+`ginfinity-train --help` for the exhaustive list generated from `train_model.py`.
 
 ---
 
