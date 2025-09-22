@@ -2,6 +2,7 @@ from torch.utils.data import Dataset
 from ginfinity.utils import dotbracket_to_graph, graph_to_tensor
 import pandas as pd
 import torch
+from typing import Dict, List, Any
 
 
 class GINRNADataset(Dataset):
@@ -80,3 +81,95 @@ class GINRNAPairDataset(Dataset):
 
         target = torch.tensor([float(target)], dtype=torch.float32)
         return data_anchor, data_positive, target
+
+
+class GINAlignmentDataset(Dataset):
+    """Dataset providing groups of structures that belong to the same alignment."""
+
+    def __init__(
+        self,
+        dataframe,
+        alignment_map: Dict[str, Dict[str, Dict[str, int]]],
+        graph_encoding: str = "standard",
+        seq_weight: float = 0.0,
+    ):
+        if isinstance(dataframe, str):
+            df = pd.read_csv(dataframe, comment="#")
+        else:
+            df = dataframe.copy()
+
+        self.graph_encoding = graph_encoding
+        self.seq_weight = seq_weight
+        self.alignment_groups: List[Dict[str, Any]] = []
+        self.alignment_map = alignment_map
+
+        for alignment_id, group_df in df.groupby("alignment_id"):
+            structures: List = []
+            for _, row in group_df.iterrows():
+                structure = row["structure"]
+                sequence = row.get("sequence")
+                g = dotbracket_to_graph(structure, sequence)
+                data = graph_to_tensor(g, self.seq_weight)
+
+                sequence_id = row.get("sequence_id")
+                if pd.notna(sequence_id):
+                    try:
+                        sequence_id_int = int(sequence_id)
+                    except (TypeError, ValueError):
+                        sequence_id_int = sequence_id
+                else:
+                    sequence_id_int = None
+
+                data.sequence_id = sequence_id_int
+                data.alignment_id = alignment_id
+                data.binary_code = row.get("binary_code")
+
+                mapping = self._resolve_alignment_mapping(alignment_id, sequence_id_int)
+                data.alignment_mapping = mapping
+                data.alignment_positions = list(mapping.keys())
+
+                mapped_nodes = set(mapping.values())
+                all_nodes = set(range(data.num_nodes))
+                unaligned = sorted(all_nodes - mapped_nodes)
+                data.unaligned_indices = torch.tensor(unaligned, dtype=torch.long)
+
+                structures.append(data)
+
+            self.alignment_groups.append({
+                "alignment_id": alignment_id,
+                "structures": structures,
+            })
+
+    def _resolve_alignment_mapping(self, alignment_id, sequence_id) -> Dict[int, int]:
+        mapping: Dict[int, int] = {}
+        alignment_entry = self.alignment_map.get(alignment_id, {})
+
+        possible_keys: List[str] = []
+        if sequence_id is not None:
+            possible_keys.extend([
+                str(sequence_id),
+                f"rna_{sequence_id}",
+                f"seq_{sequence_id}",
+            ])
+
+        for key in possible_keys:
+            if key in alignment_entry:
+                mapping = alignment_entry[key]
+                break
+
+        resolved: Dict[int, int] = {}
+        for align_pos, struct_pos in mapping.items():
+            try:
+                align_pos_int = int(align_pos)
+                struct_pos_int = int(struct_pos) - 1
+            except (TypeError, ValueError):
+                continue
+            if struct_pos_int >= 0:
+                resolved[align_pos_int] = struct_pos_int
+        return resolved
+
+    def __len__(self) -> int:
+        return len(self.alignment_groups)
+
+    def __getitem__(self, idx: int):
+        return self.alignment_groups[idx]

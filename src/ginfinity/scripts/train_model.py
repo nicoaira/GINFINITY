@@ -1,17 +1,25 @@
 import os
+import json
+import random
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from torch_geometric.loader import DataLoader as GeoDataLoader
+from torch_geometric.data import Batch
 from sklearn.model_selection import train_test_split
 import pandas as pd
 import argparse
 from tqdm import tqdm
 from ginfinity.training.early_stopping import EarlyStopping
-from ginfinity.training.gin_rna_dataset import GINRNADataset, GINRNAPairDataset
+from ginfinity.training.gin_rna_dataset import (
+    GINRNADataset,
+    GINRNAPairDataset,
+    GINAlignmentDataset,
+)
 from ginfinity.model.gin_model import GINModel
 from ginfinity.training.triplet_loss import TripletLoss
+from ginfinity.training.alignment_loss import AlignmentContrastiveLoss
 from ginfinity.utils import is_valid_dot_bracket, log_information, log_setup
 import time
 from datetime import datetime
@@ -36,7 +44,85 @@ def save_model_to_local(model, optimizer, epoch, model_id, log_path):
     log_information(log_path, save_log)
 
 
-def compute_average_loss(dataloader, model, criterion, device, training_mode, desc: Optional[str] = None):
+def alignment_collate_first(batch):
+    """Collate function returning the single alignment in the batch."""
+    return batch[0]
+
+
+def compute_alignment_batch_loss(
+    batch_item,
+    model,
+    criterion,
+    device,
+    max_unaligned_per_graph: int,
+    sample_unaligned: bool,
+):
+    structures = batch_item.get("structures", [])
+    if len(structures) < 2:
+        dummy = torch.zeros((), device=device, dtype=torch.float32)
+        return dummy
+
+    batch = Batch.from_data_list(structures)
+    batch = batch.to(device)
+    node_embeddings = model.get_node_embeddings(batch)
+    ptr = batch.ptr.tolist()
+
+    global_indices = []
+    labels = []
+    graph_ids = []
+
+    for graph_idx, data in enumerate(structures):
+        mapping = getattr(data, "alignment_mapping", {}) or {}
+        for align_pos, local_idx in mapping.items():
+            if local_idx < 0:
+                continue
+            global_idx = ptr[graph_idx] + int(local_idx)
+            global_indices.append(global_idx)
+            labels.append(int(align_pos))
+            graph_ids.append(graph_idx)
+
+        if max_unaligned_per_graph > 0:
+            unaligned = getattr(data, "unaligned_indices", None)
+            if unaligned is None:
+                continue
+            if torch.is_tensor(unaligned):
+                candidates = unaligned.tolist()
+            else:
+                candidates = list(unaligned)
+            if not candidates:
+                continue
+            sample_size = min(max_unaligned_per_graph, len(candidates))
+            if sample_unaligned:
+                selected = random.sample(candidates, sample_size)
+            else:
+                selected = candidates[:sample_size]
+            base_label = -((graph_idx + 1) * 10**6)
+            for offset, local_idx in enumerate(selected):
+                global_idx = ptr[graph_idx] + int(local_idx)
+                global_indices.append(global_idx)
+                labels.append(base_label - offset)
+                graph_ids.append(graph_idx)
+
+    if not global_indices:
+        return node_embeddings.sum() * 0.0
+
+    index_tensor = torch.tensor(global_indices, device=device, dtype=torch.long)
+    embeddings = node_embeddings.index_select(0, index_tensor)
+    labels_tensor = torch.tensor(labels, device=device, dtype=torch.long)
+    graph_ids_tensor = torch.tensor(graph_ids, device=device, dtype=torch.long)
+
+    return criterion(embeddings, labels_tensor, graph_ids_tensor)
+
+
+def compute_average_loss(
+    dataloader,
+    model,
+    criterion,
+    device,
+    training_mode,
+    desc: Optional[str] = None,
+    alignment_max_unaligned: int = 0,
+):
     """Return the average loss over a dataloader without gradient updates."""
     if len(dataloader) == 0:
         return float("nan")
@@ -56,6 +142,15 @@ def compute_average_loss(dataloader, model, criterion, device, training_mode, de
                 negative = negative.to(device)
                 anchor_out, positive_out, negative_out = model(anchor, positive, negative)
                 loss = criterion(anchor_out, positive_out, negative_out)
+            elif training_mode == "alignment":
+                loss = compute_alignment_batch_loss(
+                    batch,
+                    model,
+                    criterion,
+                    device,
+                    alignment_max_unaligned,
+                    sample_unaligned=False,
+                )
             else:
                 anchor, positive, target = batch
                 anchor = anchor.to(device)
@@ -127,7 +222,8 @@ def train_model_with_early_stopping(
         log_path,
         save_best_weights=True,
         decay_rate=0.1,  # Add decay_rate parameter
-        training_mode="triplet"
+        training_mode="triplet",
+        alignment_max_unaligned: int = 0,
 ):
     """
     Train a GIN model with early stopping.
@@ -163,7 +259,8 @@ def train_model_with_early_stopping(
         criterion,
         device,
         training_mode,
-        desc="Initial Evaluation - Training"
+        desc="Initial Evaluation - Training",
+        alignment_max_unaligned=alignment_max_unaligned,
     )
     initial_val_loss = compute_average_loss(
         val_loader,
@@ -171,7 +268,8 @@ def train_model_with_early_stopping(
         criterion,
         device,
         training_mode,
-        desc="Initial Evaluation - Validation"
+        desc="Initial Evaluation - Validation",
+        alignment_max_unaligned=alignment_max_unaligned,
     )
 
     best_val_loss = initial_val_loss
@@ -218,6 +316,15 @@ def train_model_with_early_stopping(
                     negative = negative.to(device)
                     anchor_out, positive_out, negative_out = model(anchor, positive, negative)
                     loss = criterion(anchor_out, positive_out, negative_out)
+                elif training_mode == "alignment":
+                    loss = compute_alignment_batch_loss(
+                        batch,
+                        model,
+                        criterion,
+                        device,
+                        alignment_max_unaligned,
+                        sample_unaligned=True,
+                    )
                 else:
                     anchor, positive, target = batch
                     anchor = anchor.to(device)
@@ -243,7 +350,8 @@ def train_model_with_early_stopping(
                 criterion,
                 device,
                 training_mode,
-                desc=f"Epoch {epoch + 1}/{num_epochs} - Validation"
+                desc=f"Epoch {epoch + 1}/{num_epochs} - Validation",
+                alignment_max_unaligned=alignment_max_unaligned,
             )
             train_losses.append(avg_train_loss)
             val_losses.append(avg_val_loss)
@@ -348,8 +456,8 @@ def main():
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate for the GIN model (default: 0.0).')
     parser.add_argument('--val_fraction', type=float, default=0.2, help='Fraction of data for validation (default: 0.2)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for data splitting (default: 42)')
-    parser.add_argument('--training_mode', choices=['triplet', 'regression'], default='triplet',
-                        help='Use triplet loss or regression on f_total_modifications')
+    parser.add_argument('--training_mode', choices=['triplet', 'regression', 'alignment'], default='triplet',
+                        help='Select the training strategy for the model.')
     parser.add_argument('--seq_weight', type=float, default=0.0,
                         help='Weight of nucleotide sequence one-hot features relative to pairing state (0-1).')
     parser.add_argument('--norm_type', type=str,
@@ -360,6 +468,12 @@ def main():
                         help='Post-hoc normalization to apply to node embeddings.')
     parser.add_argument('--normalize_nodes_before_pool', action='store_true',
                         help='Normalize node embeddings prior to graph pooling.')
+    parser.add_argument('--alignment_map_path', type=str, default=None,
+                        help='Path to a JSON file containing conserved position mappings for each alignment.')
+    parser.add_argument('--alignment_margin', type=float, default=0.2,
+                        help='Cosine similarity margin for negative pairs in alignment training.')
+    parser.add_argument('--alignment_unaligned_per_graph', type=int, default=16,
+                        help='Maximum number of unaligned nodes per structure to include as negatives.')
     args = parser.parse_args()
     
     # Process hidden_dim argument
@@ -374,11 +488,31 @@ def main():
     if args.num_workers is None:
         args.num_workers = max(1, os.cpu_count() // 2)
 
+    random.seed(args.seed)
+
     # Load data
     dataset_path = args.input_path
     df = pd.read_csv(dataset_path, comment='#')  # Add comment parameter to skip lines starting with #
     df = remove_invalid_structures(df)
-    train_df, val_df = train_test_split(df, test_size=args.val_fraction, random_state=args.seed)
+
+    alignment_map = None
+    if args.training_mode == "alignment":
+        if "alignment_id" not in df.columns:
+            raise ValueError("alignment_id column missing from input for alignment training mode.")
+        if not args.alignment_map_path:
+            raise ValueError("alignment_map_path must be provided when using alignment training mode.")
+        with open(args.alignment_map_path, "r", encoding="utf-8") as handle:
+            alignment_map = json.load(handle)
+        alignment_ids = df["alignment_id"].unique()
+        if len(alignment_ids) == 0:
+            raise ValueError("No alignments found in the input dataset.")
+        train_ids, val_ids = train_test_split(
+            alignment_ids, test_size=args.val_fraction, random_state=args.seed
+        )
+        train_df = df[df["alignment_id"].isin(train_ids)].reset_index(drop=True)
+        val_df = df[df["alignment_id"].isin(val_ids)].reset_index(drop=True)
+    else:
+        train_df, val_df = train_test_split(df, test_size=args.val_fraction, random_state=args.seed)
 
     device = args.device
 
@@ -399,24 +533,74 @@ def main():
         node_embed_norm=args.node_embed_norm,
         normalize_nodes_before_pool=args.normalize_nodes_before_pool,
     )
+    alignment_max_unaligned = 0
     if args.training_mode == "triplet":
         train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
         val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
         criterion = TripletLoss(margin=1.0)
-    else:
+        train_loader = GeoDataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=args.num_workers,
+        )
+        val_loader = GeoDataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=args.num_workers,
+        )
+    elif args.training_mode == "regression":
         train_dataset = GINRNAPairDataset(train_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
         val_dataset = GINRNAPairDataset(val_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
         criterion = torch.nn.MSELoss()
-    train_loader = GeoDataLoader(train_dataset,
-                                batch_size=args.batch_size,
-                                shuffle=True,
-                                pin_memory=True,
-                                num_workers=args.num_workers)
-    val_loader = GeoDataLoader(val_dataset,
-                              batch_size=args.batch_size,
-                              shuffle=True,
-                              pin_memory=True,
-                              num_workers=args.num_workers)
+        train_loader = GeoDataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=args.num_workers,
+        )
+        val_loader = GeoDataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=args.num_workers,
+        )
+    else:
+        train_dataset = GINAlignmentDataset(
+            train_df,
+            alignment_map,
+            graph_encoding=args.graph_encoding,
+            seq_weight=args.seq_weight,
+        )
+        val_dataset = GINAlignmentDataset(
+            val_df,
+            alignment_map,
+            graph_encoding=args.graph_encoding,
+            seq_weight=args.seq_weight,
+        )
+        criterion = AlignmentContrastiveLoss(margin=args.alignment_margin)
+        alignment_max_unaligned = max(0, int(args.alignment_unaligned_per_graph))
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=1,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=args.num_workers,
+            collate_fn=alignment_collate_first,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=1,
+            shuffle=False,
+            pin_memory=True,
+            num_workers=args.num_workers,
+            collate_fn=alignment_collate_first,
+        )
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
@@ -433,11 +617,17 @@ def main():
         "train_data_samples": df.shape[0],
         "hidden_dims": hidden_dim if isinstance(hidden_dim, list) else [hidden_dim] * args.gin_layers,
         "output_dim": args.output_dim,
-        "batch_size": args.batch_size,
+        "batch_size": args.batch_size if args.training_mode != "alignment" else 1,
         "num_epochs": args.num_epochs,
         "patience": args.patience,
         "lr": args.lr,
-        "criterion": "TripletLoss" if args.training_mode == "triplet" else "MSELoss",
+        "criterion": (
+            "TripletLoss"
+            if args.training_mode == "triplet"
+            else "MSELoss"
+            if args.training_mode == "regression"
+            else "AlignmentContrastiveLoss"
+        ),
         "gin_layers": args.gin_layers,
         "graph_encoding": args.graph_encoding,
         "training_mode": args.training_mode,
@@ -446,6 +636,13 @@ def main():
         "node_embed_norm": args.node_embed_norm,
         "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
     }
+
+    if args.training_mode == "alignment":
+        training_params.update({
+            "alignment_map_path": args.alignment_map_path,
+            "alignment_margin": args.alignment_margin,
+            "alignment_unaligned_per_graph": alignment_max_unaligned,
+        })
 
     log_information(log_path, training_params, "Training params")
     
@@ -464,7 +661,8 @@ def main():
         log_path=log_path,
         save_best_weights=args.save_best_weights,  # Pass the new argument
         decay_rate=args.decay_rate,  # Pass the new argument
-        training_mode=args.training_mode
+        training_mode=args.training_mode,
+        alignment_max_unaligned=alignment_max_unaligned,
     )
 
     end_time = time.time()
