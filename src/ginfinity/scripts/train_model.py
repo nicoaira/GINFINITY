@@ -25,12 +25,23 @@ import time
 from datetime import datetime
 from typing import Optional
 
-def remove_invalid_structures(df):
+def remove_invalid_structures_triplet(df):
+    """Filters out rows with invalid dot-bracket structures for triplet training."""
     valid_structures = (
         df["anchor_structure"].apply(is_valid_dot_bracket) & 
         df["positive_structure"].apply(is_valid_dot_bracket) & 
         df["negative_structure"].apply(is_valid_dot_bracket)
     )
+    return df[valid_structures]
+
+def remove_invalid_structures_alignment(df, structure_column: str):
+    """Filters out rows with invalid dot-bracket structures for alignment training."""
+    if structure_column not in df.columns:
+        raise KeyError(
+            f"Structure column '{structure_column}' not found in the input data. "
+            "Please specify the correct column name using --structure_column."
+        )
+    valid_structures = df[structure_column].apply(is_valid_dot_bracket)
     return df[valid_structures]
 
 def save_model_to_local(model, optimizer, epoch, model_id, log_path):
@@ -474,6 +485,8 @@ def main():
                         help='Cosine similarity margin for negative pairs in alignment training.')
     parser.add_argument('--alignment_unaligned_per_graph', type=int, default=16,
                         help='Maximum number of unaligned nodes per structure to include as negatives.')
+    parser.add_argument('--structure_column', type=str, default='structure',
+                        help='Name of the column containing dot-bracket structures.')
     args = parser.parse_args()
     
     # Process hidden_dim argument
@@ -492,8 +505,12 @@ def main():
 
     # Load data
     dataset_path = args.input_path
-    df = pd.read_csv(dataset_path, comment='#')  # Add comment parameter to skip lines starting with #
-    df = remove_invalid_structures(df)
+    df = pd.read_csv(dataset_path, comment='#', sep='\\t', engine='python')
+    
+    if args.training_mode == "triplet":
+        df = remove_invalid_structures_triplet(df)
+    elif args.training_mode == "alignment":
+        df = remove_invalid_structures_alignment(df, args.structure_column)
 
     alignment_map = None
     if args.training_mode == "alignment":
@@ -576,12 +593,14 @@ def main():
             alignment_map,
             graph_encoding=args.graph_encoding,
             seq_weight=args.seq_weight,
+            structure_column=args.structure_column,
         )
         val_dataset = GINAlignmentDataset(
             val_df,
             alignment_map,
             graph_encoding=args.graph_encoding,
             seq_weight=args.seq_weight,
+            structure_column=args.structure_column,
         )
         criterion = AlignmentContrastiveLoss(margin=args.alignment_margin)
         alignment_max_unaligned = max(0, int(args.alignment_unaligned_per_graph))
@@ -589,16 +608,16 @@ def main():
             train_dataset,
             batch_size=1,
             shuffle=True,
-            pin_memory=True,
-            num_workers=args.num_workers,
+            pin_memory=False,
+            num_workers=0,
             collate_fn=alignment_collate_first,
         )
         val_loader = DataLoader(
             val_dataset,
             batch_size=1,
             shuffle=False,
-            pin_memory=True,
-            num_workers=args.num_workers,
+            pin_memory=False,
+            num_workers=0,
             collate_fn=alignment_collate_first,
         )
 

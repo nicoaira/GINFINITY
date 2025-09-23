@@ -92,6 +92,7 @@ class GINAlignmentDataset(Dataset):
         alignment_map: Dict[str, Dict[str, Dict[str, int]]],
         graph_encoding: str = "standard",
         seq_weight: float = 0.0,
+        structure_column: str = "structure",
     ):
         if isinstance(dataframe, str):
             df = pd.read_csv(dataframe, comment="#")
@@ -106,7 +107,7 @@ class GINAlignmentDataset(Dataset):
         for alignment_id, group_df in df.groupby("alignment_id"):
             structures: List = []
             for _, row in group_df.iterrows():
-                structure = row["structure"]
+                structure = row[structure_column]
                 sequence = row.get("sequence")
                 g = dotbracket_to_graph(structure, sequence)
                 data = graph_to_tensor(g, self.seq_weight)
@@ -125,8 +126,8 @@ class GINAlignmentDataset(Dataset):
                 data.binary_code = row.get("binary_code")
 
                 mapping = self._resolve_alignment_mapping(alignment_id, sequence_id_int)
-                data.alignment_mapping = mapping
-                data.alignment_positions = list(mapping.keys())
+                data.alignment_mapping = {str(k): v for k, v in mapping.items()}
+                data.alignment_positions = [str(k) for k in mapping.keys()]
 
                 mapped_nodes = set(mapping.values())
                 all_nodes = set(range(data.num_nodes))
