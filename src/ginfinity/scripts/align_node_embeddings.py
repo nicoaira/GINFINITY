@@ -44,6 +44,152 @@ def cosine_similarity_matrix(A: np.ndarray, B: np.ndarray, eps: float = 1e-8) ->
     return A_norm @ B_norm.T
 
 
+def save_matrix_html(
+    matrix: np.ndarray, 
+    path: str, 
+    title: Optional[str] = None,
+    s1: Optional[str] = None,
+    s2: Optional[str] = None,
+    rna1_id: str = "RNA1",
+    rna2_id: str = "RNA2"
+):
+    """
+    Save an interactive HTML heatmap of the matrix using Plotly.
+    Shows structure characters, cosine similarity, and position info on hover.
+    """
+    try:
+        import plotly.graph_objects as go
+        import plotly.offline as pyo
+    except ImportError as e:
+        raise RuntimeError(
+            "plotly is required to write HTML heatmaps. Please install it (e.g., 'pip install plotly')."
+        ) from e
+    
+    L1, L2 = matrix.shape
+    
+    # Create hover text with detailed information
+    hover_text = []
+    for i in range(L1):
+        hover_row = []
+        for j in range(L2):
+            # Basic information
+            info_lines = [
+                f"{rna1_id} position: {i}",
+                f"{rna2_id} position: {j}",
+                f"Cosine similarity: {matrix[i, j]:.6f}"
+            ]
+            
+            # Add structure characters if available
+            if s1 is not None and i < len(s1):
+                char1 = s1[i]
+                # Interpret dot-bracket notation
+                if char1 == '.':
+                    struct_type1 = "unpaired"
+                elif char1 in '([{<':
+                    struct_type1 = "stem (opening)"
+                elif char1 in ')]}':
+                    struct_type1 = "stem (closing)"
+                else:
+                    struct_type1 = "other"
+                info_lines.append(f"{rna1_id} structure: {char1} ({struct_type1})")
+            
+            if s2 is not None and j < len(s2):
+                char2 = s2[j]
+                # Interpret dot-bracket notation
+                if char2 == '.':
+                    struct_type2 = "unpaired"
+                elif char2 in '([{<':
+                    struct_type2 = "stem (opening)"
+                elif char2 in ')]}':
+                    struct_type2 = "stem (closing)"
+                else:
+                    struct_type2 = "other"
+                info_lines.append(f"{rna2_id} structure: {char2} ({struct_type2})")
+            
+            # Add structural compatibility info if both structures available
+            if s1 is not None and s2 is not None and i < len(s1) and j < len(s2):
+                char1, char2 = s1[i], s2[j]
+                if char1 == '.' and char2 == '.':
+                    compat = "both unpaired"
+                elif char1 in '([{<' and char2 in '([{<':
+                    compat = "both stem opening"
+                elif char1 in ')]}>' and char2 in ')]}':
+                    compat = "both stem closing"
+                elif (char1 in '([{<' and char2 in ')]}') or (char1 in ')]}' and char2 in '([{<'):
+                    compat = "complementary stems"
+                elif char1 == '.' or char2 == '.':
+                    compat = "mixed (paired/unpaired)"
+                else:
+                    compat = "other combination"
+                info_lines.append(f"Structural compatibility: {compat}")
+            
+            hover_row.append("<br>".join(info_lines))
+        hover_text.append(hover_row)
+    
+    # Create the heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=matrix,
+        hoverongaps=False,
+        hovertemplate='%{hovertext}<extra></extra>',
+        hovertext=hover_text,
+        colorscale='RdBu_r',  # Red-Blue reversed (similar to coolwarm)
+        zmid=0,  # Center colorscale at 0
+        zmin=-1,
+        zmax=1,
+        colorbar=dict(
+            title="Cosine Similarity"
+        )
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        title=title or f"Interactive Similarity Matrix: {rna1_id} vs {rna2_id}",
+        xaxis_title=f"{rna2_id} Node Index",
+        yaxis_title=f"{rna1_id} Node Index",
+        xaxis=dict(side="bottom"),
+        yaxis=dict(autorange="reversed"),  # To match matplotlib's origin="upper"
+        width=max(600, min(1200, L2 * 15)),
+        height=max(600, min(1200, L1 * 15)),
+        font=dict(size=12)
+    )
+    
+    # Add structure sequence annotations if available
+    annotations = []
+    
+    # Add RNA1 structure as annotations on the left
+    if s1 is not None:
+        for i in range(min(len(s1), L1, 50)):  # Limit to 50 chars to avoid clutter
+            annotations.append(dict(
+                x=-0.02,
+                y=i,
+                xref="paper",
+                yref="y",
+                text=s1[i],
+                showarrow=False,
+                font=dict(size=10, family="monospace"),
+                xanchor="right"
+            ))
+    
+    # Add RNA2 structure as annotations on the top
+    if s2 is not None:
+        for j in range(min(len(s2), L2, 50)):  # Limit to 50 chars to avoid clutter
+            annotations.append(dict(
+                x=j,
+                y=-0.02,
+                xref="x",
+                yref="paper",
+                text=s2[j],
+                showarrow=False,
+                font=dict(size=10, family="monospace"),
+                yanchor="top"
+            ))
+    
+    fig.update_layout(annotations=annotations)
+    
+    # Save as HTML
+    pyo.plot(fig, filename=path, auto_open=False)
+
+
 def needleman_wunsch_affine(score: np.ndarray, gap_open: float, gap_extend: float) -> Tuple[float, List[Tuple[Optional[int], Optional[int]]]]:
     """
     Global alignment (Needleman–Wunsch) with affine gaps (Gotoh).
@@ -487,20 +633,11 @@ def main():
     matrix_png = args.output_prefix + ".matrix.png"
     align_out = args.output_prefix + ".alignment.tsv"
     struct_txt_out = args.output_prefix + ".structures.txt"
+    matrix_html = args.output_prefix + ".matrix.html"
 
     os.makedirs(os.path.dirname(matrix_out) or ".", exist_ok=True)
 
-    save_matrix_tsv(sim, matrix_out)
-    if args.plot_matrix:
-        save_matrix_png(sim, matrix_png, title=f"Cosine similarity (combined): {args.rna1} vs {args.rna2}")
-    if used_base and args.save_components:
-        base_path = args.output_prefix + ".matrix.base.tsv"
-        struct_path = args.output_prefix + ".matrix.struct.tsv"
-        save_matrix_tsv(sim_struct, struct_path)
-        if 'sim_base' in locals():
-            save_matrix_tsv(sim_base, base_path)
-
-    # Optional: aligned dot-bracket output from input table
+    # Extract dot-bracket structures early so they're available for HTML output
     s1 = s2 = None
     if args.structure_column_name:
         if args.structure_column_name not in df.columns:
@@ -517,6 +654,26 @@ def main():
             print(
                 f"[warning] Length mismatch for RNA2: structure={len(s2)} vs embeddings={B_struct.shape[0]}"
             )
+
+    save_matrix_tsv(sim, matrix_out)
+    if args.plot_matrix:
+        save_matrix_png(sim, matrix_png, title=f"Cosine similarity (combined): {args.rna1} vs {args.rna2}")
+        # Always generate HTML output when --plot-matrix is used
+        save_matrix_html(
+            sim, 
+            matrix_html, 
+            title=f"Interactive Similarity Matrix: {args.rna1} vs {args.rna2}",
+            s1=s1,
+            s2=s2,
+            rna1_id=args.rna1,
+            rna2_id=args.rna2
+        )
+    if used_base and args.save_components:
+        base_path = args.output_prefix + ".matrix.base.tsv"
+        struct_path = args.output_prefix + ".matrix.struct.tsv"
+        save_matrix_tsv(sim_struct, struct_path)
+        if 'sim_base' in locals():
+            save_matrix_tsv(sim_base, base_path)
 
     with open(align_out, "w") as f:
         f.write(f"# mode=\"{args.mode}\"\n")
@@ -550,6 +707,7 @@ def main():
     print(f"Scoring matrix written to {matrix_out}")
     if args.plot_matrix:
         print(f"Matrix heatmap written to {matrix_png}")
+        print(f"Interactive matrix heatmap written to {matrix_html}")
     print(f"Alignment written to {align_out}")
     if s1 is not None and s2 is not None:
         print(f"Structure alignment written to {struct_txt_out}")
