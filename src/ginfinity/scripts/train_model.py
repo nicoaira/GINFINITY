@@ -78,51 +78,123 @@ def compute_alignment_batch_loss(
     node_embeddings = model.get_node_embeddings(batch)
     ptr = batch.ptr.tolist()
 
+    # Pre-allocate lists with estimated capacity for better performance
+    estimated_capacity = sum(len(getattr(data, "_alignment_mapping", {})) + max_unaligned_per_graph 
+                           for data in structures)
     global_indices = []
     labels = []
     graph_ids = []
+    categories = []
+    
+    total_nodes = node_embeddings.shape[0]
 
+    # Process all structures in one pass
     for graph_idx, data in enumerate(structures):
-        mapping = getattr(data, "alignment_mapping", {}) or {}
-        for align_pos, local_idx in mapping.items():
-            if local_idx < 0:
-                continue
-            global_idx = ptr[graph_idx] + int(local_idx)
-            global_indices.append(global_idx)
-            labels.append(int(align_pos))
-            graph_ids.append(graph_idx)
+        # Get graph boundaries
+        graph_start = ptr[graph_idx]
+        graph_end = ptr[graph_idx + 1] if graph_idx + 1 < len(ptr) else total_nodes
+        graph_size = graph_end - graph_start
+        
+        # Handle conserved (aligned) positions - vectorized where possible
+        mapping = getattr(data, "_alignment_mapping", {}) or {}
+        node_categories_tensor = getattr(data, "node_categories", None)
+        
+        if mapping:
+            # Convert mapping to arrays for vectorized processing
+            align_positions = list(mapping.keys())
+            local_indices = list(mapping.values())
+            
+            # Filter valid indices in one go
+            valid_mask = [(0 <= idx < graph_size) for idx in local_indices]
+            valid_align_pos = [align_positions[i] for i, valid in enumerate(valid_mask) if valid]
+            valid_local_idx = [local_indices[i] for i, valid in enumerate(valid_mask) if valid]
+            
+            if valid_align_pos:
+                # Vectorized global index calculation
+                valid_global_idx = [graph_start + idx for idx in valid_local_idx]
+                
+                # Batch append to lists
+                global_indices.extend(valid_global_idx)
+                labels.extend([int(pos) for pos in valid_align_pos])
+                graph_ids.extend([graph_idx] * len(valid_align_pos))
+                
+                # Vectorized category extraction
+                if node_categories_tensor is not None:
+                    batch_categories = [
+                        node_categories_tensor[idx].item() if idx < len(node_categories_tensor) else 2
+                        for idx in valid_local_idx
+                    ]
+                else:
+                    batch_categories = [2] * len(valid_align_pos)  # Default to unpaired
+                categories.extend(batch_categories)
 
+        # Handle unaligned positions - optimized sampling
         if max_unaligned_per_graph > 0:
             unaligned = getattr(data, "unaligned_indices", None)
-            if unaligned is None:
-                continue
-            if torch.is_tensor(unaligned):
-                candidates = unaligned.tolist()
-            else:
-                candidates = list(unaligned)
-            if not candidates:
-                continue
-            sample_size = min(max_unaligned_per_graph, len(candidates))
-            if sample_unaligned:
-                selected = random.sample(candidates, sample_size)
-            else:
-                selected = candidates[:sample_size]
-            base_label = -((graph_idx + 1) * 10**6)
-            for offset, local_idx in enumerate(selected):
-                global_idx = ptr[graph_idx] + int(local_idx)
-                global_indices.append(global_idx)
-                labels.append(base_label - offset)
-                graph_ids.append(graph_idx)
+            if unaligned is not None:
+                if torch.is_tensor(unaligned):
+                    candidates = unaligned.tolist()
+                else:
+                    candidates = list(unaligned)
+                
+                if candidates:
+                    # Vectorized filtering
+                    valid_candidates = [idx for idx in candidates if 0 <= idx < graph_size]
+                    
+                    if valid_candidates:
+                        sample_size = min(max_unaligned_per_graph, len(valid_candidates))
+                        if sample_unaligned and sample_size < len(valid_candidates):
+                            selected = random.sample(valid_candidates, sample_size)
+                        else:
+                            selected = valid_candidates[:sample_size]
+                        
+                        # Vectorized processing of unaligned nodes
+                        base_label = -((graph_idx + 1) * 10**6)
+                        selected_global_idx = [graph_start + idx for idx in selected]
+                        selected_labels = [base_label - offset for offset, _ in enumerate(selected)]
+                        
+                        # Batch append
+                        global_indices.extend(selected_global_idx)
+                        labels.extend(selected_labels)
+                        graph_ids.extend([graph_idx] * len(selected))
+                        
+                        # Vectorized category extraction for unaligned
+                        if node_categories_tensor is not None:
+                            unaligned_categories = [
+                                node_categories_tensor[idx].item() if idx < len(node_categories_tensor) else 5
+                                for idx in selected
+                            ]
+                        else:
+                            unaligned_categories = [5] * len(selected)  # Default to unaligned-unpaired
+                        categories.extend(unaligned_categories)
 
     if not global_indices:
         return node_embeddings.sum() * 0.0
 
+    # Final bounds check with vectorized operations
+    max_index = max(global_indices) if global_indices else 0
+    if max_index >= total_nodes:
+        print(f"Warning: Max index {max_index} >= total nodes {total_nodes}")
+        # Vectorized filtering
+        valid_mask = [idx < total_nodes for idx in global_indices]
+        global_indices = [idx for idx, valid in zip(global_indices, valid_mask) if valid]
+        labels = [label for label, valid in zip(labels, valid_mask) if valid]
+        graph_ids = [gid for gid, valid in zip(graph_ids, valid_mask) if valid]
+        categories = [cat for cat, valid in zip(categories, valid_mask) if valid]
+        
+        if not global_indices:
+            return node_embeddings.sum() * 0.0
+
+    # Convert to tensors in one go (more efficient than repeated tensor operations)
     index_tensor = torch.tensor(global_indices, device=device, dtype=torch.long)
-    embeddings = node_embeddings.index_select(0, index_tensor)
     labels_tensor = torch.tensor(labels, device=device, dtype=torch.long)
     graph_ids_tensor = torch.tensor(graph_ids, device=device, dtype=torch.long)
+    categories_tensor = torch.tensor(categories, device=device, dtype=torch.long)
+    
+    # Single embedding selection operation
+    embeddings = node_embeddings.index_select(0, index_tensor)
 
-    return criterion(embeddings, labels_tensor, graph_ids_tensor)
+    return criterion(embeddings, labels_tensor, graph_ids_tensor, categories_tensor)
 
 
 def compute_average_loss(
@@ -485,6 +557,8 @@ def main():
                         help='Cosine similarity margin for negative pairs in alignment training.')
     parser.add_argument('--alignment_unaligned_per_graph', type=int, default=16,
                         help='Maximum number of unaligned nodes per structure to include as negatives.')
+    parser.add_argument('--hard_negative_fraction', type=float, default=0.85,
+                        help='Fraction of negatives that should be hard negatives (same category). Default: 0.85')
     parser.add_argument('--structure_column', type=str, default='structure',
                         help='Name of the column containing dot-bracket structures.')
     args = parser.parse_args()
@@ -602,7 +676,10 @@ def main():
             seq_weight=args.seq_weight,
             structure_column=args.structure_column,
         )
-        criterion = AlignmentContrastiveLoss(margin=args.alignment_margin)
+        criterion = AlignmentContrastiveLoss(
+            margin=args.alignment_margin, 
+            hard_negative_fraction=args.hard_negative_fraction
+        )
         alignment_max_unaligned = max(0, int(args.alignment_unaligned_per_graph))
         train_loader = DataLoader(
             train_dataset,
