@@ -273,6 +273,13 @@ class GINAlignmentDataset(Dataset):
                 sequence_id_int,
             )
 
+            mapping, categories, unaligned = self._filter_alignment_annotations(
+                mapping,
+                categories,
+                unaligned,
+                data.num_nodes,
+            )
+
             data._alignment_mapping = mapping
 
             num_nodes = data.num_nodes
@@ -298,3 +305,42 @@ class GINAlignmentDataset(Dataset):
             )
 
         return result
+
+    def _filter_alignment_annotations(
+        self,
+        mapping,
+        categories,
+        unaligned_nodes,
+        graph_size: int,
+    ):
+        """Drop alignment metadata that points outside the current graph."""
+
+        if graph_size <= 0:
+            return {}, {}, []
+
+        if mapping:
+            mapping = {
+                align_pos: struct_pos
+                for align_pos, struct_pos in mapping.items()
+                if 0 <= struct_pos < graph_size
+            }
+        else:
+            mapping = {}
+
+        if categories:
+            categories = {
+                node_idx: category_id
+                for node_idx, category_id in categories.items()
+                if 0 <= node_idx < graph_size
+            }
+        else:
+            categories = {}
+
+        if unaligned_nodes:
+            unaligned_nodes = [
+                node_idx for node_idx in unaligned_nodes if 0 <= node_idx < graph_size
+            ]
+        else:
+            unaligned_nodes = []
+
+        return mapping, categories, unaligned_nodes

@@ -598,6 +598,12 @@ def main():
     parser.add_argument('--pooling_type', type=str, choices=['global_add_pool','global_mean_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the GIN model.')
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate for the GIN model (default: 0.0).')
     parser.add_argument('--val_fraction', type=float, default=0.2, help='Fraction of data for validation (default: 0.2)')
+    parser.add_argument(
+        '--f_sample_dataset',
+        type=float,
+        default=1.0,
+        help='Fraction of the dataset to sample before splitting (default: 1.0).'
+    )
     parser.add_argument('--initial_eval_fraction', type=float, default=0.05,
                         help='Fraction of batches used during the initial pre-training evaluation (default: 0.05).')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for data splitting (default: 42)')
@@ -658,6 +664,9 @@ def main():
     if not math.isfinite(args.initial_eval_fraction) or args.initial_eval_fraction <= 0:
         raise ValueError("initial_eval_fraction must be a positive, finite value.")
 
+    if not math.isfinite(args.f_sample_dataset) or not (0 < args.f_sample_dataset <= 1):
+        raise ValueError("f_sample_dataset must be a positive, finite fraction in the interval (0, 1].")
+
     # Process hidden_dim argument
     try:
         if ',' in args.hidden_dim:
@@ -680,6 +689,16 @@ def main():
         df = remove_invalid_structures_triplet(df)
     elif args.training_mode == "alignment":
         df = remove_invalid_structures_alignment(df, args.structure_column)
+
+    if df.empty:
+        raise ValueError("No data available for training after preprocessing the dataset.")
+
+    if args.f_sample_dataset < 1.0:
+        sample_size = int(len(df) * args.f_sample_dataset + 0.5)
+        sample_size = max(1, min(sample_size, len(df)))
+        df = df.sample(n=sample_size, random_state=args.seed, replace=False).reset_index(drop=True)
+    else:
+        df = df.reset_index(drop=True)
 
     alignment_map = None
     if args.training_mode == "alignment":
@@ -789,6 +808,10 @@ def main():
         prefetch_factor = max(1, int(args.alignment_prefetch_factor)) if worker_count > 0 else 2
         if worker_count > 0:
             _ensure_open_file_limit()
+            try:
+                torch.multiprocessing.set_sharing_strategy("file_system")
+            except (AttributeError, RuntimeError):
+                pass
         train_loader = DataLoader(
             train_dataset,
             batch_size=1,
