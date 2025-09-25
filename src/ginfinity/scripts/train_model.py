@@ -28,7 +28,7 @@ from ginfinity.training.gin_rna_dataset import (
 from ginfinity.model.gin_model import GINModel
 from ginfinity.training.triplet_loss import TripletLoss
 from ginfinity.training.alignment_loss import AlignmentContrastiveLoss
-from ginfinity.utils import is_valid_dot_bracket, log_information, log_setup
+from ginfinity.utils import FORGI_NODE_TYPES, is_valid_dot_bracket, log_information, log_setup
 import time
 from datetime import datetime
 
@@ -104,8 +104,10 @@ def compute_alignment_batch_loss(
 ):
     structures = batch_item.get("structures", [])
     if len(structures) < 2:
-        dummy = torch.zeros((), device=device, dtype=torch.float32)
-        return dummy
+        first_param = next(model.parameters(), None)
+        if first_param is not None:
+            return first_param.sum() * 0.0
+        return torch.zeros((), device=device, dtype=torch.float32, requires_grad=True)
 
     batch = Batch.from_data_list(structures)
     batch = batch.to(device)
@@ -689,16 +691,48 @@ def main():
         df = remove_invalid_structures_triplet(df)
     elif args.training_mode == "alignment":
         df = remove_invalid_structures_alignment(df, args.structure_column)
+        df = df.groupby("alignment_id", sort=False).filter(lambda group: len(group) >= 2)
+        if df.empty:
+            raise ValueError("No alignments with at least two structures available after preprocessing the dataset.")
 
     if df.empty:
         raise ValueError("No data available for training after preprocessing the dataset.")
 
     if args.f_sample_dataset < 1.0:
-        sample_size = int(len(df) * args.f_sample_dataset + 0.5)
-        sample_size = max(1, min(sample_size, len(df)))
-        df = df.sample(n=sample_size, random_state=args.seed, replace=False).reset_index(drop=True)
+        if args.training_mode == "alignment":
+            alignment_sizes = df.groupby("alignment_id").size()
+            alignment_sizes = alignment_sizes[alignment_sizes >= 2]
+            if alignment_sizes.empty:
+                raise ValueError("No alignments with at least two structures available for sampling.")
+
+            alignment_ids = alignment_sizes.index.to_list()
+            random.shuffle(alignment_ids)
+
+            total_rows = int(alignment_sizes.sum())
+            target_rows = int(total_rows * args.f_sample_dataset + 0.5)
+            target_rows = max(2, min(target_rows, total_rows))
+
+            selected_ids = []
+            accumulated = 0
+            for alignment_id in alignment_ids:
+                if accumulated >= target_rows:
+                    break
+                selected_ids.append(alignment_id)
+                accumulated += int(alignment_sizes.loc[alignment_id])
+
+            if not selected_ids:
+                selected_ids.append(alignment_ids[0])
+
+            df = df[df["alignment_id"].isin(selected_ids)].reset_index(drop=True)
+        else:
+            sample_size = int(len(df) * args.f_sample_dataset + 0.5)
+            sample_size = max(1, min(sample_size, len(df)))
+            df = df.sample(n=sample_size, random_state=args.seed, replace=False).reset_index(drop=True)
     else:
         df = df.reset_index(drop=True)
+
+    if df.empty:
+        raise ValueError("No data available for training after applying dataset sampling.")
 
     alignment_map = None
     if args.training_mode == "alignment":
@@ -723,8 +757,16 @@ def main():
 
     # Initialize GIN model with processed hidden_dim
     loop_feature_dim = 2  # loop size + relative position
-    base_feature_dim = 4 if args.seq_weight > 0 else 0
-    node_feature_dim = 1 + loop_feature_dim + base_feature_dim
+    base_pair_dim = 1
+    if args.graph_encoding == "forgi":
+        seq_feature_dim = 4  # sequence channels always reserved (zeros if seq_weight=0)
+        structural_bridge_dim = 1 + len(FORGI_NODE_TYPES)
+        node_feature_dim = base_pair_dim + loop_feature_dim + seq_feature_dim + structural_bridge_dim
+        edge_feature_dim = 7
+    else:
+        seq_feature_dim = 4 if args.seq_weight > 0 else 0
+        node_feature_dim = base_pair_dim + loop_feature_dim + seq_feature_dim
+        edge_feature_dim = 4
     model = GINModel(
         hidden_dim=hidden_dim,
         output_dim=args.output_dim,
@@ -733,13 +775,14 @@ def main():
         pooling_type=args.pooling_type,  # Pass the new argument
         dropout=args.dropout,  # Pass the new argument
         node_feature_dim=node_feature_dim,
-        edge_feature_dim=4,
+        edge_feature_dim=edge_feature_dim,
         norm_type=args.norm_type,
         node_embed_norm=args.node_embed_norm,
         normalize_nodes_before_pool=args.normalize_nodes_before_pool,
         gin_eps=args.gin_eps,
         train_eps=args.train_eps,
     )
+    model.metadata["seq_weight"] = float(args.seq_weight)
     alignment_max_unaligned = 0
     if args.training_mode == "triplet":
         train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)

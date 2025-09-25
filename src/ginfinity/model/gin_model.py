@@ -3,6 +3,19 @@ import torch.nn as nn
 from torch_geometric.nn import GINEConv, global_add_pool, Set2Set, global_mean_pool
 from torch_geometric.nn.norm import BatchNorm as PYG_BatchNorm, GraphNorm, LayerNorm as PYG_LayerNorm, InstanceNorm
 
+try:  # pragma: no cover - import-time guard for lightweight downstream scripts
+    from ginfinity.utils import FORGI_NODE_TYPES
+except Exception:  # pragma: no cover - fallback if utils has heavyweight deps unavailable
+    FORGI_NODE_TYPES = [
+        "five_prime",
+        "stem",
+        "hairpin",
+        "internal",
+        "multiloop",
+        "three_prime",
+        "other",
+    ]
+
 class GINModel(nn.Module):
     def __init__(
         self,
@@ -36,6 +49,22 @@ class GINModel(nn.Module):
         else:
             raise TypeError("hidden_dim must be an integer or a list of integers")
 
+        # Feature dimensionalities (fallbacks depend on encoding)
+        if node_feature_dim is None:
+            if graph_encoding == "forgi":
+                computed_node_dim = 1 + 2 + 4 + 1 + len(FORGI_NODE_TYPES)
+            else:
+                computed_node_dim = 3
+        else:
+            computed_node_dim = int(node_feature_dim)
+
+        if edge_feature_dim is None:
+            edge_dim = 7 if graph_encoding == "forgi" else 4
+        else:
+            edge_dim = int(edge_feature_dim)
+
+        input_dim = computed_node_dim
+
         # Store metadata for checkpointing
         self.metadata = {
             "hidden_dims": list(hidden_dims),
@@ -49,18 +78,11 @@ class GINModel(nn.Module):
             "norm_type": norm_type,
             "use_residual": use_residual,
             "normalize_nodes_before_pool": bool(normalize_nodes_before_pool),
-            "node_feature_dim": int(node_feature_dim) if node_feature_dim is not None else None,
-            "edge_feature_dim": int(edge_feature_dim) if edge_feature_dim is not None else None,
+            "node_feature_dim": input_dim,
+            "edge_feature_dim": edge_dim,
             "gin_eps": gin_eps,
             "train_eps": train_eps,
         }
-
-        # Node feature dim
-        if node_feature_dim is None:
-            input_dim = 1 if graph_encoding == "standard" else 7
-        else:
-            input_dim = int(node_feature_dim)
-        edge_dim = int(edge_feature_dim) if edge_feature_dim is not None else 2
 
         self.hidden_dims = list(hidden_dims)
 

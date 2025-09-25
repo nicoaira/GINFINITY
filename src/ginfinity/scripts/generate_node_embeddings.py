@@ -47,12 +47,12 @@ def _serialize_matrix(mat: torch.Tensor) -> str:
     return json.dumps(rounded, separators=(",", ":"))
 
 
-def _preprocess(args: Tuple[int, str, str, str]):
+def _preprocess(args: Tuple[int, str, str, str, str, float]):
     """
     Worker: dot-bracket string -> torch_geometric Data
     args: (idx, uid, struct, log_path)
     """
-    idx, uid, struct, log_path = args
+    idx, uid, struct, log_path, graph_encoding, seq_weight = args
     try:
         if not is_valid_dot_bracket(struct):
             raise ValueError("Invalid dot-bracket")
@@ -60,8 +60,8 @@ def _preprocess(args: Tuple[int, str, str, str]):
         log_information(log_path, {"skipped_invalid": f"ID {uid}"})
         return None
 
-    graph = dotbracket_to_graph(struct)
-    data = graph_to_tensor(graph) if graph is not None else None
+    graph = dotbracket_to_graph(struct, graph_encoding=graph_encoding)
+    data = graph_to_tensor(graph, seq_weight=seq_weight, graph_encoding=graph_encoding) if graph is not None else None
     if graph is None or data is None:
         log_information(log_path, {"skipped_graph_fail": f"ID {uid}"})
         return None
@@ -114,6 +114,8 @@ def generate_node_embeddings(
     batch_size: int = 32,
     keep_cols: Optional[List[str]] = None,
     quiet: bool = False,
+    graph_encoding_override: Optional[str] = None,
+    seq_weight_override: Optional[float] = None,
 ):
     # Decide which columns to carry through
     final_keep = [id_column]
@@ -122,9 +124,29 @@ def generate_node_embeddings(
     if keep_cols:
         final_keep.extend(keep_cols)
 
+    metadata_encoding = 'standard'
+    metadata_seq_weight = 0.0
+    if model_path:
+        temp_model = load_trained_model(model_path, 'cpu')
+        if hasattr(temp_model, 'metadata'):
+            metadata = temp_model.metadata
+            metadata_encoding = metadata.get('graph_encoding', metadata_encoding)
+            metadata_seq_weight = float(metadata.get('seq_weight', metadata_seq_weight) or 0.0)
+        del temp_model
+
+    graph_encoding = (graph_encoding_override or metadata_encoding or 'standard').lower()
+    if graph_encoding not in {'standard', 'forgi'}:
+        raise ValueError(f"Unsupported graph encoding '{graph_encoding}'")
+
+    if seq_weight_override is not None:
+        seq_weight = float(seq_weight_override)
+    else:
+        seq_weight = float(metadata_seq_weight)
+    seq_weight = max(0.0, min(1.0, seq_weight))
+
     # 1) Preprocess rows -> Data
     tasks = [
-        (idx, row[id_column], row[structure_column], log_path)
+        (idx, row[id_column], row[structure_column], log_path, graph_encoding, seq_weight)
         for idx, row in input_df.iterrows()
     ]
     preproc = []
@@ -251,6 +273,18 @@ def main():
     parser.add_argument("--device", default="cpu", help="Device for inference: 'cpu' or 'cuda'.")
     parser.add_argument("--num-workers", type=int, default=4, help="Number of worker processes for CPU.")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for GPU inference.")
+    parser.add_argument(
+        "--graph-encoding",
+        choices=["standard", "forgi"],
+        default=None,
+        help="Override graph encoding for preprocessing. Defaults to the checkpoint metadata.",
+    )
+    parser.add_argument(
+        "--seq-weight",
+        type=float,
+        default=None,
+        help="Override sequence feature weight used during preprocessing (0-1). Defaults to the checkpoint metadata.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Suppress progress bars and extra output.")
     args = parser.parse_args()
 
@@ -353,10 +387,11 @@ def main():
         batch_size=args.batch_size,
         keep_cols=propagate,
         quiet=args.quiet,
+        graph_encoding_override=args.graph_encoding,
+        seq_weight_override=args.seq_weight,
     )
 
 
 if __name__ == "__main__":
     set_start_method("spawn", force=True)
     main()
-

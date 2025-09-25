@@ -11,6 +11,22 @@ from torch_geometric.data import Data
 import pandas as pd
 
 # ==============================================================================
+# Graph encoding constants
+# ==============================================================================
+
+FORGI_NODE_TYPES = [
+    "five_prime",
+    "stem",
+    "hairpin",
+    "internal",
+    "multiloop",
+    "three_prime",
+    "other",
+]
+
+FORGI_TYPE_TO_INDEX = {name: idx for idx, name in enumerate(FORGI_NODE_TYPES)}
+
+# ==============================================================================
 # Logging & System Utilities
 # ==============================================================================
 
@@ -160,7 +176,7 @@ def is_valid_dot_bracket(structure):
 
     return all(len(stack) == 0 for stack in stacks.values())
 
-def dotbracket_to_graph(dotbracket, sequence=None):
+def dotbracket_to_graph(dotbracket, sequence=None, graph_encoding: str = "standard"):
     """Convert an extended dot-bracket string (and optional sequence) into a graph.
 
     Parameters
@@ -175,7 +191,10 @@ def dotbracket_to_graph(dotbracket, sequence=None):
         each node in the resulting graph will contain a ``base`` attribute
         with the nucleotide character at that position.
     """
+    encoding = (graph_encoding or "standard").lower()
     G = nx.Graph()
+    G.graph['graph_encoding'] = encoding
+    G.graph['base_node_count'] = len(dotbracket)
     pair_stacks = defaultdict(list)
     bracket_pairs = {')': '(', ']': '[', '}': '{', '>': '<'}
 
@@ -230,6 +249,8 @@ def dotbracket_to_graph(dotbracket, sequence=None):
             'loop_pos': loop_info['loop_pos'] if loop_info else 0,
             'loop_size_norm': loop_info['loop_size_norm'] if loop_info else 0.0,
             'loop_pos_norm': loop_info['loop_pos_norm'] if loop_info else 0.0,
+            'node_kind': 'base',
+            'forgi_type': None,
         }
         G.add_node(i, **node_attrs)
 
@@ -267,6 +288,80 @@ def dotbracket_to_graph(dotbracket, sequence=None):
         if i > 0:
             G.add_edge(i, i - 1, edge_type='adjacent')
 
+    if encoding == 'standard':
+        return G
+    if encoding == 'forgi':
+        return _augment_graph_with_forgi(G, dotbracket, sequence)
+    raise ValueError(f"Unsupported graph_encoding '{graph_encoding}'")
+
+
+def _build_forgi_type_map(bg):
+    """Generate a mapping from Forgi element id to human-readable type."""
+    type_map = {}
+    for node in bg.stem_iterator():
+        type_map[node] = 'stem'
+    for node in getattr(bg, 'hloop_iterator', lambda: [])():
+        type_map[node] = 'hairpin'
+    for node in getattr(bg, 'iloop_iterator', lambda: [])():
+        type_map[node] = 'internal'
+    for node in getattr(bg, 'mloop_iterator', lambda: [])():
+        type_map[node] = 'multiloop'
+    for node in getattr(bg, 'floop_iterator', lambda: [])():
+        type_map[node] = 'five_prime'
+    for node in getattr(bg, 'tloop_iterator', lambda: [])():
+        type_map[node] = 'three_prime'
+    return type_map
+
+
+def _augment_graph_with_forgi(G, dotbracket, sequence):
+    """Add Forgi structural element nodes and edges to an existing base graph."""
+    try:
+        import forgi.graph.bulge_graph as fgb
+    except ImportError as exc:
+        raise RuntimeError(
+            "Forgi graph encoding requires the 'forgi' package. Install it to use graph_encoding='forgi'."
+        ) from exc
+
+    bg = fgb.BulgeGraph.from_dotbracket(dotbracket, sequence) if sequence is not None else fgb.BulgeGraph.from_dotbracket(dotbracket)
+    type_map = _build_forgi_type_map(bg)
+    base_count = G.graph.get('base_node_count', len(dotbracket))
+
+    forgi_indices = {}
+    forgi_nodes = sorted(bg.defines.keys())
+    for offset, node_name in enumerate(forgi_nodes):
+        node_index = base_count + offset
+        members = [pos - 1 for pos in bg.define_residue_num_iterator(node_name)]
+        members = sorted({idx for idx in members if 0 <= idx < base_count})
+        node_type = type_map.get(node_name, 'other')
+        member_count = len(members)
+        member_fraction = member_count / base_count if base_count > 0 else 0.0
+
+        G.add_node(
+            node_index,
+            node_kind='forgi',
+            forgi_id=node_name,
+            forgi_type=node_type,
+            members=members,
+            member_count=member_count,
+            member_fraction=member_fraction,
+        )
+        forgi_indices[node_name] = node_index
+
+        for member in members:
+            G.add_edge(node_index, member, edge_type='forgi_membership')
+
+    for node_name, neighbors in getattr(bg, 'edges', {}).items():
+        src_idx = forgi_indices.get(node_name)
+        if src_idx is None:
+            continue
+        for neighbor in neighbors:
+            dst_idx = forgi_indices.get(neighbor)
+            if dst_idx is None or dst_idx == src_idx:
+                continue
+            if src_idx < dst_idx:
+                G.add_edge(src_idx, dst_idx, edge_type='forgi_connection')
+
+    G.graph['forgi_node_count'] = len(forgi_nodes)
     return G
 
 def _one_hot_base(base):
@@ -280,19 +375,20 @@ def _one_hot_base(base):
         return [0.0, 0.0, 0.0, 0.0]
     return mapping.get(base.upper(), [0.0, 0.0, 0.0, 0.0])
 
-def graph_to_tensor(G, seq_weight: float = 0.0):
-    """Convert a NetworkX graph to torch_geometric Data with weighted features.
+def graph_to_tensor(G, seq_weight: float = 0.0, graph_encoding: str = None):
+    """Convert a NetworkX graph to torch_geometric Data with weighted features."""
 
-    Parameters
-    ----------
-    G : nx.Graph
-        Graph produced by :func:`dotbracket_to_graph`.
-    seq_weight : float, optional
-        Weight of the one-hot encoded nucleotide sequence relative to the
-        pairing state. Must be between ``0`` and ``1``. If ``0`` (default),
-        only the pairing information is used.
-    """
+    encoding = graph_encoding or G.graph.get('graph_encoding', 'standard')
+    encoding = (encoding or 'standard').lower()
 
+    if encoding == 'standard':
+        return _graph_to_tensor_standard(G, seq_weight)
+    if encoding == 'forgi':
+        return _graph_to_tensor_forgi(G, seq_weight)
+    raise ValueError(f"Unsupported graph_encoding '{encoding}'")
+
+
+def _graph_to_tensor_standard(G, seq_weight: float):
     nodes = sorted(G.nodes())
     node_features = []
     use_sequence = seq_weight > 0
@@ -330,6 +426,81 @@ def graph_to_tensor(G, seq_weight: float = 0.0):
     else:
         edge_index = torch.empty((2, 0), dtype=torch.long)
         edge_attr = torch.empty((0, 4), dtype=torch.float)
+    return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+
+def _graph_to_tensor_forgi(G, seq_weight: float):
+    nodes = sorted(G.nodes())
+    node_features = []
+    use_sequence = seq_weight > 0
+    pair_weight = 1.0 - seq_weight
+    forgi_dim = len(FORGI_NODE_TYPES)
+
+    for node in nodes:
+        node_data = G.nodes[node]
+        node_kind = node_data.get('node_kind', 'base')
+        is_base = 1.0 if node_kind == 'base' else 0.0
+
+        pair_val = 1.0 if (node_kind == 'base' and node_data.get('label') == 'paired') else 0.0
+        loop_size_norm = float(node_data.get('loop_size_norm', 0.0)) if node_kind == 'base' else 0.0
+        loop_pos_norm = float(node_data.get('loop_pos_norm', 0.0)) if node_kind == 'base' else 0.0
+
+        base_features = [pair_weight * pair_val, loop_size_norm, loop_pos_norm]
+
+        if use_sequence and node_kind == 'base':
+            base_vec = _one_hot_base(node_data.get('base'))
+            seq_features = [seq_weight * b for b in base_vec]
+        else:
+            seq_features = [0.0, 0.0, 0.0, 0.0]
+
+        features = base_features + seq_features
+        features.append(is_base)
+
+        forgi_type_vec = [0.0] * forgi_dim
+        if node_kind == 'forgi':
+            forgi_type = node_data.get('forgi_type', 'other')
+            type_idx = FORGI_TYPE_TO_INDEX.get(forgi_type, FORGI_TYPE_TO_INDEX['other'])
+            forgi_type_vec[type_idx] = 1.0
+        features.extend(forgi_type_vec)
+
+        node_features.append(features)
+
+    x = torch.tensor(node_features, dtype=torch.float)
+
+    edge_indices = []
+    edge_attrs = []
+    for u, v, data in G.edges(data=True):
+        base_edge_type = data.get('edge_type', 'adjacent')
+        for src, dst in ((u, v), (v, u)):
+            attr_vec = [0.0, 0.0, 0.0, 0.0, 0.0]
+            src_kind = G.nodes[src].get('node_kind', 'base')
+            dst_kind = G.nodes[dst].get('node_kind', 'base')
+
+            if base_edge_type == 'adjacent':
+                attr_vec[0] = 1.0
+            elif base_edge_type == 'base_pair':
+                attr_vec[1] = 1.0
+            elif base_edge_type == 'forgi_connection':
+                attr_vec[4] = 1.0
+            elif base_edge_type == 'forgi_membership':
+                if src_kind == 'forgi' and dst_kind == 'base':
+                    attr_vec[2] = 1.0  # parent -> child
+                elif src_kind == 'base' and dst_kind == 'forgi':
+                    attr_vec[3] = 1.0  # child -> parent
+            else:
+                attr_vec[4] = 1.0
+
+            is_forward = 1.0 if src < dst else 0.0
+            is_backward = 1.0 - is_forward
+            edge_indices.append([src, dst])
+            edge_attrs.append(attr_vec + [is_forward, is_backward])
+
+    if edge_indices:
+        edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+        edge_attr = torch.tensor(edge_attrs, dtype=torch.float)
+    else:
+        edge_index = torch.empty((2, 0), dtype=torch.long)
+        edge_attr = torch.empty((0, 7), dtype=torch.float)
     return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
 # ==============================================================================

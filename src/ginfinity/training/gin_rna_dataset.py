@@ -40,13 +40,13 @@ class GINRNADataset(Dataset):
         positive_seq = row.get("positive_seq")
         negative_seq = row.get("negative_seq")
 
-        g_anchor = dotbracket_to_graph(anchor_structure, anchor_seq)
-        g_positive = dotbracket_to_graph(positive_structure, positive_seq)
-        g_negative = dotbracket_to_graph(negative_structure, negative_seq)
+        g_anchor = dotbracket_to_graph(anchor_structure, anchor_seq, graph_encoding=self.graph_encoding)
+        g_positive = dotbracket_to_graph(positive_structure, positive_seq, graph_encoding=self.graph_encoding)
+        g_negative = dotbracket_to_graph(negative_structure, negative_seq, graph_encoding=self.graph_encoding)
 
-        data_anchor = graph_to_tensor(g_anchor, self.seq_weight)
-        data_positive = graph_to_tensor(g_positive, self.seq_weight)
-        data_negative = graph_to_tensor(g_negative, self.seq_weight)
+        data_anchor = graph_to_tensor(g_anchor, self.seq_weight, graph_encoding=self.graph_encoding)
+        data_positive = graph_to_tensor(g_positive, self.seq_weight, graph_encoding=self.graph_encoding)
+        data_negative = graph_to_tensor(g_negative, self.seq_weight, graph_encoding=self.graph_encoding)
 
         return data_anchor, data_positive, data_negative
 
@@ -74,11 +74,11 @@ class GINRNAPairDataset(Dataset):
         anchor_seq = row.get("anchor_seq")
         positive_seq = row.get("positive_seq")
 
-        g_anchor = dotbracket_to_graph(anchor_structure, anchor_seq)
-        g_positive = dotbracket_to_graph(positive_structure, positive_seq)
+        g_anchor = dotbracket_to_graph(anchor_structure, anchor_seq, graph_encoding=self.graph_encoding)
+        g_positive = dotbracket_to_graph(positive_structure, positive_seq, graph_encoding=self.graph_encoding)
 
-        data_anchor = graph_to_tensor(g_anchor, self.seq_weight)
-        data_positive = graph_to_tensor(g_positive, self.seq_weight)
+        data_anchor = graph_to_tensor(g_anchor, self.seq_weight, graph_encoding=self.graph_encoding)
+        data_positive = graph_to_tensor(g_positive, self.seq_weight, graph_encoding=self.graph_encoding)
 
         target = torch.tensor([float(target)], dtype=torch.float32)
         return data_anchor, data_positive, target
@@ -252,8 +252,8 @@ class GINAlignmentDataset(Dataset):
         for row_data in rows:
             structure = row_data[self.structure_column]
             sequence = row_data.get("sequence")
-            g = dotbracket_to_graph(structure, sequence)
-            data = graph_to_tensor(g, self.seq_weight)
+            g = dotbracket_to_graph(structure, sequence, graph_encoding=self.graph_encoding)
+            data = graph_to_tensor(g, self.seq_weight, graph_encoding=self.graph_encoding)
 
             sequence_id = row_data.get("sequence_id")
             if sequence_id is not None and pd.notna(sequence_id):

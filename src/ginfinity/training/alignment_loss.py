@@ -47,27 +47,28 @@ class AlignmentContrastiveLoss(nn.Module):
             return embeddings.sum() * 0.0
 
         device = embeddings.device
-        n = embeddings.shape[0]
-        
+
         # Normalize embeddings once
         embeddings = F.normalize(embeddings, p=2, dim=1)
         
         # Find positive pairs using efficient direct approach
         positive_pairs = self._create_positive_pairs_efficient(labels, graph_ids, categories)
         
-        pos_loss = torch.tensor(0.0, device=device)
+        zero = embeddings.sum() * 0.0
+
+        pos_loss = zero
         if len(positive_pairs) > 0:
             # Compute positive similarities efficiently
             pos_emb1 = embeddings[positive_pairs[:, 0]]
             pos_emb2 = embeddings[positive_pairs[:, 1]]
             pos_sims = torch.sum(pos_emb1 * pos_emb2, dim=1)
             pos_loss = (1.0 - pos_sims).mean()
-        
+
         # Compute negative loss using efficient sampling
         neg_loss = self._compute_negative_loss_vectorized(
             embeddings, labels, graph_ids, categories, device
         )
-        
+
         return pos_loss + neg_loss
 
     def _create_positive_pairs_efficient(self, labels, graph_ids, categories):
@@ -119,8 +120,10 @@ class AlignmentContrastiveLoss(nn.Module):
         # Sample indices efficiently
         max_samples = min(self.max_negatives, n * n // 4)  # Quarter of all pairs
         
+        zero = embeddings.sum() * 0.0
+
         if max_samples < 100:  # Not enough data
-            return torch.tensor(0.0, device=device)
+            return zero
             
         # Generate random pairs
         idx1 = torch.randint(0, n, (max_samples,), device=device)
@@ -134,7 +137,7 @@ class AlignmentContrastiveLoss(nn.Module):
         valid_neg_mask = different_graphs & different_labels & at_least_one_conserved
         
         if not valid_neg_mask.any():
-            return torch.tensor(0.0, device=device)
+            return zero
             
         # Apply mask to get valid pairs
         valid_idx1 = idx1[valid_neg_mask]
@@ -176,7 +179,7 @@ class AlignmentContrastiveLoss(nn.Module):
                     selected_indices.append(easy_indices)
         
         if not selected_indices:
-            return torch.tensor(0.0, device=device)
+            return zero
             
         # Combine all selected indices
         final_indices = torch.cat(selected_indices)
@@ -192,4 +195,6 @@ class AlignmentContrastiveLoss(nn.Module):
         
         # Apply margin penalty
         penalties = F.relu(neg_sims - self.margin)
-        return penalties.mean() if len(penalties) > 0 else torch.tensor(0.0, device=device)
+        if len(penalties) == 0:
+            return zero
+        return penalties.mean()
