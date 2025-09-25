@@ -2,6 +2,8 @@ import os
 import json
 import random
 import argparse
+import math
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -235,16 +237,31 @@ def compute_average_loss(
     training_mode,
     desc: Optional[str] = None,
     alignment_max_unaligned: int = 0,
+    max_batch_fraction: Optional[float] = None,
 ):
     """Return the average loss over a dataloader without gradient updates."""
     if len(dataloader) == 0:
         return float("nan")
 
-    iterator = enumerate(dataloader)
+    total_batches = len(dataloader)
+    batch_limit = total_batches
+    if max_batch_fraction is not None and total_batches > 0:
+        if not math.isfinite(max_batch_fraction):
+            batch_limit = total_batches
+        else:
+            scaled = math.ceil(total_batches * max_batch_fraction)
+            batch_limit = min(total_batches, max(1, scaled))
+
+    iterable = enumerate(dataloader)
+    progress_bar = None
     if desc:
-        iterator = tqdm(iterator, total=len(dataloader), desc=desc)
+        progress_bar = tqdm(iterable, total=batch_limit, desc=desc)
+        iterator = progress_bar
+    else:
+        iterator = iterable
 
     total_loss = 0.0
+    processed_batches = 0
     model.eval()
     with torch.no_grad():
         for i, batch in iterator:
@@ -274,10 +291,19 @@ def compute_average_loss(
                 pred = 1 - F.cosine_similarity(anchor_out, positive_out)
                 loss = criterion(pred, target.view(-1))
             total_loss += loss.item()
-            if desc:
-                iterator.set_postfix({"Loss": total_loss / (i + 1)})
+            processed_batches += 1
+            if progress_bar is not None:
+                progress_bar.set_postfix({"Loss": total_loss / processed_batches})
+            if processed_batches >= batch_limit:
+                break
 
-    return total_loss / len(dataloader)
+    if progress_bar is not None:
+        progress_bar.close()
+
+    if processed_batches == 0:
+        return float("nan")
+
+    return total_loss / processed_batches
 
 
 def plot_loss_curves(train_losses, val_losses, output_dir, log_path, saved_epoch=None):
@@ -337,6 +363,7 @@ def train_model_with_early_stopping(
         decay_rate=0.1,  # Add decay_rate parameter
         training_mode="triplet",
         alignment_max_unaligned: int = 0,
+        initial_eval_fraction: float = 0.05,
 ):
     """
     Train a GIN model with early stopping.
@@ -374,6 +401,7 @@ def train_model_with_early_stopping(
         training_mode,
         desc="Initial Evaluation - Training",
         alignment_max_unaligned=alignment_max_unaligned,
+        max_batch_fraction=initial_eval_fraction,
     )
     initial_val_loss = compute_average_loss(
         val_loader,
@@ -383,6 +411,7 @@ def train_model_with_early_stopping(
         training_mode,
         desc="Initial Evaluation - Validation",
         alignment_max_unaligned=alignment_max_unaligned,
+        max_batch_fraction=initial_eval_fraction,
     )
 
     best_val_loss = initial_val_loss
@@ -401,7 +430,8 @@ def train_model_with_early_stopping(
         "Validation Loss": f"{initial_val_loss}",
         "Best Validation Loss": f"{best_val_loss}",
         "Early Stopping Counter": f"{early_stopping.counter}/{patience}",
-        "Learning Rate": f"{optimizer.param_groups[0]['lr']}"
+        "Learning Rate": f"{optimizer.param_groups[0]['lr']}",
+        "Initial Evaluation Fraction": f"{initial_eval_fraction}",
     }
     log_information(log_path, initial_log)
     print(
@@ -568,6 +598,8 @@ def main():
     parser.add_argument('--pooling_type', type=str, choices=['global_add_pool','global_mean_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the GIN model.')
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate for the GIN model (default: 0.0).')
     parser.add_argument('--val_fraction', type=float, default=0.2, help='Fraction of data for validation (default: 0.2)')
+    parser.add_argument('--initial_eval_fraction', type=float, default=0.05,
+                        help='Fraction of batches used during the initial pre-training evaluation (default: 0.05).')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for data splitting (default: 42)')
     parser.add_argument('--training_mode', choices=['triplet', 'regression', 'alignment'], default='triplet',
                         help='Select the training strategy for the model.')
@@ -622,7 +654,10 @@ def main():
     parser.add_argument('--train_eps', action='store_true',
                         help='Make GIN epsilon parameter learnable during training (default: False for fixed epsilon).')
     args = parser.parse_args()
-    
+
+    if not math.isfinite(args.initial_eval_fraction) or args.initial_eval_fraction <= 0:
+        raise ValueError("initial_eval_fraction must be a positive, finite value.")
+
     # Process hidden_dim argument
     try:
         if ',' in args.hidden_dim:
@@ -810,6 +845,7 @@ def main():
         "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
         "gin_eps": args.gin_eps,
         "train_eps": args.train_eps,
+        "initial_eval_fraction": args.initial_eval_fraction,
     }
 
     if args.training_mode == "alignment":
@@ -838,6 +874,7 @@ def main():
         decay_rate=args.decay_rate,  # Pass the new argument
         training_mode=args.training_mode,
         alignment_max_unaligned=alignment_max_unaligned,
+        initial_eval_fraction=args.initial_eval_fraction,
     )
 
     end_time = time.time()
