@@ -19,6 +19,8 @@ class GINModel(nn.Module):
         normalize_nodes_before_pool: bool = False,
         node_feature_dim: int = None,
         edge_feature_dim: int = 4,
+        gin_eps: float = 0.0,              # GIN epsilon parameter
+        train_eps: bool = True,            # Whether to make GIN epsilon learnable
     ):
         super().__init__()
 
@@ -49,6 +51,8 @@ class GINModel(nn.Module):
             "normalize_nodes_before_pool": bool(normalize_nodes_before_pool),
             "node_feature_dim": int(node_feature_dim) if node_feature_dim is not None else None,
             "edge_feature_dim": int(edge_feature_dim) if edge_feature_dim is not None else None,
+            "gin_eps": gin_eps,
+            "train_eps": train_eps,
         }
 
         # Node feature dim
@@ -84,7 +88,7 @@ class GINModel(nn.Module):
                 nn.ReLU(),
             ])
             net = nn.Sequential(*net_layers)
-            self.convs.append(GINEConv(nn=net, train_eps=True, edge_dim=edge_dim))
+            self.convs.append(GINEConv(nn=net, eps=gin_eps, train_eps=train_eps, edge_dim=edge_dim))
             self.norms.append(self._make_norm(norm_type, out_dim))
             self.dropouts.append(nn.Dropout(p=dropout) if dropout > 0 else nn.Identity())
 
@@ -151,6 +155,8 @@ class GINModel(nn.Module):
             normalize_nodes_before_pool=metadata.get('normalize_nodes_before_pool', False),
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
+            gin_eps=metadata.get('gin_eps', 0.0),
+            train_eps=metadata.get('train_eps', True),
         )
         model.load_state_dict(checkpoint['state_dict'])
         return model

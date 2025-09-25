@@ -120,10 +120,9 @@ def compute_alignment_batch_loss(
                 
                 # Vectorized category extraction
                 if node_categories_tensor is not None:
-                    batch_categories = [
-                        node_categories_tensor[idx].item() if idx < len(node_categories_tensor) else 2
-                        for idx in valid_local_idx
-                    ]
+                    # Ensure both tensors are on the same device
+                    valid_indices_tensor = torch.tensor(valid_local_idx, device=node_categories_tensor.device, dtype=torch.long)
+                    batch_categories = node_categories_tensor[valid_indices_tensor].tolist()
                 else:
                     batch_categories = [2] * len(valid_align_pos)  # Default to unpaired
                 categories.extend(batch_categories)
@@ -160,10 +159,9 @@ def compute_alignment_batch_loss(
                         
                         # Vectorized category extraction for unaligned
                         if node_categories_tensor is not None:
-                            unaligned_categories = [
-                                node_categories_tensor[idx].item() if idx < len(node_categories_tensor) else 5
-                                for idx in selected
-                            ]
+                            # Ensure both tensors are on the same device
+                            selected_indices_tensor = torch.tensor(selected, device=node_categories_tensor.device, dtype=torch.long)
+                            unaligned_categories = node_categories_tensor[selected_indices_tensor].tolist()
                         else:
                             unaligned_categories = [5] * len(selected)  # Default to unaligned-unpaired
                         categories.extend(unaligned_categories)
@@ -561,6 +559,17 @@ def main():
                         help='Fraction of negatives that should be hard negatives (same category). Default: 0.85')
     parser.add_argument('--structure_column', type=str, default='structure',
                         help='Name of the column containing dot-bracket structures.')
+    parser.add_argument(
+        '--no-preprocessing-progress',
+        dest='preprocessing_progress',
+        action='store_false',
+        help='Disable the preprocessing progress bar.'
+    )
+    parser.set_defaults(preprocessing_progress=True)
+    parser.add_argument('--gin_eps', type=float, default=0.0,
+                        help='GIN epsilon parameter value. If train_eps is True, this is the initial value (default: 0.0).')
+    parser.add_argument('--train_eps', action='store_true',
+                        help='Make GIN epsilon parameter learnable during training (default: False for fixed epsilon).')
     args = parser.parse_args()
     
     # Process hidden_dim argument
@@ -623,6 +632,8 @@ def main():
         norm_type=args.norm_type,
         node_embed_norm=args.node_embed_norm,
         normalize_nodes_before_pool=args.normalize_nodes_before_pool,
+        gin_eps=args.gin_eps,
+        train_eps=args.train_eps,
     )
     alignment_max_unaligned = 0
     if args.training_mode == "triplet":
@@ -668,6 +679,8 @@ def main():
             graph_encoding=args.graph_encoding,
             seq_weight=args.seq_weight,
             structure_column=args.structure_column,
+            show_progress=args.preprocessing_progress,
+            progress_desc="Preprocessing train alignments",
         )
         val_dataset = GINAlignmentDataset(
             val_df,
@@ -675,6 +688,8 @@ def main():
             graph_encoding=args.graph_encoding,
             seq_weight=args.seq_weight,
             structure_column=args.structure_column,
+            show_progress=args.preprocessing_progress,
+            progress_desc="Preprocessing validation alignments",
         )
         criterion = AlignmentContrastiveLoss(
             margin=args.alignment_margin, 
@@ -731,6 +746,8 @@ def main():
         "norm_type": args.norm_type,
         "node_embed_norm": args.node_embed_norm,
         "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
+        "gin_eps": args.gin_eps,
+        "train_eps": args.train_eps,
     }
 
     if args.training_mode == "alignment":

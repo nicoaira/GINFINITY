@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 
 class AlignmentContrastiveLoss(nn.Module):
-    """Optimized contrastive loss encouraging aligned nodes to be similar with hard negatives.
+    """Fully optimized contrastive loss with vectorized operations for maximum GPU performance.
 
     The loss is composed of two terms:
 
@@ -26,16 +26,15 @@ class AlignmentContrastiveLoss(nn.Module):
     hard_negative_fraction:
         Fraction of negatives that should be hard negatives (same category).
         Default: 0.85
-    max_negatives_per_positive:
-        Maximum number of negatives to sample per positive pair for efficiency.
-        Default: 50
+    max_negatives:
+        Maximum number of negatives to sample for efficiency. Default: 5000
     """
 
-    def __init__(self, margin: float = 0.0, hard_negative_fraction: float = 0.85, max_negatives_per_positive: int = 50):
+    def __init__(self, margin: float = 0.0, hard_negative_fraction: float = 0.85, max_negatives: int = 5000):
         super().__init__()
         self.margin = float(margin)
         self.hard_negative_fraction = float(hard_negative_fraction)
-        self.max_negatives_per_positive = max_negatives_per_positive
+        self.max_negatives = max_negatives
 
     def forward(
         self,
@@ -53,114 +52,144 @@ class AlignmentContrastiveLoss(nn.Module):
         # Normalize embeddings once
         embeddings = F.normalize(embeddings, p=2, dim=1)
         
-        # Vectorized positive pair identification 
-        positive_pairs = self._find_positive_pairs(labels, graph_ids, categories, device)
-        if len(positive_pairs) == 0:
-            return embeddings.sum() * 0.0
-            
-        # Compute positive loss efficiently
-        pos_emb1 = embeddings[positive_pairs[:, 0]]
-        pos_emb2 = embeddings[positive_pairs[:, 1]]
-        pos_sims = torch.sum(pos_emb1 * pos_emb2, dim=1)
-        pos_loss = (1.0 - pos_sims).mean()
+        # Find positive pairs using efficient direct approach
+        positive_pairs = self._create_positive_pairs_efficient(labels, graph_ids, categories)
         
-        # Sample and compute negative loss efficiently
-        neg_loss = self._compute_negative_loss_efficient(
-            embeddings, labels, graph_ids, categories, positive_pairs, device
+        pos_loss = torch.tensor(0.0, device=device)
+        if len(positive_pairs) > 0:
+            # Compute positive similarities efficiently
+            pos_emb1 = embeddings[positive_pairs[:, 0]]
+            pos_emb2 = embeddings[positive_pairs[:, 1]]
+            pos_sims = torch.sum(pos_emb1 * pos_emb2, dim=1)
+            pos_loss = (1.0 - pos_sims).mean()
+        
+        # Compute negative loss using efficient sampling
+        neg_loss = self._compute_negative_loss_vectorized(
+            embeddings, labels, graph_ids, categories, device
         )
         
         return pos_loss + neg_loss
 
-    def _find_positive_pairs(self, labels, graph_ids, categories, device):
-        """Efficiently find positive pairs without creating N×N matrices."""
-        # Group indices by label for conserved positions only
+    def _create_positive_pairs_efficient(self, labels, graph_ids, categories):
+        """Create positive pairs using pure tensor operations - no Python loops or .item() calls."""
+        device = labels.device
+        
+        # Only consider conserved positions
         conserved_mask = categories < 3
         if not conserved_mask.any():
             return torch.empty((0, 2), dtype=torch.long, device=device)
             
+        # Get conserved indices and their labels/graphs
         conserved_indices = torch.nonzero(conserved_mask, as_tuple=False).squeeze(-1)
         conserved_labels = labels[conserved_indices]
         conserved_graphs = graph_ids[conserved_indices]
         
-        positive_pairs = []
-        
-        # For each unique label, find cross-graph pairs
-        unique_labels = torch.unique(conserved_labels)
-        for label in unique_labels:
-            label_mask = conserved_labels == label
-            if label_mask.sum() < 2:
-                continue
-                
-            label_indices = conserved_indices[label_mask]
-            label_graphs = conserved_graphs[label_mask]
-            
-            # Find all pairs with different graphs
-            for i in range(len(label_indices)):
-                for j in range(i + 1, len(label_indices)):
-                    if label_graphs[i] != label_graphs[j]:
-                        positive_pairs.append([label_indices[i].item(), label_indices[j].item()])
-        
-        if not positive_pairs:
+        n_conserved = len(conserved_indices)
+        if n_conserved < 2:
             return torch.empty((0, 2), dtype=torch.long, device=device)
-            
-        return torch.tensor(positive_pairs, dtype=torch.long, device=device)
+        
+        # Create all pairs of conserved indices
+        i_indices = torch.arange(n_conserved, device=device).unsqueeze(1).expand(-1, n_conserved)
+        j_indices = torch.arange(n_conserved, device=device).unsqueeze(0).expand(n_conserved, -1)
+        
+        # Keep only upper triangular pairs (i < j)
+        upper_tri = i_indices < j_indices
+        
+        # Filter for same label and different graphs
+        same_label = conserved_labels[i_indices] == conserved_labels[j_indices]
+        diff_graphs = conserved_graphs[i_indices] != conserved_graphs[j_indices]
+        
+        # Combine all conditions
+        valid_pairs = upper_tri & same_label & diff_graphs
+        
+        if not valid_pairs.any():
+            return torch.empty((0, 2), dtype=torch.long, device=device)
+        
+        # Get the actual indices
+        valid_i, valid_j = torch.nonzero(valid_pairs, as_tuple=True)
+        actual_i = conserved_indices[valid_i]
+        actual_j = conserved_indices[valid_j]
+        
+        return torch.stack([actual_i, actual_j], dim=1)
 
-    def _compute_negative_loss_efficient(self, embeddings, labels, graph_ids, categories, positive_pairs, device):
-        """Compute negative loss with efficient sampling."""
-        if len(positive_pairs) == 0:
+    def _compute_negative_loss_vectorized(self, embeddings, labels, graph_ids, categories, device):
+        """Compute negative loss with fully vectorized sampling."""
+        n = embeddings.shape[0]
+        
+        # Sample indices efficiently
+        max_samples = min(self.max_negatives, n * n // 4)  # Quarter of all pairs
+        
+        if max_samples < 100:  # Not enough data
             return torch.tensor(0.0, device=device)
             
-        # For efficiency, sample a subset of negative pairs
-        n_total = embeddings.shape[0]
-        max_negatives = min(len(positive_pairs) * self.max_negatives_per_positive, n_total * 50)
+        # Generate random pairs
+        idx1 = torch.randint(0, n, (max_samples,), device=device)
+        idx2 = torch.randint(0, n, (max_samples,), device=device)
         
-        # Sample random pairs for negatives
-        n_samples = min(max_negatives, 10000)  # Cap to avoid memory issues
-        idx1 = torch.randint(0, n_total, (n_samples,), device=device)
-        idx2 = torch.randint(0, n_total, (n_samples,), device=device)
-        
-        # Filter to get valid negative pairs
+        # Vectorized filtering for valid negatives
         different_graphs = graph_ids[idx1] != graph_ids[idx2]
         different_labels = labels[idx1] != labels[idx2]
-        conserved_mask = (categories[idx1] < 3) | (categories[idx2] < 3)
+        at_least_one_conserved = (categories[idx1] < 3) | (categories[idx2] < 3)
         
-        valid_negatives = different_graphs & different_labels & conserved_mask
-        if not valid_negatives.any():
+        valid_neg_mask = different_graphs & different_labels & at_least_one_conserved
+        
+        if not valid_neg_mask.any():
             return torch.tensor(0.0, device=device)
             
-        idx1_neg = idx1[valid_negatives]
-        idx2_neg = idx2[valid_negatives]
+        # Apply mask to get valid pairs
+        valid_idx1 = idx1[valid_neg_mask]
+        valid_idx2 = idx2[valid_neg_mask]
         
-        # Separate into hard and easy negatives
-        same_category = categories[idx1_neg] == categories[idx2_neg]
-        n_hard = int(len(idx1_neg) * self.hard_negative_fraction)
+        # Separate hard and easy negatives vectorized
+        same_category = categories[valid_idx1] == categories[valid_idx2]
         
-        # Sample hard negatives
-        hard_indices = torch.nonzero(same_category, as_tuple=False).squeeze(-1)
-        if len(hard_indices) > n_hard:
-            hard_perm = torch.randperm(len(hard_indices), device=device)[:n_hard]
-            hard_indices = hard_indices[hard_perm]
+        n_valid = len(valid_idx1)
+        n_hard_target = int(n_valid * self.hard_negative_fraction)
         
-        # Sample easy negatives
-        easy_indices = torch.nonzero(~same_category, as_tuple=False).squeeze(-1)
-        n_easy = min(len(easy_indices), max_negatives - len(hard_indices))
-        if len(easy_indices) > n_easy:
-            easy_perm = torch.randperm(len(easy_indices), device=device)[:n_easy]
-            easy_indices = easy_indices[easy_perm]
+        # Get hard negatives
+        hard_mask = same_category
+        hard_indices = torch.nonzero(hard_mask, as_tuple=False).squeeze(-1)
         
-        # Combine hard and easy negatives
-        selected_indices = torch.cat([hard_indices, easy_indices]) if len(easy_indices) > 0 else hard_indices
-        if len(selected_indices) == 0:
+        # Get easy negatives  
+        easy_mask = ~same_category
+        easy_indices = torch.nonzero(easy_mask, as_tuple=False).squeeze(-1)
+        
+        # Sample from each category
+        selected_indices = []
+        
+        if len(hard_indices) > 0:
+            n_hard_sample = min(len(hard_indices), n_hard_target)
+            if n_hard_sample < len(hard_indices):
+                perm = torch.randperm(len(hard_indices), device=device)[:n_hard_sample]
+                selected_indices.append(hard_indices[perm])
+            else:
+                selected_indices.append(hard_indices)
+        
+        if len(easy_indices) > 0:
+            n_easy_target = max_samples - (len(selected_indices[0]) if selected_indices else 0)
+            n_easy_sample = min(len(easy_indices), n_easy_target)
+            if n_easy_sample > 0:
+                if n_easy_sample < len(easy_indices):
+                    perm = torch.randperm(len(easy_indices), device=device)[:n_easy_sample]
+                    selected_indices.append(easy_indices[perm])
+                else:
+                    selected_indices.append(easy_indices)
+        
+        if not selected_indices:
             return torch.tensor(0.0, device=device)
             
-        neg_idx1 = idx1_neg[selected_indices]
-        neg_idx2 = idx2_neg[selected_indices]
+        # Combine all selected indices
+        final_indices = torch.cat(selected_indices)
         
-        # Compute negative similarities efficiently
-        neg_emb1 = embeddings[neg_idx1]
-        neg_emb2 = embeddings[neg_idx2]
-        neg_sims = torch.sum(neg_emb1 * neg_emb2, dim=1)
+        # Get final pairs
+        final_idx1 = valid_idx1[final_indices]
+        final_idx2 = valid_idx2[final_indices]
         
-        # Apply margin-based penalty
+        # Compute similarities vectorized
+        emb1 = embeddings[final_idx1]
+        emb2 = embeddings[final_idx2]
+        neg_sims = torch.sum(emb1 * emb2, dim=1)
+        
+        # Apply margin penalty
         penalties = F.relu(neg_sims - self.margin)
-        return penalties.mean()
+        return penalties.mean() if len(penalties) > 0 else torch.tensor(0.0, device=device)
