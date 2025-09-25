@@ -1,6 +1,8 @@
 import os
 import json
 import random
+import argparse
+
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -9,8 +11,12 @@ from torch_geometric.loader import DataLoader as GeoDataLoader
 from torch_geometric.data import Batch
 from sklearn.model_selection import train_test_split
 import pandas as pd
-import argparse
 from tqdm import tqdm
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - non-posix systems
+    resource = None
 from ginfinity.training.early_stopping import EarlyStopping
 from ginfinity.training.gin_rna_dataset import (
     GINRNADataset,
@@ -23,7 +29,33 @@ from ginfinity.training.alignment_loss import AlignmentContrastiveLoss
 from ginfinity.utils import is_valid_dot_bracket, log_information, log_setup
 import time
 from datetime import datetime
-from typing import Optional
+
+
+def _ensure_open_file_limit(min_soft: int = 4096) -> None:
+    """Raise RLIMIT_NOFILE soft limit if it is suspiciously low."""
+    if resource is None or min_soft is None:
+        return
+
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (ValueError, OSError):  # pragma: no cover - platform-dependent
+        return
+
+    if soft >= min_soft:
+        return
+
+    if hard == resource.RLIM_INFINITY or hard >= min_soft:
+        new_soft = min_soft
+    else:
+        new_soft = hard
+
+    if new_soft <= soft:
+        return
+
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+    except (ValueError, OSError):  # pragma: no cover - insufficient perms
+        pass
 
 def remove_invalid_structures_triplet(df):
     """Filters out rows with invalid dot-bracket structures for triplet training."""
@@ -566,6 +598,25 @@ def main():
         help='Disable the preprocessing progress bar.'
     )
     parser.set_defaults(preprocessing_progress=True)
+    parser.add_argument(
+        '--cache-alignments',
+        dest='alignment_cache_preprocessed',
+        action='store_true',
+        help='Cache graph tensors after the first access (higher RAM, fewer recomputations).'
+    )
+    parser.add_argument(
+        '--no-cache-alignments',
+        dest='alignment_cache_preprocessed',
+        action='store_false',
+        help='Disable caching of graph tensors between iterations (default).'
+    )
+    parser.set_defaults(alignment_cache_preprocessed=False)
+    parser.add_argument(
+        '--alignment-prefetch-factor',
+        type=int,
+        default=1,
+        help='Prefetch factor for alignment DataLoader workers (default: 1).'
+    )
     parser.add_argument('--gin_eps', type=float, default=0.0,
                         help='GIN epsilon parameter value. If train_eps is True, this is the initial value (default: 0.0).')
     parser.add_argument('--train_eps', action='store_true',
@@ -681,6 +732,7 @@ def main():
             structure_column=args.structure_column,
             show_progress=args.preprocessing_progress,
             progress_desc="Preprocessing train alignments",
+            cache_preprocessed=args.alignment_cache_preprocessed,
         )
         val_dataset = GINAlignmentDataset(
             val_df,
@@ -690,27 +742,37 @@ def main():
             structure_column=args.structure_column,
             show_progress=args.preprocessing_progress,
             progress_desc="Preprocessing validation alignments",
+            cache_preprocessed=args.alignment_cache_preprocessed,
         )
         criterion = AlignmentContrastiveLoss(
             margin=args.alignment_margin, 
             hard_negative_fraction=args.hard_negative_fraction
         )
         alignment_max_unaligned = max(0, int(args.alignment_unaligned_per_graph))
+        worker_count = max(0, int(args.num_workers))
+        persistent = worker_count > 0
+        prefetch_factor = max(1, int(args.alignment_prefetch_factor)) if worker_count > 0 else 2
+        if worker_count > 0:
+            _ensure_open_file_limit()
         train_loader = DataLoader(
             train_dataset,
             batch_size=1,
             shuffle=True,
             pin_memory=False,
-            num_workers=0,
+            num_workers=worker_count,
             collate_fn=alignment_collate_first,
+            persistent_workers=persistent,
+            prefetch_factor=prefetch_factor,
         )
         val_loader = DataLoader(
             val_dataset,
             batch_size=1,
             shuffle=False,
             pin_memory=False,
-            num_workers=0,
+            num_workers=worker_count,
             collate_fn=alignment_collate_first,
+            persistent_workers=persistent,
+            prefetch_factor=prefetch_factor,
         )
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)

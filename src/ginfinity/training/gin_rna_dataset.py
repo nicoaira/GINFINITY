@@ -3,7 +3,7 @@ from ginfinity.utils import dotbracket_to_graph, graph_to_tensor
 import pandas as pd
 import torch
 from tqdm import tqdm
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Tuple, Optional
 
 
 class GINRNADataset(Dataset):
@@ -96,6 +96,7 @@ class GINAlignmentDataset(Dataset):
         structure_column: str = "structure",
         show_progress: bool = False,
         progress_desc: str = "Preparing alignment dataset",
+        cache_preprocessed: bool = False,
     ):
         if isinstance(dataframe, str):
             df = pd.read_csv(dataframe, comment="#")
@@ -108,6 +109,9 @@ class GINAlignmentDataset(Dataset):
         self.alignment_map = alignment_map
         self._progress_enabled = show_progress
         self._progress_desc = progress_desc
+        self.structure_column = structure_column
+        self.cache_preprocessed = cache_preprocessed
+        self._cache: Optional[Dict[int, Tuple[str, List[Any]]]] = {} if cache_preprocessed else None
 
         # Category mapping
         self.category_to_id = {
@@ -120,64 +124,30 @@ class GINAlignmentDataset(Dataset):
         }
 
         total_structures = len(df)
-        progress = tqdm(
-            total=total_structures,
-            disable=not self._progress_enabled,
-            desc=self._progress_desc,
-            unit="structure",
-        )
+        progress = None
+        if self._progress_enabled:
+            progress = tqdm(
+                total=total_structures,
+                desc=self._progress_desc,
+                unit="structure",
+            )
 
         for alignment_id, group_df in df.groupby("alignment_id", sort=False):
-            structures: List = []
+            rows: List[Dict[str, Any]] = []
             for row in group_df.itertuples(index=False):
                 row_data = row._asdict()
-                structure = row_data[structure_column]
-                sequence = row_data.get("sequence")
-                g = dotbracket_to_graph(structure, sequence)
-                data = graph_to_tensor(g, self.seq_weight)
-
-                sequence_id = row_data.get("sequence_id")
-                if sequence_id is not None and pd.notna(sequence_id):
-                    try:
-                        sequence_id_int = int(sequence_id)
-                    except (TypeError, ValueError):
-                        sequence_id_int = sequence_id
-                else:
-                    sequence_id_int = None
-
-                data.sequence_id = sequence_id_int
-                data.alignment_id = alignment_id
-                data.binary_code = row_data.get("binary_code")
-
-                # Parse the new structured alignment mapping
-                mapping, categories, unaligned = self._resolve_structured_alignment_mapping(
-                    alignment_id, sequence_id_int
-                )
-
-                # Store alignment mapping as private attributes to avoid PyTorch Geometric collation
-                data._alignment_mapping = mapping
-
-                # Convert node_categories to a tensor with proper indexing
-                # Ensure all nodes have a category (default to unaligned-unpaired=5)
-                num_nodes = data.num_nodes
-                node_categories_tensor = torch.full((num_nodes,), 5, dtype=torch.long)  # Default to unaligned-unpaired
-                for node_idx, category_id in categories.items():
-                    if 0 <= node_idx < num_nodes:
-                        node_categories_tensor[node_idx] = category_id
-
-                data.node_categories = node_categories_tensor
-                data.unaligned_indices = torch.tensor(unaligned, dtype=torch.long)
-
-                structures.append(data)
-                progress.update(1)
+                rows.append(row_data)
+                if progress is not None:
+                    progress.update(1)
 
             self.alignment_groups.append({
                 "alignment_id": alignment_id,
-                "structures": structures,
+                "rows": rows,
             })
 
-        if self._progress_enabled:
+        if progress is not None:
             progress.close()
+
 
     def _resolve_structured_alignment_mapping(self, alignment_id, sequence_id):
         """Parse both old and new JSON formats with categories."""
@@ -267,4 +237,64 @@ class GINAlignmentDataset(Dataset):
         return len(self.alignment_groups)
 
     def __getitem__(self, idx: int):
-        return self.alignment_groups[idx]
+        if self.cache_preprocessed and self._cache is not None and idx in self._cache:
+            alignment_id, cached_structures = self._cache[idx]
+            return {
+                "alignment_id": alignment_id,
+                "structures": [data.clone() for data in cached_structures],
+            }
+
+        alignment_entry = self.alignment_groups[idx]
+        alignment_id = alignment_entry["alignment_id"]
+        rows = alignment_entry["rows"]
+        structures: List[Any] = []
+
+        for row_data in rows:
+            structure = row_data[self.structure_column]
+            sequence = row_data.get("sequence")
+            g = dotbracket_to_graph(structure, sequence)
+            data = graph_to_tensor(g, self.seq_weight)
+
+            sequence_id = row_data.get("sequence_id")
+            if sequence_id is not None and pd.notna(sequence_id):
+                try:
+                    sequence_id_int = int(sequence_id)
+                except (TypeError, ValueError):
+                    sequence_id_int = sequence_id
+            else:
+                sequence_id_int = None
+
+            data.sequence_id = sequence_id_int
+            data.alignment_id = alignment_id
+            data.binary_code = row_data.get("binary_code")
+
+            mapping, categories, unaligned = self._resolve_structured_alignment_mapping(
+                alignment_id,
+                sequence_id_int,
+            )
+
+            data._alignment_mapping = mapping
+
+            num_nodes = data.num_nodes
+            node_categories_tensor = torch.full((num_nodes,), 5, dtype=torch.long)
+            for node_idx, category_id in categories.items():
+                if 0 <= node_idx < num_nodes:
+                    node_categories_tensor[node_idx] = category_id
+
+            data.node_categories = node_categories_tensor
+            data.unaligned_indices = torch.tensor(unaligned, dtype=torch.long)
+
+            structures.append(data)
+
+        result = {
+            "alignment_id": alignment_id,
+            "structures": structures,
+        }
+
+        if self.cache_preprocessed and self._cache is not None:
+            self._cache[idx] = (
+                alignment_id,
+                [data.clone() for data in structures],
+            )
+
+        return result
