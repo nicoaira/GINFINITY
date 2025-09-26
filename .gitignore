@@ -53,3 +53,4 @@ test_seq_weight.sh
 optuna_embed_msa.db
 loop_features.py
 src/ginfinity/scripts/count_parameters.py
+*.sh

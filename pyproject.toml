@@ -40,7 +40,11 @@ dependencies = [
   "torch-scatter ==2.1.2",
   "torch-sparse  ==0.6.18",
   "torch-cluster ==1.6.3",
-  "torch-spline-conv ==1.2.2"
+  "torch-spline-conv ==1.2.2",
+  
+  # Force source build of forgi (avoids old NumPy-1.x wheels)
+  "Cython>3.0, <4.0",
+  "forgi @ git+https://github.com/ViennaRNA/forgi.git@v2.2.3"
 ]
 
 [project.urls]
@@ -59,7 +63,7 @@ ginfinity-generate-node-embeddings = "ginfinity.scripts.generate_node_embeddings
 
 [project.optional-dependencies]
 train = [
-  "scikit-learn >=1.6, <2.0"
+  "scikit-learn >=1.6, <2.0"  
 ]
 optuna = [
   "optuna >=3.6, <4.0"
