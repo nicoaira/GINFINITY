@@ -12,8 +12,7 @@ from torch_geometric.data import Batch
 from ginfinity.model.gin_model import GINModel
 from ginfinity.utils import (
     setup_and_read_input,
-    dotbracket_to_graph,
-    graph_to_tensor,
+    structure_to_data,
     log_information,
     is_valid_dot_bracket
 )
@@ -45,9 +44,9 @@ def _cpu_embed(args):
 def _preprocess(args):
     """
     Worker: dot-bracket string → torch_geometric Data
-    args: (idx, uid, struct, log_path)
+    args: (idx, uid, struct, log_path, graph_encoding, seq_weight)
     """
-    idx, uid, struct, log_path = args
+    idx, uid, struct, log_path, graph_encoding, seq_weight = args
     try:
         if not is_valid_dot_bracket(struct):
             raise ValueError("Invalid dot-bracket")
@@ -55,10 +54,13 @@ def _preprocess(args):
         log_information(log_path, {"skipped_invalid": f"ID {uid}"})
         return None
 
-    graph = dotbracket_to_graph(struct)
-    data  = graph_to_tensor(graph)
+    data = structure_to_data(
+        struct,
+        graph_encoding=graph_encoding,
+        seq_weight=seq_weight,
+    )
 
-    if graph is None or data is None:
+    if data is None:
         log_information(log_path, {"skipped_graph_fail": f"ID {uid}"})
         return None
 
@@ -76,7 +78,9 @@ def generate_embeddings(
         num_workers: int   = 4,
         batch_size: int    = 32,
         keep_cols: list     = None,
-        quiet: bool        = False
+        quiet: bool        = False,
+        graph_encoding: str = 'standard',
+        seq_weight: float = 0.0,
 ):
     # Decide which columns to carry through
     final_keep = [id_column]
@@ -91,7 +95,7 @@ def generate_embeddings(
 
     # 1) Preprocess all rows in parallel
     tasks = [
-        (idx, row[id_column], row[structure_column], log_path)
+        (idx, row[id_column], row[structure_column], log_path, graph_encoding, seq_weight)
         for idx, row in input_df.iterrows()
     ]
     preproc = []
@@ -195,6 +199,18 @@ def main():
                         help="(raw) column name for dot-bracket.")
     parser.add_argument('--keep-cols', default=None,
                         help="Comma-separated list of extra columns to carry through.")
+    parser.add_argument(
+        '--graph-encoding',
+        choices=['standard', 'forgi'],
+        default='standard',
+        help='Graph encoding to use when converting dot-bracket structures.',
+    )
+    parser.add_argument(
+        '--seq-weight',
+        type=float,
+        default=0.0,
+        help='Relative weight for nucleotide one-hot features in node embeddings.',
+    )
     parser.add_argument('--device', default='cpu',
                         help="Device for inference: 'cpu' or 'cuda'.")
     parser.add_argument('--num-workers', type=int, default=4,
@@ -304,7 +320,9 @@ def main():
         num_workers=args.num_workers,
         batch_size=args.batch_size,
         keep_cols=propagate,
-        quiet=args.quiet
+        quiet=args.quiet,
+        graph_encoding=args.graph_encoding,
+        seq_weight=args.seq_weight,
     )
 
 if __name__ == "__main__":

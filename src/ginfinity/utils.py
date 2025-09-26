@@ -2,6 +2,8 @@ from collections import defaultdict
 from datetime import datetime
 import platform
 import sys
+from typing import Dict, Iterable, List, Optional, Tuple
+
 import GPUtil
 import psutil
 import torch
@@ -160,6 +162,103 @@ def is_valid_dot_bracket(structure):
 
     return all(len(stack) == 0 for stack in stacks.values())
 
+
+def _extract_loop_segments(dotbracket: str) -> Tuple[Dict[int, Dict[str, float]], List[List[int]]]:
+    """Return metadata for unpaired loop positions and contiguous segments."""
+
+    seq_len = len(dotbracket)
+    loop_meta: Dict[int, Dict[str, float]] = {}
+    segments: List[List[int]] = []
+    current_loop: List[int] = []
+
+    for idx, char in enumerate(dotbracket):
+        if char == '.':
+            current_loop.append(idx)
+            continue
+
+        if current_loop:
+            segments.append(current_loop.copy())
+            loop_size = len(current_loop)
+            norm_denom = max(1, seq_len)
+            loop_size_norm = loop_size / norm_denom
+            for pos_in_loop, node_idx in enumerate(current_loop):
+                rel_pos = pos_in_loop / (loop_size - 1) if loop_size > 1 else 0.5
+                loop_meta[node_idx] = {
+                    'loop_size': loop_size,
+                    'loop_pos': pos_in_loop,
+                    'loop_size_norm': loop_size_norm,
+                    'loop_pos_norm': rel_pos,
+                }
+            current_loop = []
+
+    if current_loop:
+        segments.append(current_loop.copy())
+        loop_size = len(current_loop)
+        norm_denom = max(1, seq_len)
+        loop_size_norm = loop_size / norm_denom
+        for pos_in_loop, node_idx in enumerate(current_loop):
+            rel_pos = pos_in_loop / (loop_size - 1) if loop_size > 1 else 0.5
+            loop_meta[node_idx] = {
+                'loop_size': loop_size,
+                'loop_pos': pos_in_loop,
+                'loop_size_norm': loop_size_norm,
+                'loop_pos_norm': rel_pos,
+            }
+
+    return loop_meta, segments
+
+
+def _build_pair_map(dotbracket: str) -> Tuple[List[int], Dict[int, int]]:
+    """Compute partner indices and branch counts for each paired position."""
+
+    n = len(dotbracket)
+    pair_map: List[int] = [-1] * n
+    pair_stacks: Dict[str, List[int]] = defaultdict(list)
+    bracket_pairs = {')': '(', ']': '[', '}': '{', '>': '<'}
+
+    for idx, char in enumerate(dotbracket):
+        if char == '.':
+            continue
+        if char in bracket_pairs.values():
+            pair_stacks[char].append(idx)
+            continue
+        if char in bracket_pairs:
+            opener = bracket_pairs[char]
+            if not pair_stacks[opener]:
+                return pair_map, {}
+            start_idx = pair_stacks[opener].pop()
+        elif 'A' <= char <= 'Z':
+            pair_stacks[char].append(idx)
+            continue
+        elif 'a' <= char <= 'z':
+            opener = char.upper()
+            if not pair_stacks[opener]:
+                return pair_map, {}
+            start_idx = pair_stacks[opener].pop()
+        else:
+            return pair_map, {}
+
+        pair_map[idx] = start_idx
+        pair_map[start_idx] = idx
+
+    branch_count: Dict[int, int] = {}
+    for start, end in enumerate(pair_map):
+        if end <= start:
+            continue
+        branches = 0
+        pos = start + 1
+        while pos < end:
+            partner = pair_map[pos]
+            if partner > pos:
+                branches += 1
+                pos = partner + 1
+            else:
+                pos += 1
+        branch_count[start] = branches
+
+    return pair_map, branch_count
+
+
 def dotbracket_to_graph(dotbracket, sequence=None):
     """Convert an extended dot-bracket string (and optional sequence) into a graph.
 
@@ -179,45 +278,7 @@ def dotbracket_to_graph(dotbracket, sequence=None):
     pair_stacks = defaultdict(list)
     bracket_pairs = {')': '(', ']': '[', '}': '{', '>': '<'}
 
-    # Pre-compute loop membership metadata for unpaired positions
-    seq_len = len(dotbracket)
-    loop_meta = {}
-    current_loop = []
-    for idx, char in enumerate(dotbracket):
-        if char == '.':
-            current_loop.append(idx)
-            continue
-        if current_loop:
-            loop_size = len(current_loop)
-            norm_denom = max(1, seq_len)
-            loop_size_norm = loop_size / norm_denom
-            for pos_in_loop, node_idx in enumerate(current_loop):
-                if loop_size > 1:
-                    rel_pos = pos_in_loop / (loop_size - 1)
-                else:
-                    rel_pos = 0.5
-                loop_meta[node_idx] = {
-                    'loop_size': loop_size,
-                    'loop_pos': pos_in_loop,
-                    'loop_size_norm': loop_size_norm,
-                    'loop_pos_norm': rel_pos,
-                }
-            current_loop = []
-    if current_loop:
-        loop_size = len(current_loop)
-        norm_denom = max(1, seq_len)
-        loop_size_norm = loop_size / norm_denom
-        for pos_in_loop, node_idx in enumerate(current_loop):
-            if loop_size > 1:
-                rel_pos = pos_in_loop / (loop_size - 1)
-            else:
-                rel_pos = 0.5
-            loop_meta[node_idx] = {
-                'loop_size': loop_size,
-                'loop_pos': pos_in_loop,
-                'loop_size_norm': loop_size_norm,
-                'loop_pos_norm': rel_pos,
-            }
+    loop_meta, _ = _extract_loop_segments(dotbracket)
 
     # Add nodes and edges based on dot-bracket structure
     for i, c in enumerate(dotbracket):
@@ -331,6 +392,155 @@ def graph_to_tensor(G, seq_weight: float = 0.0):
         edge_index = torch.empty((2, 0), dtype=torch.long)
         edge_attr = torch.empty((0, 4), dtype=torch.float)
     return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+
+def _classify_loop_segments(
+    dotbracket: str,
+    loop_segments: Iterable[List[int]],
+    pair_map: List[int],
+    branch_count: Dict[int, int],
+) -> Dict[int, str]:
+    """Assign loop categories inspired by FORGI to unpaired nucleotides."""
+
+    categories: Dict[int, str] = {}
+    for segment in loop_segments:
+        if not segment:
+            continue
+        start_idx = segment[0]
+        end_idx = segment[-1]
+
+        enclosing = None
+        search_pos = start_idx - 1
+        while search_pos >= 0:
+            partner = pair_map[search_pos]
+            if partner > search_pos and partner >= end_idx:
+                enclosing = search_pos
+                break
+            search_pos -= 1
+
+        if enclosing is None:
+            loop_type = 'external'
+        else:
+            branches = branch_count.get(enclosing, 0)
+            if branches <= 0:
+                loop_type = 'hairpin'
+            elif branches == 1:
+                loop_type = 'internal'
+            else:
+                loop_type = 'multi'
+
+        for idx in segment:
+            categories[idx] = loop_type
+
+    return categories
+
+
+def _build_base_edges(pair_map: List[int]) -> List[Tuple[int, int]]:
+    edges: List[Tuple[int, int]] = []
+    for idx, partner in enumerate(pair_map):
+        if partner > idx:
+            edges.append((idx, partner))
+    return edges
+
+
+def _structure_to_data_forgi(
+    dotbracket: str,
+    sequence: Optional[str] = None,
+    seq_weight: float = 0.0,
+) -> Optional[Data]:
+    """Efficient PyG graph construction using FORGI-inspired node encodings."""
+
+    num_nodes = len(dotbracket)
+    if num_nodes == 0:
+        return Data()
+
+    loop_meta, loop_segments = _extract_loop_segments(dotbracket)
+    pair_map, branch_count = _build_pair_map(dotbracket)
+    loop_categories = _classify_loop_segments(dotbracket, loop_segments, pair_map, branch_count)
+    base_pair_edges = _build_base_edges(pair_map)
+
+    node_features: List[List[float]] = []
+    pair_weight = max(0.0, min(1.0, 1.0 - seq_weight))
+    use_sequence = seq_weight > 0
+
+    category_to_index = {
+        'hairpin': 0,
+        'internal': 1,
+        'multi': 2,
+        'external': 3,
+    }
+
+    for idx in range(num_nodes):
+        base = sequence[idx] if sequence is not None and idx < len(sequence) else None
+        loop_info = loop_meta.get(idx)
+        loop_size_norm = float(loop_info.get('loop_size_norm', 0.0)) if loop_info else 0.0
+        loop_pos_norm = float(loop_info.get('loop_pos_norm', 0.0)) if loop_info else 0.0
+
+        is_paired = 1.0 if pair_map[idx] != -1 else 0.0
+        features = [pair_weight * is_paired]
+
+        if is_paired:
+            features.extend([0.0, 0.0, 0.0, 0.0])
+        else:
+            category = loop_categories.get(idx, 'external')
+            one_hot = [0.0, 0.0, 0.0, 0.0]
+            one_hot[category_to_index.get(category, 3)] = 1.0
+            features.extend(one_hot)
+
+        features.extend([loop_size_norm, loop_pos_norm])
+
+        if use_sequence:
+            features.extend(seq_weight * value for value in _one_hot_base(base))
+
+        node_features.append(features)
+
+    x = torch.tensor(node_features, dtype=torch.float)
+
+    edge_pairs: List[Tuple[int, int, int]] = []
+    for idx in range(1, num_nodes):
+        edge_pairs.append((idx - 1, idx, 0))
+        edge_pairs.append((idx, idx - 1, 0))
+    for src, dst in base_pair_edges:
+        edge_pairs.append((src, dst, 1))
+        edge_pairs.append((dst, src, 1))
+
+    if edge_pairs:
+        edge_index = torch.tensor(
+            [[src for src, _, _ in edge_pairs], [dst for _, dst, _ in edge_pairs]],
+            dtype=torch.long,
+        )
+        edge_attr = torch.zeros((len(edge_pairs), 4), dtype=torch.float)
+        for edge_idx, (src, dst, etype) in enumerate(edge_pairs):
+            if etype == 0:
+                edge_attr[edge_idx, 0] = 1.0
+            else:
+                edge_attr[edge_idx, 1] = 1.0
+            if src < dst:
+                edge_attr[edge_idx, 2] = 1.0
+            else:
+                edge_attr[edge_idx, 3] = 1.0
+    else:
+        edge_index = torch.empty((2, 0), dtype=torch.long)
+        edge_attr = torch.empty((0, 4), dtype=torch.float)
+
+    return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+
+def structure_to_data(
+    dotbracket: str,
+    sequence: Optional[str] = None,
+    graph_encoding: str = "standard",
+    seq_weight: float = 0.0,
+) -> Optional[Data]:
+    """Create a :class:`torch_geometric.data.Data` instance from a dot-bracket string."""
+
+    if graph_encoding == "forgi":
+        return _structure_to_data_forgi(dotbracket, sequence=sequence, seq_weight=seq_weight)
+
+    graph = dotbracket_to_graph(dotbracket, sequence)
+    if graph is None:
+        return None
+    return graph_to_tensor(graph, seq_weight)
 
 # ==============================================================================
 # Input Data Setup and Validation

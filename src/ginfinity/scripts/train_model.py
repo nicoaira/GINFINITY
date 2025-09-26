@@ -722,9 +722,12 @@ def main():
     device = args.device
 
     # Initialize GIN model with processed hidden_dim
-    loop_feature_dim = 2  # loop size + relative position
+    if args.graph_encoding == "forgi":
+        structural_dim = 1 + 4 + 2  # paired flag, loop category one-hot, loop metrics
+    else:
+        structural_dim = 1 + 2  # paired flag + loop metrics
     base_feature_dim = 4 if args.seq_weight > 0 else 0
-    node_feature_dim = 1 + loop_feature_dim + base_feature_dim
+    node_feature_dim = structural_dim + base_feature_dim
     model = GINModel(
         hidden_dim=hidden_dim,
         output_dim=args.output_dim,
