@@ -406,6 +406,7 @@ def _graph_to_tensor_standard(G, seq_weight: float):
         node_features.append(features)
 
     x = torch.tensor(node_features, dtype=torch.float)
+    base_mask = torch.ones(len(nodes), dtype=torch.bool)
 
     edge_indices = []
     edge_attrs = []
@@ -426,7 +427,12 @@ def _graph_to_tensor_standard(G, seq_weight: float):
     else:
         edge_index = torch.empty((2, 0), dtype=torch.long)
         edge_attr = torch.empty((0, 4), dtype=torch.float)
-    return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+    data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+    data.base_node_mask = base_mask
+    data.num_base_nodes = int(base_mask.sum().item())
+    data.graph_encoding = 'standard'
+    return data
 
 
 def _graph_to_tensor_forgi(G, seq_weight: float):
@@ -436,10 +442,13 @@ def _graph_to_tensor_forgi(G, seq_weight: float):
     pair_weight = 1.0 - seq_weight
     forgi_dim = len(FORGI_NODE_TYPES)
 
+    base_mask_list = []
+
     for node in nodes:
         node_data = G.nodes[node]
         node_kind = node_data.get('node_kind', 'base')
         is_base = 1.0 if node_kind == 'base' else 0.0
+        base_mask_list.append(bool(is_base))
 
         pair_val = 1.0 if (node_kind == 'base' and node_data.get('label') == 'paired') else 0.0
         loop_size_norm = float(node_data.get('loop_size_norm', 0.0)) if node_kind == 'base' else 0.0
@@ -466,6 +475,7 @@ def _graph_to_tensor_forgi(G, seq_weight: float):
         node_features.append(features)
 
     x = torch.tensor(node_features, dtype=torch.float)
+    base_mask = torch.tensor(base_mask_list, dtype=torch.bool)
 
     edge_indices = []
     edge_attrs = []
@@ -501,7 +511,12 @@ def _graph_to_tensor_forgi(G, seq_weight: float):
     else:
         edge_index = torch.empty((2, 0), dtype=torch.long)
         edge_attr = torch.empty((0, 7), dtype=torch.float)
-    return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+    data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+    data.base_node_mask = base_mask
+    data.num_base_nodes = int(base_mask.sum().item())
+    data.graph_encoding = 'forgi'
+    return data
 
 # ==============================================================================
 # Input Data Setup and Validation

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from typing import List, Optional, Tuple
 
 import pandas as pd
@@ -47,26 +48,122 @@ def _serialize_matrix(mat: torch.Tensor) -> str:
     return json.dumps(rounded, separators=(",", ":"))
 
 
-def _preprocess(args: Tuple[int, str, str, str, str, float]):
+def _preprocess(args: Tuple[int, str, str, str, str, float, bool]):
     """
     Worker: dot-bracket string -> torch_geometric Data
-    args: (idx, uid, struct, log_path)
+    args: (idx, uid, struct, log_path, graph_encoding, seq_weight, debug_flag)
     """
-    idx, uid, struct, log_path, graph_encoding, seq_weight = args
+    idx, uid, struct, log_path, graph_encoding, seq_weight, debug_preproc = args
+    start_time = time.perf_counter()
+    stage_timings = None
+    if debug_preproc:
+        stage_timings = {
+            "id": uid,
+            "structure_length": len(struct),
+            "graph_encoding": graph_encoding,
+        }
+        log_information(log_path, {**stage_timings, "status": "started"}, "preprocess_debug")
     try:
         if not is_valid_dot_bracket(struct):
             raise ValueError("Invalid dot-bracket")
     except ValueError:
+        if stage_timings is not None:
+            stage_timings["status"] = "invalid_structure"
+            stage_timings["duration_s"] = round(time.perf_counter() - start_time, 3)
+            log_information(log_path, stage_timings, "preprocess_debug")
         log_information(log_path, {"skipped_invalid": f"ID {uid}"})
         return None
 
+    step_start = time.perf_counter()
     graph = dotbracket_to_graph(struct, graph_encoding=graph_encoding)
+    graph_time = time.perf_counter() - step_start
+    if stage_timings is not None:
+        stage_timings["dotbracket_to_graph_s"] = round(graph_time, 3)
+
+    tensor_start = time.perf_counter()
     data = graph_to_tensor(graph, seq_weight=seq_weight, graph_encoding=graph_encoding) if graph is not None else None
+    tensor_time = time.perf_counter() - tensor_start if graph is not None else 0.0
+    if stage_timings is not None:
+        stage_timings["graph_to_tensor_s"] = round(tensor_time, 3)
+
     if graph is None or data is None:
+        if stage_timings is not None:
+            stage_timings["status"] = "graph_build_failed" if graph is None else "tensor_failed"
+            stage_timings["duration_s"] = round(time.perf_counter() - start_time, 3)
+            log_information(log_path, stage_timings, "preprocess_debug")
         log_information(log_path, {"skipped_graph_fail": f"ID {uid}"})
         return None
 
+    duration = time.perf_counter() - start_time
+    if stage_timings is not None:
+        stage_timings["duration_s"] = round(duration, 3)
+        stage_timings["status"] = "ok"
+        log_information(log_path, stage_timings, "preprocess_debug")
+    if duration >= 5.0:
+        log_information(
+            log_path,
+            {
+                "id": uid,
+                "structure_length": len(struct),
+                "duration_s": round(duration, 3),
+                "graph_encoding": graph_encoding,
+            },
+            "preprocess_slow",
+        )
+
     return idx, uid, data
+
+
+def _get_base_node_mask(data, device: Optional[torch.device] = None) -> torch.Tensor:
+    """Return a boolean mask selecting base nodes for a PyG Data object."""
+    mask = getattr(data, "base_node_mask", None)
+    if mask is not None:
+        if not torch.is_tensor(mask):
+            mask = torch.as_tensor(mask, dtype=torch.bool)
+        else:
+            mask = mask.to(dtype=torch.bool)
+        if device is not None:
+            mask = mask.to(device=device)
+        return mask
+
+    num_nodes = getattr(data, "num_nodes", None)
+    if num_nodes is None and hasattr(data, "x") and isinstance(data.x, torch.Tensor):
+        num_nodes = data.x.size(0)
+    if num_nodes is None:
+        num_nodes = int(getattr(data, "x", torch.empty(0)).size(0))
+
+    num_base_nodes = getattr(data, "num_base_nodes", None)
+    if num_base_nodes is not None and num_nodes is not None:
+        mask = torch.zeros(int(num_nodes), dtype=torch.bool)
+        limit = min(int(num_base_nodes), mask.numel())
+        if limit > 0:
+            mask[:limit] = True
+        if device is not None:
+            mask = mask.to(device=device)
+        return mask
+
+    x = getattr(data, "x", None)
+    if isinstance(x, torch.Tensor) and x.dim() == 2:
+        feature_dim = x.size(1)
+        if feature_dim >= 15:
+            # Forgi encoding stores an explicit is_base indicator at index 7
+            base_scores = x[:, 7]
+            mask = base_scores > 0.5
+            if device is not None:
+                mask = mask.to(device=device)
+            return mask
+
+    fallback = torch.ones(int(num_nodes or 0), dtype=torch.bool)
+    if device is not None:
+        fallback = fallback.to(device=device)
+    return fallback
+
+
+def _filter_to_base_nodes(node_x: torch.Tensor, data) -> torch.Tensor:
+    mask = _get_base_node_mask(data, device=node_x.device)
+    if mask.numel() != node_x.size(0):
+        mask = torch.ones(node_x.size(0), dtype=torch.bool, device=node_x.device)
+    return node_x[mask]
 
 
 def _cpu_node_embed(args: Tuple[int, str, object, str, str]):
@@ -81,7 +178,8 @@ def _cpu_node_embed(args: Tuple[int, str, object, str, str]):
         _cached_model = load_trained_model(model_path, "cpu")
     with torch.no_grad():
         node_x = _cached_model.get_node_embeddings(data)
-    return idx, uid, _serialize_matrix(node_x)
+        base_x = _filter_to_base_nodes(node_x, data)
+    return idx, uid, _serialize_matrix(base_x)
 
 
 def _split_batch_node_embeddings(node_x: torch.Tensor, batch: Batch) -> List[torch.Tensor]:
@@ -116,6 +214,7 @@ def generate_node_embeddings(
     quiet: bool = False,
     graph_encoding_override: Optional[str] = None,
     seq_weight_override: Optional[float] = None,
+    debug_preprocessing: bool = False,
 ):
     # Decide which columns to carry through
     final_keep = [id_column]
@@ -123,6 +222,8 @@ def generate_node_embeddings(
         final_keep.append("seq_len")
     if keep_cols:
         final_keep.extend(keep_cols)
+
+    total_start = time.perf_counter()
 
     metadata_encoding = 'standard'
     metadata_seq_weight = 0.0
@@ -144,12 +245,38 @@ def generate_node_embeddings(
         seq_weight = float(metadata_seq_weight)
     seq_weight = max(0.0, min(1.0, seq_weight))
 
+    run_context = {
+        "total_rows": len(input_df),
+        "graph_encoding": graph_encoding,
+        "seq_weight": seq_weight,
+        "device": device,
+        "num_workers": num_workers,
+        "batch_size": batch_size,
+        "debug_preprocessing": debug_preprocessing,
+    }
+    log_information(log_path, run_context, "generate_node_embeddings_config")
+    if not quiet:
+        print(
+            "[generate_node_embeddings] Starting run: "
+            f"rows={run_context['total_rows']} device={device} "
+            f"graph_encoding={graph_encoding} seq_weight={seq_weight}"
+        )
+
     # 1) Preprocess rows -> Data
     tasks = [
-        (idx, row[id_column], row[structure_column], log_path, graph_encoding, seq_weight)
+        (
+            idx,
+            row[id_column],
+            row[structure_column],
+            log_path,
+            graph_encoding,
+            seq_weight,
+            debug_preprocessing,
+        )
         for idx, row in input_df.iterrows()
     ]
     preproc = []
+    preprocessing_start = time.perf_counter()
     if num_workers > 1:
         with Pool(num_workers) as pool:
             for res in tqdm(
@@ -166,6 +293,23 @@ def generate_node_embeddings(
             if res is not None:
                 preproc.append(res)
 
+    preprocessing_duration = time.perf_counter() - preprocessing_start
+    preproc_summary = {
+        "input_rows": len(tasks),
+        "valid_graphs": len(preproc),
+        "skipped": len(tasks) - len(preproc),
+        "duration_s": round(preprocessing_duration, 3),
+        "used_multiprocessing": num_workers > 1,
+    }
+    log_information(log_path, preproc_summary, "preprocessing_summary")
+    if not quiet:
+        print(
+            "[generate_node_embeddings] Preprocessing complete: "
+            f"valid={preproc_summary['valid_graphs']}/{len(tasks)} "
+            f"skipped={preproc_summary['skipped']} "
+            f"duration={preproc_summary['duration_s']}s"
+        )
+
     if not preproc:
         print("No valid structures to process.")
         return
@@ -175,6 +319,7 @@ def generate_node_embeddings(
 
     # 2) Inference to get per-node embeddings
     results = []  # (idx, uid, serialized_matrix)
+    inference_start = time.perf_counter()
     if device.lower() == "cpu":
         cpu_tasks = [
             (idx, uid, data, model_path, log_path)
@@ -203,12 +348,28 @@ def generate_node_embeddings(
             with torch.no_grad():
                 node_x = model.get_node_embeddings(batch)
             per_graph = _split_batch_node_embeddings(node_x, batch)
-            for (idx, uid), mat in zip(metas, per_graph):
-                results.append((idx, uid, _serialize_matrix(mat)))
+            for (idx, uid), mat, data in zip(metas, per_graph, chunk):
+                base_mat = _filter_to_base_nodes(mat, data)
+                results.append((idx, uid, _serialize_matrix(base_mat)))
             pbar.update(len(chunk))
         pbar.close()
 
+    inference_duration = time.perf_counter() - inference_start
+    inference_summary = {
+        "graphs_processed": len(results),
+        "duration_s": round(inference_duration, 3),
+        "device": device,
+    }
+    log_information(log_path, inference_summary, "inference_summary")
+    if not quiet:
+        print(
+            "[generate_node_embeddings] Inference complete: "
+            f"graphs={inference_summary['graphs_processed']} "
+            f"duration={inference_summary['duration_s']}s"
+        )
+
     # 3) Assemble output
+    assemble_start = time.perf_counter()
     rows = []
     for idx, uid, node_json in results:
         try:
@@ -233,7 +394,22 @@ def generate_node_embeddings(
     out_df = out_df[cols + sorted(others)]
 
     out_df.to_csv(output_path, sep="\t", index=False, na_rep="NaN")
-    log_information(log_path, {"num_node_embeddings": len(out_df)}, "generate_node_embeddings")
+    assemble_duration = time.perf_counter() - assemble_start
+    total_duration = time.perf_counter() - total_start
+    output_summary = {
+        "num_node_embeddings": len(out_df),
+        "duration_s": round(assemble_duration, 3),
+        "output_path": output_path,
+        "total_duration_s": round(total_duration, 3),
+    }
+    log_information(log_path, output_summary, "generate_node_embeddings")
+    if not quiet:
+        print(
+            "[generate_node_embeddings] Wrote output: "
+            f"rows={output_summary['num_node_embeddings']} "
+            f"duration={output_summary['duration_s']}s "
+            f"total={output_summary['total_duration_s']}s"
+        )
     print(f"Per-node embeddings saved to {output_path}")
 
 
@@ -286,6 +462,11 @@ def main():
         help="Override sequence feature weight used during preprocessing (0-1). Defaults to the checkpoint metadata.",
     )
     parser.add_argument("--quiet", action="store_true", help="Suppress progress bars and extra output.")
+    parser.add_argument(
+        "--debug-preprocessing",
+        action="store_true",
+        help="Log per-structure preprocessing timings to the run log for debugging.",
+    )
     args = parser.parse_args()
 
     if args.model_path is None:
@@ -346,8 +527,9 @@ def main():
                 with torch.no_grad():
                     node_x = model.get_node_embeddings(batch)
                 per_graph = _split_batch_node_embeddings(node_x, batch)
-                for mat, md in zip(per_graph, chunk_md):
-                    results.append((md, _serialize_matrix(mat)))
+                for mat, md, data in zip(per_graph, chunk_md, chunk):
+                    base_mat = _filter_to_base_nodes(mat, data)
+                    results.append((md, _serialize_matrix(base_mat)))
                 pbar.update(len(chunk))
             pbar.close()
 
@@ -389,6 +571,7 @@ def main():
         quiet=args.quiet,
         graph_encoding_override=args.graph_encoding,
         seq_weight_override=args.seq_weight,
+        debug_preprocessing=args.debug_preprocessing,
     )
 
 
