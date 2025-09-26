@@ -78,15 +78,18 @@ def remove_invalid_structures_alignment(df, structure_column: str):
     valid_structures = df[structure_column].apply(is_valid_dot_bracket)
     return df[valid_structures]
 
-def save_model_to_local(model, optimizer, epoch, model_id, log_path):
-    """Save model checkpoint with metadata"""
-    output_path = f"output/{model_id}/{model_id}.pth"
+def save_model_to_local(model, optimizer, epoch, model_id, log_path, output_path=None):
+    """Save model checkpoint with metadata and return the storage path."""
+    if output_path is None:
+        output_path = f"output/{model_id}/{model_id}.pth"
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     model.save_checkpoint(output_path, optimizer, epoch)
 
     save_log = {
         "Model saved path": output_path
     }
     log_information(log_path, save_log)
+    return output_path
 
 
 def alignment_collate_first(batch):
@@ -308,6 +311,399 @@ def compute_average_loss(
     return total_loss / processed_batches
 
 
+def _require_bool(value, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"'{field_name}' must be a boolean value (true/false).")
+
+
+def _read_schedule(schedule_path: str) -> dict:
+    with open(schedule_path, "r", encoding="utf-8") as handle:
+        schedule_data = json.load(handle)
+
+    if isinstance(schedule_data, list):
+        schedule_dict = {
+            "start_from_round": 1,
+            "checkpoint": None,
+            "rounds": schedule_data,
+        }
+    elif isinstance(schedule_data, dict):
+        if "rounds" not in schedule_data:
+            raise ValueError("Schedule JSON must contain a 'rounds' list.")
+        schedule_dict = schedule_data
+    else:
+        raise ValueError("Schedule file must contain either a list of rounds or an object with a 'rounds' list.")
+
+    rounds_raw = schedule_dict.get("rounds")
+    if not isinstance(rounds_raw, list):
+        raise ValueError("'rounds' must be a JSON array of round definitions.")
+
+    start_from_round = schedule_dict.get("start_from_round", 1)
+    if not isinstance(start_from_round, int):
+        raise ValueError("'start_from_round' must be an integer.")
+    if start_from_round < 1:
+        raise ValueError("'start_from_round' must be >= 1.")
+
+    checkpoint_path = schedule_dict.get("checkpoint")
+    if checkpoint_path is not None:
+        if not isinstance(checkpoint_path, str) or not checkpoint_path.strip():
+            raise ValueError("'checkpoint' must be a non-empty string path if provided.")
+        checkpoint_path = os.path.expandvars(os.path.expanduser(checkpoint_path.strip()))
+        if not os.path.isfile(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+
+    rounds = []
+    seen_rounds = set()
+    for index, raw in enumerate(rounds_raw):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Schedule entry at index {index} is not an object.")
+
+        if "round" not in raw:
+            raise ValueError(f"Schedule entry at index {index} is missing the 'round' field.")
+        round_value = raw["round"]
+        if not isinstance(round_value, int):
+            raise ValueError(f"Round identifier must be an integer (entry index {index}).")
+        if round_value < 1:
+            raise ValueError(f"Round identifier must be >= 1 (entry index {index}).")
+        round_number = round_value
+        if round_number in seen_rounds:
+            raise ValueError(f"Duplicate round number '{round_number}' detected in schedule.")
+        seen_rounds.add(round_number)
+
+        dataset_path = None
+        for key in ("input", "input_path", "dataset", "input_tsv"):
+            if key in raw:
+                dataset_path = raw[key]
+                break
+        if dataset_path is None:
+            raise ValueError(f"Schedule round {round_number} must include an 'input' dataset path.")
+        if not isinstance(dataset_path, str) or not dataset_path.strip():
+            raise ValueError(f"Schedule round {round_number} has an invalid dataset path value.")
+        dataset_path = os.path.expandvars(os.path.expanduser(dataset_path.strip()))
+        if not os.path.isfile(dataset_path):
+            raise FileNotFoundError(f"Dataset for round {round_number} not found: {dataset_path}")
+
+        alignment_map_path = None
+        for key in ("alignment_map", "alignment_map_path"):
+            if key in raw:
+                alignment_map_path = raw[key]
+                break
+        if alignment_map_path is None:
+            raise ValueError(f"Schedule round {round_number} must include an 'alignment_map' path.")
+        if not isinstance(alignment_map_path, str) or not alignment_map_path.strip():
+            raise ValueError(f"Schedule round {round_number} has an invalid alignment_map path value.")
+        alignment_map_path = os.path.expandvars(os.path.expanduser(alignment_map_path.strip()))
+        if not os.path.isfile(alignment_map_path):
+            raise FileNotFoundError(f"Alignment map for round {round_number} not found: {alignment_map_path}")
+        try:
+            with open(alignment_map_path, "r", encoding="utf-8") as handle:
+                json.load(handle)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Alignment map for round {round_number} is not valid JSON: {exc}"
+            ) from exc
+
+        if "patience" not in raw:
+            raise ValueError(f"Schedule round {round_number} must define 'patience'.")
+        patience_value = raw["patience"]
+        if not isinstance(patience_value, int):
+            raise ValueError(f"'patience' must be an integer in schedule round {round_number}.")
+        if patience_value < 1:
+            raise ValueError(f"Schedule round {round_number} must have patience >= 1.")
+
+        epoch_key = "epochs" if "epochs" in raw else "num_epochs" if "num_epochs" in raw else None
+        if epoch_key is None:
+            raise ValueError(f"Schedule round {round_number} must define 'epochs'.")
+        epoch_value = raw[epoch_key]
+        if not isinstance(epoch_value, int):
+            raise ValueError(f"'epochs' must be an integer in schedule round {round_number}.")
+        if epoch_value < 1:
+            raise ValueError(f"Schedule round {round_number} must have epochs >= 1.")
+
+        lr_key = "learning_rate" if "learning_rate" in raw else "lr" if "lr" in raw else None
+        if lr_key is None:
+            raise ValueError(f"Schedule round {round_number} must define 'learning_rate'.")
+        lr_value = raw[lr_key]
+        if isinstance(lr_value, bool) or not isinstance(lr_value, (int, float)):
+            raise ValueError(f"'learning_rate' must be a numeric value in schedule round {round_number}.")
+        learning_rate = float(lr_value)
+        if learning_rate <= 0:
+            raise ValueError(f"Schedule round {round_number} must have learning_rate > 0.")
+
+        if "decay_rate" not in raw:
+            raise ValueError(f"Schedule round {round_number} must define 'decay_rate'.")
+        decay_value = raw["decay_rate"]
+        if isinstance(decay_value, bool) or not isinstance(decay_value, (int, float)):
+            raise ValueError(f"'decay_rate' must be a numeric value in schedule round {round_number}.")
+        decay_rate = float(decay_value)
+        if decay_rate <= 0:
+            raise ValueError(f"Schedule round {round_number} must have decay_rate > 0.")
+
+        if "keep_weights" not in raw:
+            raise ValueError(f"Schedule round {round_number} must define 'keep_weights'.")
+        keep_weights = _require_bool(raw["keep_weights"], "keep_weights")
+
+        rounds.append({
+            "round": round_number,
+            "dataset_path": dataset_path,
+            "alignment_map_path": alignment_map_path,
+            "patience": patience_value,
+            "num_epochs": epoch_value,
+            "lr": learning_rate,
+            "decay_rate": decay_rate,
+            "keep_weights": keep_weights,
+            "raw": raw,
+        })
+
+    if not rounds:
+        raise ValueError("Schedule file does not contain any training rounds.")
+
+    rounds.sort(key=lambda item: item["round"])
+    expected_round = 1
+    for round_info in rounds:
+        if round_info["round"] != expected_round:
+            raise ValueError(
+                f"Schedule rounds must be sequential starting at 1; expected round {expected_round} but found {round_info['round']}."
+            )
+        expected_round += 1
+
+    if start_from_round > len(rounds):
+        raise ValueError(
+            f"'start_from_round' ({start_from_round}) exceeds total rounds ({len(rounds)})."
+        )
+
+    if start_from_round > 1 and checkpoint_path is None:
+        raise ValueError(
+            "'checkpoint' must be provided when 'start_from_round' is greater than 1."
+        )
+
+    return {
+        "rounds": rounds,
+        "start_from_round": start_from_round,
+        "checkpoint": checkpoint_path,
+    }
+
+
+def _prepare_dataset(args, dataset_path: str, alignment_map_path: Optional[str]):
+    expanded_dataset_path = os.path.expandvars(os.path.expanduser(dataset_path))
+    if not os.path.isfile(expanded_dataset_path):
+        raise FileNotFoundError(f"Dataset not found: {expanded_dataset_path}")
+
+    df = pd.read_csv(expanded_dataset_path, comment='#', sep='\t', engine='python')
+
+    if args.training_mode == "triplet":
+        df = remove_invalid_structures_triplet(df)
+    elif args.training_mode == "alignment":
+        df = remove_invalid_structures_alignment(df, args.structure_column)
+        df = df.groupby("alignment_id", sort=False).filter(lambda group: len(group) >= 2)
+        if df.empty:
+            raise ValueError("No alignments with at least two structures available after preprocessing the dataset.")
+
+    if df.empty:
+        raise ValueError("No data available for training after preprocessing the dataset.")
+
+    if args.f_sample_dataset < 1.0:
+        if args.training_mode == "alignment":
+            alignment_sizes = df.groupby("alignment_id").size()
+            alignment_sizes = alignment_sizes[alignment_sizes >= 2]
+            if alignment_sizes.empty:
+                raise ValueError("No alignments with at least two structures available for sampling.")
+
+            alignment_ids = alignment_sizes.index.to_list()
+            random.shuffle(alignment_ids)
+
+            total_rows = int(alignment_sizes.sum())
+            target_rows = int(total_rows * args.f_sample_dataset + 0.5)
+            target_rows = max(2, min(target_rows, total_rows))
+
+            selected_ids = []
+            accumulated = 0
+            for alignment_id in alignment_ids:
+                if accumulated >= target_rows:
+                    break
+                selected_ids.append(alignment_id)
+                accumulated += int(alignment_sizes.loc[alignment_id])
+
+            if not selected_ids:
+                selected_ids.append(alignment_ids[0])
+
+            df = df[df["alignment_id"].isin(selected_ids)].reset_index(drop=True)
+        else:
+            sample_size = int(len(df) * args.f_sample_dataset + 0.5)
+            sample_size = max(1, min(sample_size, len(df)))
+            df = df.sample(n=sample_size, random_state=args.seed, replace=False).reset_index(drop=True)
+    else:
+        df = df.reset_index(drop=True)
+
+    if df.empty:
+        raise ValueError("No data available for training after applying dataset sampling.")
+
+    alignment_map = None
+    if args.training_mode == "alignment":
+        if "alignment_id" not in df.columns:
+            raise ValueError("alignment_id column missing from input for alignment training mode.")
+        if not alignment_map_path:
+            raise ValueError("alignment_map_path must be provided when using alignment training mode.")
+        expanded_map_path = os.path.expandvars(os.path.expanduser(alignment_map_path))
+        if not os.path.isfile(expanded_map_path):
+            raise FileNotFoundError(f"Alignment map not found: {expanded_map_path}")
+        with open(expanded_map_path, "r", encoding="utf-8") as handle:
+            alignment_map = json.load(handle)
+        alignment_ids = df["alignment_id"].unique()
+        if len(alignment_ids) == 0:
+            raise ValueError("No alignments found in the input dataset.")
+        train_ids, val_ids = train_test_split(
+            alignment_ids, test_size=args.val_fraction, random_state=args.seed
+        )
+        train_df = df[df["alignment_id"].isin(train_ids)].reset_index(drop=True)
+        val_df = df[df["alignment_id"].isin(val_ids)].reset_index(drop=True)
+    else:
+        train_df, val_df = train_test_split(df, test_size=args.val_fraction, random_state=args.seed)
+
+    return df, train_df, val_df, alignment_map, expanded_dataset_path
+
+
+def _build_dataloaders_and_criterion(args, train_df, val_df, alignment_map):
+    alignment_max_unaligned = 0
+
+    if args.training_mode == "triplet":
+        train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
+        val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
+        criterion = TripletLoss(margin=1.0)
+        train_loader = GeoDataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=args.num_workers,
+        )
+        val_loader = GeoDataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=args.num_workers,
+        )
+    elif args.training_mode == "regression":
+        train_dataset = GINRNAPairDataset(train_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
+        val_dataset = GINRNAPairDataset(val_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
+        criterion = torch.nn.MSELoss()
+        train_loader = GeoDataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=args.num_workers,
+        )
+        val_loader = GeoDataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=args.num_workers,
+        )
+    else:
+        train_dataset = GINAlignmentDataset(
+            train_df,
+            alignment_map,
+            graph_encoding=args.graph_encoding,
+            seq_weight=args.seq_weight,
+            structure_column=args.structure_column,
+            show_progress=args.preprocessing_progress,
+            progress_desc="Preprocessing train alignments",
+            cache_preprocessed=args.alignment_cache_preprocessed,
+        )
+        val_dataset = GINAlignmentDataset(
+            val_df,
+            alignment_map,
+            graph_encoding=args.graph_encoding,
+            seq_weight=args.seq_weight,
+            structure_column=args.structure_column,
+            show_progress=args.preprocessing_progress,
+            progress_desc="Preprocessing validation alignments",
+            cache_preprocessed=args.alignment_cache_preprocessed,
+        )
+        criterion = AlignmentContrastiveLoss(
+            margin=args.alignment_margin,
+            hard_negative_fraction=args.hard_negative_fraction,
+        )
+        alignment_max_unaligned = max(0, int(args.alignment_unaligned_per_graph))
+        worker_count = max(0, int(args.num_workers))
+        persistent = worker_count > 0
+        prefetch_factor = max(1, int(args.alignment_prefetch_factor)) if worker_count > 0 else 2
+        if worker_count > 0:
+            _ensure_open_file_limit()
+            try:
+                torch.multiprocessing.set_sharing_strategy("file_system")
+            except (AttributeError, RuntimeError):
+                pass
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=1,
+            shuffle=True,
+            pin_memory=False,
+            num_workers=worker_count,
+            collate_fn=alignment_collate_first,
+            persistent_workers=persistent,
+            prefetch_factor=prefetch_factor,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=1,
+            shuffle=False,
+            pin_memory=False,
+            num_workers=worker_count,
+            collate_fn=alignment_collate_first,
+            persistent_workers=persistent,
+            prefetch_factor=prefetch_factor,
+        )
+
+    return train_loader, val_loader, criterion, alignment_max_unaligned
+
+
+def _create_model(args, hidden_dim):
+    loop_feature_dim = 2  # loop size + relative position
+    base_pair_dim = 1
+    if args.graph_encoding == "forgi":
+        seq_feature_dim = 4  # sequence channels always reserved (zeros if seq_weight=0)
+        structural_bridge_dim = 1 + len(FORGI_NODE_TYPES)
+        node_feature_dim = base_pair_dim + loop_feature_dim + seq_feature_dim + structural_bridge_dim
+        edge_feature_dim = 7
+    else:
+        seq_feature_dim = 4 if args.seq_weight > 0 else 0
+        node_feature_dim = base_pair_dim + loop_feature_dim + seq_feature_dim
+        edge_feature_dim = 4
+
+    model = GINModel(
+        hidden_dim=hidden_dim,
+        output_dim=args.output_dim,
+        graph_encoding=args.graph_encoding,
+        gin_layers=args.gin_layers,
+        pooling_type=args.pooling_type,
+        dropout=args.dropout,
+        node_feature_dim=node_feature_dim,
+        edge_feature_dim=edge_feature_dim,
+        norm_type=args.norm_type,
+        node_embed_norm=args.node_embed_norm,
+        normalize_nodes_before_pool=args.normalize_nodes_before_pool,
+        gin_eps=args.gin_eps,
+        train_eps=args.train_eps,
+    )
+    model.metadata["seq_weight"] = float(args.seq_weight)
+    return model
+
+
+def _load_checkpoint_into_model(model, checkpoint_path: str, device: str) -> None:
+    if not checkpoint_path or not os.path.isfile(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    state_dict = checkpoint.get("state_dict")
+    if state_dict is None:
+        raise ValueError(f"Invalid checkpoint file (missing state_dict): {checkpoint_path}")
+    model.load_state_dict(state_dict)
+    model.to(device)
+
+
 def plot_loss_curves(train_losses, val_losses, output_dir, log_path, saved_epoch=None):
     """Save a PNG plot with training and validation loss curves."""
     if not train_losses or not val_losses:
@@ -366,6 +762,7 @@ def train_model_with_early_stopping(
         training_mode="triplet",
         alignment_max_unaligned: int = 0,
         initial_eval_fraction: float = 0.05,
+        checkpoint_path: Optional[str] = None,
 ):
     """
     Train a GIN model with early stopping.
@@ -440,6 +837,8 @@ def train_model_with_early_stopping(
         f"Epoch 0/{num_epochs}, Training Loss: {initial_train_loss}, "
         f"Validation Loss: {initial_val_loss}"
     )
+
+    saved_checkpoint_path = None
 
     try:
         for epoch in range(num_epochs):
@@ -547,7 +946,14 @@ def train_model_with_early_stopping(
                     model.load_state_dict(best_model_state_dict)
                     epoch_for_save = best_model_epoch if best_model_epoch is not None else last_epoch
                     epoch_for_save = max(epoch_for_save, 0)
-                    save_model_to_local(model, optimizer, epoch_for_save, model_id, log_path)
+                    saved_checkpoint_path = save_model_to_local(
+                        model,
+                        optimizer,
+                        epoch_for_save,
+                        model_id,
+                        log_path,
+                        output_path=checkpoint_path,
+                    )
                     saved_epoch_for_plot = epoch_for_save + 1
                     log_information(log_path, {"Best weights saved after interrupt": True})
                     break
@@ -559,7 +965,12 @@ def train_model_with_early_stopping(
         else:
             print("No best weights available to save.")
         plot_loss_curves(train_losses, val_losses, output_dir, log_path, saved_epoch_for_plot)
-        return {"interrupted": True, "finished_reason": "Interrupted by user"}
+        return {
+            "interrupted": True,
+            "finished_reason": "Interrupted by user",
+            "checkpoint_path": saved_checkpoint_path,
+            "saved_epoch": saved_epoch_for_plot - 1 if saved_epoch_for_plot is not None else None,
+        }
 
     if finished_reason is None:
         finished_reason = f"{last_epoch + 1} epochs" if last_epoch >= 0 else "0 epochs"
@@ -574,15 +985,27 @@ def train_model_with_early_stopping(
     print("Training complete.")
 
     epoch_for_save = max(epoch_for_save, 0)
-    save_model_to_local(model, optimizer, epoch_for_save, model_id, log_path)
+    saved_checkpoint_path = save_model_to_local(
+        model,
+        optimizer,
+        epoch_for_save,
+        model_id,
+        log_path,
+        output_path=checkpoint_path,
+    )
     saved_epoch_for_plot = epoch_for_save + 1
     plot_loss_curves(train_losses, val_losses, output_dir, log_path, saved_epoch_for_plot)
-    return {"interrupted": False, "finished_reason": finished_reason}
+    return {
+        "interrupted": False,
+        "finished_reason": finished_reason,
+        "checkpoint_path": saved_checkpoint_path,
+        "saved_epoch": epoch_for_save,
+    }
 
 def main():
     # Argument parsing
     parser = argparse.ArgumentParser(description="Train a GIN model on RNA secondary structures.")
-    parser.add_argument('--input_path', type=str, required=True, help='Path to the input CSV/TSV file containing RNA secondary structures.')
+    parser.add_argument('--input_path', type=str, default=None, help='Path to the input CSV/TSV file containing RNA secondary structures.')
     parser.add_argument('--model_id', type=str, default='gin_model', help='Model id')
     parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard', help='Encoding to use for the transformation to graph')
     parser.add_argument('--hidden_dim', type=str, default='256', help='Hidden dimension size(s) for the model. Can be a single number or a comma-separated list of numbers of the same size of gin_layers(e.g. "256,126,256)" .')
@@ -661,6 +1084,8 @@ def main():
                         help='GIN epsilon parameter value. If train_eps is True, this is the initial value (default: 0.0).')
     parser.add_argument('--train_eps', action='store_true',
                         help='Make GIN epsilon parameter learnable during training (default: False for fixed epsilon).')
+    parser.add_argument('--schedule', type=str, default=None,
+                        help='Path to a JSON file describing sequential alignment training rounds.')
     args = parser.parse_args()
 
     if not math.isfinite(args.initial_eval_fraction) or args.initial_eval_fraction <= 0:
@@ -669,295 +1094,296 @@ def main():
     if not math.isfinite(args.f_sample_dataset) or not (0 < args.f_sample_dataset <= 1):
         raise ValueError("f_sample_dataset must be a positive, finite fraction in the interval (0, 1].")
 
-    # Process hidden_dim argument
+    schedule_plan: Optional[dict] = None
+    if args.schedule:
+        expanded_schedule_path = os.path.expandvars(os.path.expanduser(args.schedule))
+        if not os.path.isfile(expanded_schedule_path):
+            raise FileNotFoundError(f"Schedule file not found: {expanded_schedule_path}")
+        if args.training_mode != "alignment":
+            raise ValueError("--schedule can only be used when training_mode is 'alignment'.")
+        if args.input_path:
+            raise ValueError("--input_path cannot be used together with --schedule.")
+        if args.alignment_map_path:
+            raise ValueError("--alignment_map_path cannot be used together with --schedule.")
+        schedule_plan = _read_schedule(expanded_schedule_path)
+        print("Warning: schedule provided; ignoring CLI patience, lr, num_epochs, and decay_rate.")
+    else:
+        if not args.input_path:
+            raise ValueError("--input_path is required when no schedule is provided.")
+
     try:
         if ',' in args.hidden_dim:
             hidden_dim = [int(x.strip()) for x in args.hidden_dim.split(',')]
         else:
             hidden_dim = int(args.hidden_dim)
-    except ValueError:
-        raise ValueError("hidden_dim must be an integer or comma-separated list of integers")
+    except ValueError as exc:
+        raise ValueError("hidden_dim must be an integer or comma-separated list of integers") from exc
 
     if args.num_workers is None:
         args.num_workers = max(1, os.cpu_count() // 2)
 
     random.seed(args.seed)
 
-    # Load data
-    dataset_path = args.input_path
-    df = pd.read_csv(dataset_path, comment='#', sep='\\t', engine='python')
-    
-    if args.training_mode == "triplet":
-        df = remove_invalid_structures_triplet(df)
-    elif args.training_mode == "alignment":
-        df = remove_invalid_structures_alignment(df, args.structure_column)
-        df = df.groupby("alignment_id", sort=False).filter(lambda group: len(group) >= 2)
-        if df.empty:
-            raise ValueError("No alignments with at least two structures available after preprocessing the dataset.")
-
-    if df.empty:
-        raise ValueError("No data available for training after preprocessing the dataset.")
-
-    if args.f_sample_dataset < 1.0:
-        if args.training_mode == "alignment":
-            alignment_sizes = df.groupby("alignment_id").size()
-            alignment_sizes = alignment_sizes[alignment_sizes >= 2]
-            if alignment_sizes.empty:
-                raise ValueError("No alignments with at least two structures available for sampling.")
-
-            alignment_ids = alignment_sizes.index.to_list()
-            random.shuffle(alignment_ids)
-
-            total_rows = int(alignment_sizes.sum())
-            target_rows = int(total_rows * args.f_sample_dataset + 0.5)
-            target_rows = max(2, min(target_rows, total_rows))
-
-            selected_ids = []
-            accumulated = 0
-            for alignment_id in alignment_ids:
-                if accumulated >= target_rows:
-                    break
-                selected_ids.append(alignment_id)
-                accumulated += int(alignment_sizes.loc[alignment_id])
-
-            if not selected_ids:
-                selected_ids.append(alignment_ids[0])
-
-            df = df[df["alignment_id"].isin(selected_ids)].reset_index(drop=True)
-        else:
-            sample_size = int(len(df) * args.f_sample_dataset + 0.5)
-            sample_size = max(1, min(sample_size, len(df)))
-            df = df.sample(n=sample_size, random_state=args.seed, replace=False).reset_index(drop=True)
-    else:
-        df = df.reset_index(drop=True)
-
-    if df.empty:
-        raise ValueError("No data available for training after applying dataset sampling.")
-
-    alignment_map = None
-    if args.training_mode == "alignment":
-        if "alignment_id" not in df.columns:
-            raise ValueError("alignment_id column missing from input for alignment training mode.")
-        if not args.alignment_map_path:
-            raise ValueError("alignment_map_path must be provided when using alignment training mode.")
-        with open(args.alignment_map_path, "r", encoding="utf-8") as handle:
-            alignment_map = json.load(handle)
-        alignment_ids = df["alignment_id"].unique()
-        if len(alignment_ids) == 0:
-            raise ValueError("No alignments found in the input dataset.")
-        train_ids, val_ids = train_test_split(
-            alignment_ids, test_size=args.val_fraction, random_state=args.seed
-        )
-        train_df = df[df["alignment_id"].isin(train_ids)].reset_index(drop=True)
-        val_df = df[df["alignment_id"].isin(val_ids)].reset_index(drop=True)
-    else:
-        train_df, val_df = train_test_split(df, test_size=args.val_fraction, random_state=args.seed)
-
     device = args.device
+    model = _create_model(args, hidden_dim)
+    hidden_dims_log = hidden_dim if isinstance(hidden_dim, list) else [hidden_dim] * args.gin_layers
 
-    # Initialize GIN model with processed hidden_dim
-    loop_feature_dim = 2  # loop size + relative position
-    base_pair_dim = 1
-    if args.graph_encoding == "forgi":
-        seq_feature_dim = 4  # sequence channels always reserved (zeros if seq_weight=0)
-        structural_bridge_dim = 1 + len(FORGI_NODE_TYPES)
-        node_feature_dim = base_pair_dim + loop_feature_dim + seq_feature_dim + structural_bridge_dim
-        edge_feature_dim = 7
-    else:
-        seq_feature_dim = 4 if args.seq_weight > 0 else 0
-        node_feature_dim = base_pair_dim + loop_feature_dim + seq_feature_dim
-        edge_feature_dim = 4
-    model = GINModel(
-        hidden_dim=hidden_dim,
-        output_dim=args.output_dim,
-        graph_encoding=args.graph_encoding,
-        gin_layers=args.gin_layers,
-        pooling_type=args.pooling_type,  # Pass the new argument
-        dropout=args.dropout,  # Pass the new argument
-        node_feature_dim=node_feature_dim,
-        edge_feature_dim=edge_feature_dim,
-        norm_type=args.norm_type,
-        node_embed_norm=args.node_embed_norm,
-        normalize_nodes_before_pool=args.normalize_nodes_before_pool,
-        gin_eps=args.gin_eps,
-        train_eps=args.train_eps,
-    )
-    model.metadata["seq_weight"] = float(args.seq_weight)
-    alignment_max_unaligned = 0
-    if args.training_mode == "triplet":
-        train_dataset = GINRNADataset(train_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
-        val_dataset = GINRNADataset(val_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
-        criterion = TripletLoss(margin=1.0)
-        train_loader = GeoDataLoader(
-            train_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            pin_memory=True,
-            num_workers=args.num_workers,
+    if schedule_plan is None:
+        dataset_path = args.input_path
+        df, train_df, val_df, alignment_map, expanded_dataset_path = _prepare_dataset(
+            args,
+            dataset_path,
+            args.alignment_map_path,
         )
-        val_loader = GeoDataLoader(
-            val_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            pin_memory=True,
-            num_workers=args.num_workers,
-        )
-    elif args.training_mode == "regression":
-        train_dataset = GINRNAPairDataset(train_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
-        val_dataset = GINRNAPairDataset(val_df, graph_encoding=args.graph_encoding, seq_weight=args.seq_weight)
-        criterion = torch.nn.MSELoss()
-        train_loader = GeoDataLoader(
-            train_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            pin_memory=True,
-            num_workers=args.num_workers,
-        )
-        val_loader = GeoDataLoader(
-            val_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            pin_memory=True,
-            num_workers=args.num_workers,
-        )
-    else:
-        train_dataset = GINAlignmentDataset(
+        train_loader, val_loader, criterion, alignment_max_unaligned = _build_dataloaders_and_criterion(
+            args,
             train_df,
-            alignment_map,
-            graph_encoding=args.graph_encoding,
-            seq_weight=args.seq_weight,
-            structure_column=args.structure_column,
-            show_progress=args.preprocessing_progress,
-            progress_desc="Preprocessing train alignments",
-            cache_preprocessed=args.alignment_cache_preprocessed,
-        )
-        val_dataset = GINAlignmentDataset(
             val_df,
             alignment_map,
-            graph_encoding=args.graph_encoding,
-            seq_weight=args.seq_weight,
-            structure_column=args.structure_column,
-            show_progress=args.preprocessing_progress,
-            progress_desc="Preprocessing validation alignments",
-            cache_preprocessed=args.alignment_cache_preprocessed,
-        )
-        criterion = AlignmentContrastiveLoss(
-            margin=args.alignment_margin, 
-            hard_negative_fraction=args.hard_negative_fraction
-        )
-        alignment_max_unaligned = max(0, int(args.alignment_unaligned_per_graph))
-        worker_count = max(0, int(args.num_workers))
-        persistent = worker_count > 0
-        prefetch_factor = max(1, int(args.alignment_prefetch_factor)) if worker_count > 0 else 2
-        if worker_count > 0:
-            _ensure_open_file_limit()
-            try:
-                torch.multiprocessing.set_sharing_strategy("file_system")
-            except (AttributeError, RuntimeError):
-                pass
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=1,
-            shuffle=True,
-            pin_memory=False,
-            num_workers=worker_count,
-            collate_fn=alignment_collate_first,
-            persistent_workers=persistent,
-            prefetch_factor=prefetch_factor,
-        )
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=1,
-            shuffle=False,
-            pin_memory=False,
-            num_workers=worker_count,
-            collate_fn=alignment_collate_first,
-            persistent_workers=persistent,
-            prefetch_factor=prefetch_factor,
         )
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
-    start_time = time.time()
+        start_time = time.time()
 
-    output_folder = f"output/{args.model_id}"
-    os.makedirs(output_folder, exist_ok=True)
+        output_folder = os.path.join("output", args.model_id)
+        os.makedirs(output_folder, exist_ok=True)
 
-    log_path = f"{output_folder}/train.log"
-    log_setup(log_path)
+        log_path = os.path.join(output_folder, "train.log")
+        log_setup(log_path)
 
-    training_params = {
-        "train_data_path": dataset_path,
-        "train_data_samples": df.shape[0],
-        "hidden_dims": hidden_dim if isinstance(hidden_dim, list) else [hidden_dim] * args.gin_layers,
-        "output_dim": args.output_dim,
-        "batch_size": args.batch_size if args.training_mode != "alignment" else 1,
-        "num_epochs": args.num_epochs,
-        "patience": args.patience,
-        "lr": args.lr,
-        "criterion": (
-            "TripletLoss"
-            if args.training_mode == "triplet"
-            else "MSELoss"
-            if args.training_mode == "regression"
-            else "AlignmentContrastiveLoss"
-        ),
-        "gin_layers": args.gin_layers,
-        "graph_encoding": args.graph_encoding,
-        "training_mode": args.training_mode,
-        "seq_weight": args.seq_weight,
-        "norm_type": args.norm_type,
-        "node_embed_norm": args.node_embed_norm,
-        "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
-        "gin_eps": args.gin_eps,
-        "train_eps": args.train_eps,
-        "initial_eval_fraction": args.initial_eval_fraction,
-    }
-
-    if args.training_mode == "alignment":
-        training_params.update({
-            "alignment_map_path": args.alignment_map_path,
-            "alignment_margin": args.alignment_margin,
-            "alignment_unaligned_per_graph": alignment_max_unaligned,
-        })
-
-    log_information(log_path, training_params, "Training params")
-    
-    # Train the model with early stopping
-    training_outcome = train_model_with_early_stopping(
-        model,
-        args.model_id,
-        train_loader,
-        val_loader,
-        optimizer,
-        criterion,
-        num_epochs=args.num_epochs,
-        patience=args.patience,
-        min_delta=args.min_delta,  # Added parameter
-        device=device,
-        log_path=log_path,
-        save_best_weights=args.save_best_weights,  # Pass the new argument
-        decay_rate=args.decay_rate,  # Pass the new argument
-        training_mode=args.training_mode,
-        alignment_max_unaligned=alignment_max_unaligned,
-        initial_eval_fraction=args.initial_eval_fraction,
-    )
-
-    end_time = time.time()
-    execution_time_minutes = (end_time - start_time) / 60
-
-    outcome = training_outcome or {}
-    if outcome.get("interrupted"):
-        print(f"Interrupted. Total elapsed time: {execution_time_minutes:.6f} minutes")
-        execution_time = {
-            "Total elapsed time before interrupt": f"{execution_time_minutes:.6f} minutes"
+        training_params = {
+            "train_data_path": expanded_dataset_path,
+            "train_data_samples": df.shape[0],
+            "hidden_dims": hidden_dims_log,
+            "output_dim": args.output_dim,
+            "batch_size": args.batch_size if args.training_mode != "alignment" else 1,
+            "num_epochs": args.num_epochs,
+            "patience": args.patience,
+            "lr": args.lr,
+            "criterion": (
+                "TripletLoss"
+                if args.training_mode == "triplet"
+                else "MSELoss"
+                if args.training_mode == "regression"
+                else "AlignmentContrastiveLoss"
+            ),
+            "gin_layers": args.gin_layers,
+            "graph_encoding": args.graph_encoding,
+            "training_mode": args.training_mode,
+            "seq_weight": args.seq_weight,
+            "norm_type": args.norm_type,
+            "node_embed_norm": args.node_embed_norm,
+            "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
+            "gin_eps": args.gin_eps,
+            "train_eps": args.train_eps,
+            "initial_eval_fraction": args.initial_eval_fraction,
         }
+
+        if args.training_mode == "alignment":
+            training_params.update({
+                "alignment_map_path": args.alignment_map_path,
+                "alignment_margin": args.alignment_margin,
+                "alignment_unaligned_per_graph": alignment_max_unaligned,
+            })
+
+        log_information(log_path, training_params, "Training params")
+
+        default_checkpoint_path = os.path.join(output_folder, f"{args.model_id}.pth")
+        training_outcome = train_model_with_early_stopping(
+            model,
+            args.model_id,
+            train_loader,
+            val_loader,
+            optimizer,
+            criterion,
+            num_epochs=args.num_epochs,
+            patience=args.patience,
+            min_delta=args.min_delta,
+            device=device,
+            log_path=log_path,
+            save_best_weights=args.save_best_weights,
+            decay_rate=args.decay_rate,
+            training_mode=args.training_mode,
+            alignment_max_unaligned=alignment_max_unaligned,
+            initial_eval_fraction=args.initial_eval_fraction,
+            checkpoint_path=default_checkpoint_path,
+        )
+
+        end_time = time.time()
+        execution_time_minutes = (end_time - start_time) / 60
+
+        outcome = training_outcome or {}
+        if outcome.get("interrupted"):
+            print(f"Interrupted. Total elapsed time: {execution_time_minutes:.6f} minutes")
+            execution_time = {
+                "Total elapsed time before interrupt": f"{execution_time_minutes:.6f} minutes"
+            }
+        else:
+            print(f"Finished. Total execution time: {execution_time_minutes:.6f} minutes")
+            execution_time = {
+                "Total execution time": f"{execution_time_minutes:.6f} minutes"
+            }
+        log_information(log_path, execution_time, "Execution time")
     else:
-        print(f"Finished. Total execution time: {execution_time_minutes:.6f} minutes")
-        execution_time = {
-            "Total execution time": f"{execution_time_minutes:.6f} minutes"
-        }
-    log_information(log_path, execution_time, "Execution time")
+        schedule_rounds = schedule_plan["rounds"]
+        start_from_round = schedule_plan["start_from_round"]
+        initial_checkpoint_path = schedule_plan["checkpoint"]
+        rounds_to_execute = [cfg for cfg in schedule_rounds if cfg["round"] >= start_from_round]
+        if not rounds_to_execute:
+            raise ValueError(
+                "No rounds to execute after applying 'start_from_round'."
+            )
+        base_output_dir = os.path.join("output", args.model_id)
+        os.makedirs(base_output_dir, exist_ok=True)
+        schedule_start_time = time.time()
+
+        pending_checkpoint_path: Optional[str] = initial_checkpoint_path
+        delete_after_load = False
+        schedule_interrupted = False
+        executed_rounds = 0
+
+        for exec_idx, round_cfg in enumerate(rounds_to_execute):
+            round_start_time = time.time()
+            round_number = round_cfg["round"]
+            round_label = f"round_{round_number:02d}"
+            round_dir = os.path.join(base_output_dir, round_label)
+            os.makedirs(round_dir, exist_ok=True)
+
+            log_path = os.path.join(round_dir, "train.log")
+            log_setup(log_path)
+
+            raw_cfg = round_cfg.get("raw")
+            if raw_cfg:
+                log_information(log_path, dict(raw_cfg), "Schedule round config")
+
+            if executed_rounds == 0:
+                if pending_checkpoint_path:
+                    _load_checkpoint_into_model(model, pending_checkpoint_path, device)
+                pending_checkpoint_path = None
+                delete_after_load = False
+            else:
+                if not pending_checkpoint_path:
+                    raise RuntimeError(
+                        f"Round {round_number} cannot start because no checkpoint was produced by the previous round."
+                    )
+                _load_checkpoint_into_model(model, pending_checkpoint_path, device)
+                if delete_after_load and os.path.exists(pending_checkpoint_path):
+                    os.remove(pending_checkpoint_path)
+                delete_after_load = False
+                pending_checkpoint_path = None
+
+            df, train_df, val_df, alignment_map, expanded_dataset_path = _prepare_dataset(
+                args,
+                round_cfg["dataset_path"],
+                round_cfg["alignment_map_path"],
+            )
+            train_loader, val_loader, criterion, alignment_max_unaligned = _build_dataloaders_and_criterion(
+                args,
+                train_df,
+                val_df,
+                alignment_map,
+            )
+
+            current_lr = round_cfg["lr"]
+            current_decay = round_cfg["decay_rate"]
+            current_patience = round_cfg["patience"]
+            current_epochs = round_cfg["num_epochs"]
+            keep_weights = round_cfg["keep_weights"]
+
+            optimizer = optim.Adam(model.parameters(), lr=current_lr)
+
+            training_params = {
+                "round": round_number,
+                "train_data_path": expanded_dataset_path,
+                "train_data_samples": df.shape[0],
+                "hidden_dims": hidden_dims_log,
+                "output_dim": args.output_dim,
+                "batch_size": args.batch_size if args.training_mode != "alignment" else 1,
+                "num_epochs": current_epochs,
+                "patience": current_patience,
+                "lr": current_lr,
+                "decay_rate": current_decay,
+                "criterion": "AlignmentContrastiveLoss",
+                "gin_layers": args.gin_layers,
+                "graph_encoding": args.graph_encoding,
+                "training_mode": args.training_mode,
+                "seq_weight": args.seq_weight,
+                "norm_type": args.norm_type,
+                "node_embed_norm": args.node_embed_norm,
+                "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
+                "gin_eps": args.gin_eps,
+                "train_eps": args.train_eps,
+                "initial_eval_fraction": args.initial_eval_fraction,
+                "keep_weights": keep_weights,
+            }
+            training_params.update({
+                "alignment_map_path": round_cfg["alignment_map_path"],
+                "alignment_margin": args.alignment_margin,
+                "alignment_unaligned_per_graph": alignment_max_unaligned,
+            })
+
+            log_information(log_path, training_params, "Training params")
+
+            checkpoint_path = os.path.join(round_dir, f"{args.model_id}_{round_label}.pth")
+            round_outcome = train_model_with_early_stopping(
+                model,
+                args.model_id,
+                train_loader,
+                val_loader,
+                optimizer,
+                criterion,
+                num_epochs=current_epochs,
+                patience=current_patience,
+                min_delta=args.min_delta,
+                device=device,
+                log_path=log_path,
+                save_best_weights=args.save_best_weights,
+                decay_rate=current_decay,
+                training_mode=args.training_mode,
+                alignment_max_unaligned=alignment_max_unaligned,
+                initial_eval_fraction=args.initial_eval_fraction,
+                checkpoint_path=checkpoint_path,
+            )
+
+            round_elapsed_minutes = (time.time() - round_start_time) / 60
+            log_information(
+                log_path,
+                {"Execution time": f"{round_elapsed_minutes:.6f} minutes"},
+                "Execution time",
+            )
+
+            if round_outcome.get("interrupted"):
+                print(
+                    f"Round {round_number} interrupted. Elapsed time: {round_elapsed_minutes:.6f} minutes"
+                )
+                pending_checkpoint_path = round_outcome.get("checkpoint_path")
+                delete_after_load = False
+                schedule_interrupted = True
+                executed_rounds += 1
+                break
+
+            print(f"Finished round {round_number}. Execution time: {round_elapsed_minutes:.6f} minutes")
+
+            pending_checkpoint_path = round_outcome.get("checkpoint_path")
+            if not pending_checkpoint_path:
+                raise RuntimeError(f"Round {round_number} did not produce a checkpoint to pass forward.")
+
+            delete_after_load = not keep_weights
+            if delete_after_load and exec_idx == len(rounds_to_execute) - 1 and pending_checkpoint_path:
+                if os.path.exists(pending_checkpoint_path):
+                    os.remove(pending_checkpoint_path)
+                pending_checkpoint_path = None
+                delete_after_load = False
+
+            executed_rounds += 1
+
+        total_schedule_minutes = (time.time() - schedule_start_time) / 60
+        if schedule_interrupted:
+            print(f"Schedule interrupted after {total_schedule_minutes:.6f} minutes")
+        else:
+            print(f"Schedule completed in {total_schedule_minutes:.6f} minutes")
+
 
 if __name__ == "__main__":
     main()
