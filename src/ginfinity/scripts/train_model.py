@@ -92,9 +92,31 @@ def save_model_to_local(model, optimizer, epoch, model_id, log_path, output_path
     return output_path
 
 
-def alignment_collate_first(batch):
-    """Collate function returning the single alignment in the batch."""
-    return batch[0]
+def alignment_collate_batch(batch):
+    """Collate function that merges multiple alignment entries into one batch."""
+    if not batch:
+        return {"structures": []}
+
+    structures = []
+    alignment_ids = []
+
+    for item in batch:
+        if not item:
+            continue
+
+        item_structures = item.get("structures", [])
+        if item_structures:
+            structures.extend(item_structures)
+
+        alignment_id = item.get("alignment_id")
+        if alignment_id is not None:
+            alignment_ids.append(alignment_id)
+
+    result = {"structures": structures}
+    if alignment_ids:
+        result["alignment_ids"] = alignment_ids
+
+    return result
 
 
 def compute_alignment_batch_loss(
@@ -117,6 +139,11 @@ def compute_alignment_batch_loss(
     node_embeddings = model.get_node_embeddings(batch)
     ptr = batch.ptr.tolist()
 
+    # Use wide strides to ensure unique positive labels within a batch.
+    label_stride = 10**6
+    alignment_offsets = {}
+    next_alignment_index = 0
+
     # Pre-allocate lists with estimated capacity for better performance
     estimated_capacity = sum(len(getattr(data, "_alignment_mapping", {})) + max_unaligned_per_graph 
                            for data in structures)
@@ -129,6 +156,13 @@ def compute_alignment_batch_loss(
 
     # Process all structures in one pass
     for graph_idx, data in enumerate(structures):
+        alignment_id = getattr(data, "alignment_id", None)
+        alignment_key = alignment_id if alignment_id is not None else graph_idx
+        if alignment_key not in alignment_offsets:
+            alignment_offsets[alignment_key] = next_alignment_index
+            next_alignment_index += 1
+        alignment_offset = alignment_offsets[alignment_key] * label_stride
+
         # Get graph boundaries
         graph_start = ptr[graph_idx]
         graph_end = ptr[graph_idx + 1] if graph_idx + 1 < len(ptr) else total_nodes
@@ -154,7 +188,7 @@ def compute_alignment_batch_loss(
                 
                 # Batch append to lists
                 global_indices.extend(valid_global_idx)
-                labels.extend([int(pos) for pos in valid_align_pos])
+                labels.extend([alignment_offset + int(pos) for pos in valid_align_pos])
                 graph_ids.extend([graph_idx] * len(valid_align_pos))
                 
                 # Vectorized category extraction
@@ -631,6 +665,7 @@ def _build_dataloaders_and_criterion(args, train_df, val_df, alignment_map):
         worker_count = max(0, int(args.num_workers))
         persistent = worker_count > 0
         prefetch_factor = max(1, int(args.alignment_prefetch_factor)) if worker_count > 0 else 2
+        alignment_batch_size = args.batch_size
         if worker_count > 0:
             _ensure_open_file_limit()
             try:
@@ -639,21 +674,21 @@ def _build_dataloaders_and_criterion(args, train_df, val_df, alignment_map):
                 pass
         train_loader = DataLoader(
             train_dataset,
-            batch_size=1,
+            batch_size=alignment_batch_size,
             shuffle=True,
             pin_memory=False,
             num_workers=worker_count,
-            collate_fn=alignment_collate_first,
+            collate_fn=alignment_collate_batch,
             persistent_workers=persistent,
             prefetch_factor=prefetch_factor,
         )
         val_loader = DataLoader(
             val_dataset,
-            batch_size=1,
+            batch_size=alignment_batch_size,
             shuffle=False,
             pin_memory=False,
             num_workers=worker_count,
-            collate_fn=alignment_collate_first,
+            collate_fn=alignment_collate_batch,
             persistent_workers=persistent,
             prefetch_factor=prefetch_factor,
         )
@@ -1119,6 +1154,9 @@ def main():
     except ValueError as exc:
         raise ValueError("hidden_dim must be an integer or comma-separated list of integers") from exc
 
+    if args.batch_size < 1:
+        raise ValueError("--batch_size must be a positive integer.")
+
     if args.num_workers is None:
         args.num_workers = max(1, os.cpu_count() // 2)
 
@@ -1157,7 +1195,7 @@ def main():
             "train_data_samples": df.shape[0],
             "hidden_dims": hidden_dims_log,
             "output_dim": args.output_dim,
-            "batch_size": args.batch_size if args.training_mode != "alignment" else 1,
+            "batch_size": args.batch_size,
             "num_epochs": args.num_epochs,
             "patience": args.patience,
             "lr": args.lr,
@@ -1299,7 +1337,7 @@ def main():
                 "train_data_samples": df.shape[0],
                 "hidden_dims": hidden_dims_log,
                 "output_dim": args.output_dim,
-                "batch_size": args.batch_size if args.training_mode != "alignment" else 1,
+                "batch_size": args.batch_size,
                 "num_epochs": current_epochs,
                 "patience": current_patience,
                 "lr": current_lr,
