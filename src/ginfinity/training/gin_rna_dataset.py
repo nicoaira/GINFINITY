@@ -1,5 +1,5 @@
 from torch.utils.data import Dataset
-from ginfinity.utils import dotbracket_to_graph, graph_to_tensor
+from ginfinity.utils import structure_to_data
 import pandas as pd
 import torch
 from tqdm import tqdm
@@ -26,6 +26,7 @@ class GINRNADataset(Dataset):
             self.dataframe = dataframe
         self.graph_encoding = graph_encoding
         self.seq_weight = seq_weight
+        self._structure_cache: Dict[Tuple[str, Optional[str]], Any] = {}
 
     def __len__(self):
         return len(self.dataframe)
@@ -40,15 +41,33 @@ class GINRNADataset(Dataset):
         positive_seq = row.get("positive_seq")
         negative_seq = row.get("negative_seq")
 
-        g_anchor = dotbracket_to_graph(anchor_structure, anchor_seq)
-        g_positive = dotbracket_to_graph(positive_structure, positive_seq)
-        g_negative = dotbracket_to_graph(negative_structure, negative_seq)
-
-        data_anchor = graph_to_tensor(g_anchor, self.seq_weight)
-        data_positive = graph_to_tensor(g_positive, self.seq_weight)
-        data_negative = graph_to_tensor(g_negative, self.seq_weight)
+        data_anchor = self._structure_to_data(anchor_structure, anchor_seq)
+        data_positive = self._structure_to_data(positive_structure, positive_seq)
+        data_negative = self._structure_to_data(negative_structure, negative_seq)
 
         return data_anchor, data_positive, data_negative
+
+    def _structure_to_data(self, structure: str, sequence: Optional[str]):
+        if sequence is not None and not isinstance(sequence, str):
+            if pd.isna(sequence):
+                sequence = None
+            else:
+                sequence = str(sequence)
+        key = (structure, sequence if sequence is not None else None)
+        if key in self._structure_cache:
+            return self._structure_cache[key].clone()
+
+        data = structure_to_data(
+            structure,
+            sequence=sequence,
+            graph_encoding=self.graph_encoding,
+            seq_weight=self.seq_weight,
+        )
+        if data is None:
+            raise ValueError("Failed to convert structure to graph data")
+
+        self._structure_cache[key] = data.clone()
+        return data
 
 
 class GINRNAPairDataset(Dataset):
@@ -61,6 +80,7 @@ class GINRNAPairDataset(Dataset):
             self.dataframe = dataframe
         self.graph_encoding = graph_encoding
         self.seq_weight = seq_weight
+        self._structure_cache: Dict[Tuple[str, Optional[str]], Any] = {}
 
     def __len__(self):
         return len(self.dataframe)
@@ -74,14 +94,33 @@ class GINRNAPairDataset(Dataset):
         anchor_seq = row.get("anchor_seq")
         positive_seq = row.get("positive_seq")
 
-        g_anchor = dotbracket_to_graph(anchor_structure, anchor_seq)
-        g_positive = dotbracket_to_graph(positive_structure, positive_seq)
-
-        data_anchor = graph_to_tensor(g_anchor, self.seq_weight)
-        data_positive = graph_to_tensor(g_positive, self.seq_weight)
+        data_anchor = self._structure_to_data(anchor_structure, anchor_seq)
+        data_positive = self._structure_to_data(positive_structure, positive_seq)
 
         target = torch.tensor([float(target)], dtype=torch.float32)
         return data_anchor, data_positive, target
+
+    def _structure_to_data(self, structure: str, sequence: Optional[str]):
+        if sequence is not None and not isinstance(sequence, str):
+            if pd.isna(sequence):
+                sequence = None
+            else:
+                sequence = str(sequence)
+        key = (structure, sequence if sequence is not None else None)
+        if key in self._structure_cache:
+            return self._structure_cache[key].clone()
+
+        data = structure_to_data(
+            structure,
+            sequence=sequence,
+            graph_encoding=self.graph_encoding,
+            seq_weight=self.seq_weight,
+        )
+        if data is None:
+            raise ValueError("Failed to convert structure to graph data")
+
+        self._structure_cache[key] = data.clone()
+        return data
 
 
 class GINAlignmentDataset(Dataset):
@@ -112,6 +151,7 @@ class GINAlignmentDataset(Dataset):
         self.structure_column = structure_column
         self.cache_preprocessed = cache_preprocessed
         self._cache: Optional[Dict[int, Tuple[str, List[Any]]]] = {} if cache_preprocessed else None
+        self._structure_cache: Dict[Tuple[str, Optional[str]], Any] = {}
 
         # Category mapping
         self.category_to_id = {
@@ -252,8 +292,7 @@ class GINAlignmentDataset(Dataset):
         for row_data in rows:
             structure = row_data[self.structure_column]
             sequence = row_data.get("sequence")
-            g = dotbracket_to_graph(structure, sequence)
-            data = graph_to_tensor(g, self.seq_weight)
+            data = self._structure_to_data(structure, sequence)
 
             sequence_id = row_data.get("sequence_id")
             if sequence_id is not None and pd.notna(sequence_id):
@@ -305,6 +344,29 @@ class GINAlignmentDataset(Dataset):
             )
 
         return result
+
+    def _structure_to_data(self, structure: str, sequence: Optional[str]):
+        if sequence is not None and not isinstance(sequence, str):
+            if pd.isna(sequence):
+                sequence = None
+            else:
+                sequence = str(sequence)
+        key = (structure, sequence if sequence is not None else None)
+        cached = self._structure_cache.get(key)
+        if cached is not None:
+            return cached.clone()
+
+        data = structure_to_data(
+            structure,
+            sequence=sequence,
+            graph_encoding=self.graph_encoding,
+            seq_weight=self.seq_weight,
+        )
+        if data is None:
+            raise ValueError("Failed to convert structure to graph data")
+
+        self._structure_cache[key] = data.clone()
+        return data
 
     def _filter_alignment_annotations(
         self,
