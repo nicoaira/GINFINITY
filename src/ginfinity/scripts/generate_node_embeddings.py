@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 import torch
-from torch.multiprocessing import Pool, set_start_method
+from torch.multiprocessing import Pool, set_start_method, get_start_method
 from torch_geometric.data import Batch
 from tqdm import tqdm
 
@@ -27,6 +27,20 @@ from ginfinity.utils import (
 # Utilities
 # -----------------------------------------------------------------------------
 _cached_model = None  # per-process cache for CPU workers
+
+
+def _ensure_spawn_start_method():
+    """Force torch.multiprocessing to use the safe 'spawn' start method."""
+    try:
+        current = get_start_method(allow_none=True)
+    except RuntimeError:
+        current = None
+    if current != "spawn":
+        try:
+            set_start_method("spawn", force=True)
+        except RuntimeError:
+            # Another component already set an incompatible method; leave as-is.
+            pass
 
 
 def load_trained_model(model_path: str, device: str = "cpu") -> GINModel:
@@ -216,6 +230,8 @@ def generate_node_embeddings(
     seq_weight_override: Optional[float] = None,
     debug_preprocessing: bool = False,
 ):
+    if num_workers and num_workers > 1:
+        _ensure_spawn_start_method()
     # Decide which columns to carry through
     final_keep = [id_column]
     if "seq_len" in input_df.columns:
@@ -499,6 +515,8 @@ def main():
 
         # CPU path
         if args.device.lower() == "cpu":
+            if args.num_workers and args.num_workers > 1:
+                _ensure_spawn_start_method()
             tasks = [
                 (i, rec[args.id_column], datas[i], args.model_path, log_path)
                 for i, rec in enumerate(records)
