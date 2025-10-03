@@ -723,6 +723,7 @@ def _create_model(args, hidden_dim):
         normalize_nodes_before_pool=args.normalize_nodes_before_pool,
         gin_eps=args.gin_eps,
         train_eps=args.train_eps,
+        jk_mode=args.jk_mode,
     )
     model.metadata["seq_weight"] = float(args.seq_weight)
     return model
@@ -1050,6 +1051,8 @@ def main():
     parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping.')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for the optimizer.')
     parser.add_argument('--gin_layers', type=int, default=1, help='Number of gin layers.')
+    parser.add_argument('--jk_mode', type=str, choices=['last', 'concat', 'attn'], default='last',
+                        help='Jumping Knowledge strategy to combine layer-wise node embeddings.')
     parser.add_argument('--num_workers', type=int, default=None, help='Number of worker threads for data loading.')
     parser.add_argument('--save_best_weights', type=bool, default=True, help='Save the best model weights during early stopping.')
     parser.add_argument('--device', type=str, choices=['cuda', 'cpu'], default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training.')
@@ -1209,6 +1212,7 @@ def main():
             "gin_layers": args.gin_layers,
             "graph_encoding": args.graph_encoding,
             "training_mode": args.training_mode,
+            "jk_mode": args.jk_mode,
             "seq_weight": args.seq_weight,
             "norm_type": args.norm_type,
             "node_embed_norm": args.node_embed_norm,
@@ -1346,6 +1350,7 @@ def main():
                 "gin_layers": args.gin_layers,
                 "graph_encoding": args.graph_encoding,
                 "training_mode": args.training_mode,
+                "jk_mode": args.jk_mode,
                 "seq_weight": args.seq_weight,
                 "norm_type": args.norm_type,
                 "node_embed_norm": args.node_embed_norm,

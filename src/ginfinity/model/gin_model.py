@@ -1,7 +1,14 @@
+from typing import List
+
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GINEConv, global_add_pool, Set2Set, global_mean_pool
-from torch_geometric.nn.norm import BatchNorm as PYG_BatchNorm, GraphNorm, LayerNorm as PYG_LayerNorm, InstanceNorm
+from torch_geometric.nn import GINEConv, Set2Set, global_add_pool, global_mean_pool
+from torch_geometric.nn.norm import (
+    BatchNorm as PYG_BatchNorm,
+    GraphNorm,
+    InstanceNorm,
+    LayerNorm as PYG_LayerNorm,
+)
 
 try:  # pragma: no cover - import-time guard for lightweight downstream scripts
     from ginfinity.utils import FORGI_NODE_TYPES
@@ -16,6 +23,66 @@ except Exception:  # pragma: no cover - fallback if utils has heavyweight deps u
         "other",
     ]
 
+
+class JumpingKnowledgeAggregator(nn.Module):
+    """Combine layer-wise node embeddings with flexible Jumping Knowledge modes."""
+
+    def __init__(self, mode: str, hidden_dims: List[int]):
+        super().__init__()
+        if not hidden_dims:
+            raise ValueError("hidden_dims must contain at least one layer dimension")
+
+        normalized_mode = (mode or "last").lower()
+        valid_modes = {"last", "concat", "attn"}
+        if normalized_mode not in valid_modes:
+            raise ValueError(f"jk_mode must be one of {sorted(valid_modes)}, got '{mode}'")
+
+        self.mode = normalized_mode
+        self.hidden_dims = list(hidden_dims)
+
+        if self.mode == "concat":
+            self.output_dim = int(sum(hidden_dims))
+            self.projections = None
+            self.attn = None
+        else:  # 'last' or 'attn'
+            self.output_dim = int(hidden_dims[-1])
+            self.projections = nn.ModuleList()
+            if self.mode == "attn":
+                for dim in hidden_dims:
+                    if dim == self.output_dim:
+                        self.projections.append(nn.Identity())
+                    else:
+                        self.projections.append(nn.Linear(dim, self.output_dim, bias=False))
+                self.attn = nn.Sequential(
+                    nn.Linear(self.output_dim, self.output_dim),
+                    nn.Tanh(),
+                    nn.Linear(self.output_dim, 1, bias=False),
+                )
+            else:  # 'last'
+                self.projections = None
+                self.attn = None
+
+    def forward(self, layer_outputs: List[torch.Tensor]) -> torch.Tensor:
+        if not layer_outputs:
+            raise ValueError("layer_outputs must contain at least one tensor")
+        if len(layer_outputs) != len(self.hidden_dims):
+            raise ValueError(
+                f"Expected {len(self.hidden_dims)} layer outputs, got {len(layer_outputs)}"
+            )
+
+        if self.mode == "concat":
+            return torch.cat(layer_outputs, dim=-1)
+
+        if self.mode == "last":
+            return layer_outputs[-1]
+
+        # Attention over projected layer outputs (mode == 'attn')
+        projected = [proj(h) for h, proj in zip(layer_outputs, self.projections)]
+        stacked = torch.stack(projected, dim=1)  # [N, L, D]
+        scores = self.attn(stacked)  # [N, L, 1]
+        weights = torch.softmax(scores, dim=1)
+        return torch.sum(weights * stacked, dim=1)
+
 class GINModel(nn.Module):
     def __init__(
         self,
@@ -24,6 +91,7 @@ class GINModel(nn.Module):
         graph_encoding="standard",
         gin_layers=1,
         dropout=0.05,
+        jk_mode: str = "last",
         pooling_type="global_add_pool",
         node_embed_norm: str = "none",     # {"none","l2","zscore","zscore_l2"}
         eps: float = 1e-6,
@@ -65,9 +133,14 @@ class GINModel(nn.Module):
 
         input_dim = computed_node_dim
 
+        self.hidden_dims = list(hidden_dims)
+        # Jumping Knowledge aggregator over node embeddings
+        self.jk_aggregator = JumpingKnowledgeAggregator(jk_mode, self.hidden_dims)
+        self.node_output_dim = self.jk_aggregator.output_dim
+
         # Store metadata for checkpointing
         self.metadata = {
-            "hidden_dims": list(hidden_dims),
+            "hidden_dims": list(self.hidden_dims),
             "output_dim": output_dim,
             "graph_encoding": graph_encoding,
             "gin_layers": gin_layers,
@@ -82,9 +155,9 @@ class GINModel(nn.Module):
             "edge_feature_dim": edge_dim,
             "gin_eps": gin_eps,
             "train_eps": train_eps,
+            "jk_mode": self.jk_aggregator.mode,
+            "node_output_dim": self.node_output_dim,
         }
-
-        self.hidden_dims = list(hidden_dims)
 
         # Node encoder
         self.node_encoder = nn.Linear(input_dim, hidden_dims[0])
@@ -116,22 +189,22 @@ class GINModel(nn.Module):
 
         # Pooling head
         if pooling_type == "set2set":
-            self.pooling = Set2Set(hidden_dims[-1], processing_steps=2)
-            self.fc = nn.Linear(2 * hidden_dims[-1], output_dim)
+            self.pooling = Set2Set(self.node_output_dim, processing_steps=2)
+            self.fc = nn.Linear(2 * self.node_output_dim, output_dim)
         elif pooling_type == "global_mean_pool":
             self.pooling = global_mean_pool
-            self.fc = nn.Linear(hidden_dims[-1], output_dim)
+            self.fc = nn.Linear(self.node_output_dim, output_dim)
         else:
             self.pooling = global_add_pool
-            self.fc = nn.Linear(hidden_dims[-1], output_dim)
+            self.fc = nn.Linear(self.node_output_dim, output_dim)
 
         # Output (post-hoc) node-embedding normalization config
         self.node_embed_norm = node_embed_norm.lower()
         self.eps = eps
 
-        # μ/σ buffers for z-score of node embeddings (dimension = hidden_dims[-1])
-        self.register_buffer("node_mu", torch.zeros(hidden_dims[-1]), persistent=True)
-        self.register_buffer("node_sigma", torch.ones(hidden_dims[-1]), persistent=True)
+        # μ/σ buffers for z-score of node embeddings (dimension = node_output_dim)
+        self.register_buffer("node_mu", torch.zeros(self.node_output_dim), persistent=True)
+        self.register_buffer("node_sigma", torch.ones(self.node_output_dim), persistent=True)
 
         self.use_residual = bool(use_residual)
         self.normalize_nodes_before_pool = bool(normalize_nodes_before_pool)
@@ -179,6 +252,7 @@ class GINModel(nn.Module):
             edge_feature_dim=edge_feature_dim,
             gin_eps=metadata.get('gin_eps', 0.0),
             train_eps=metadata.get('train_eps', True),
+            jk_mode=metadata.get('jk_mode', 'last'),
         )
         model.load_state_dict(checkpoint['state_dict'])
         return model
@@ -248,6 +322,7 @@ class GINModel(nn.Module):
         x = self.node_encoder(x)
 
         # 2) conv → norm → (dropout) [+ residual]
+        layer_outputs = []
         for i, conv in enumerate(self.convs):
             h_in = x
             x = conv(x, edge_index, edge_attr)
@@ -261,7 +336,8 @@ class GINModel(nn.Module):
             x = self.dropouts[i](x)
             if self.use_residual and h_in.shape == x.shape:
                 x = x + h_in
-        return x
+            layer_outputs.append(x)
+        return self.jk_aggregator(layer_outputs)
 
     def _apply_node_norm(self, x):
         mode = self.node_embed_norm
