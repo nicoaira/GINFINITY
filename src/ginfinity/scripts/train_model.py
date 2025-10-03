@@ -3,6 +3,7 @@ import json
 import random
 import argparse
 import math
+import itertools
 from typing import Optional
 
 import torch
@@ -291,7 +292,7 @@ def compute_average_loss(
             scaled = math.ceil(total_batches * max_batch_fraction)
             batch_limit = min(total_batches, max(1, scaled))
 
-    iterable = enumerate(dataloader)
+    iterable = itertools.islice(enumerate(dataloader), batch_limit)
     progress_bar = None
     if desc:
         progress_bar = tqdm(iterable, total=batch_limit, desc=desc)
@@ -333,9 +334,6 @@ def compute_average_loss(
             processed_batches += 1
             if progress_bar is not None:
                 progress_bar.set_postfix({"Loss": total_loss / processed_batches})
-            if processed_batches >= batch_limit:
-                break
-
     if progress_bar is not None:
         progress_bar.close()
 
