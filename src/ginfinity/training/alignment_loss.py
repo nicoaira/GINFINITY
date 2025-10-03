@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any, Dict, Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from ginfinity.utils import log_information
 
 
 class AlignmentContrastiveLoss(nn.Module):
@@ -30,11 +34,21 @@ class AlignmentContrastiveLoss(nn.Module):
         Maximum number of negatives to sample for efficiency. Default: 5000
     """
 
-    def __init__(self, margin: float = 0.0, hard_negative_fraction: float = 0.85, max_negatives: int = 5000):
+    def __init__(
+        self,
+        margin: float = 0.0,
+        hard_negative_fraction: float = 0.85,
+        max_negatives: int = 5000,
+        debug: bool = False,
+    ):
         super().__init__()
         self.margin = float(margin)
         self.hard_negative_fraction = float(hard_negative_fraction)
         self.max_negatives = max_negatives
+        self.debug_enabled = bool(debug)
+        self.debug_log_path: Optional[str] = None
+        self._debug_batch_index = 0
+        self._last_positive_pairs = 0
 
     def forward(
         self,
@@ -53,6 +67,9 @@ class AlignmentContrastiveLoss(nn.Module):
         
         # Find positive pairs using efficient direct approach
         positive_pairs = self._create_positive_pairs_efficient(labels, graph_ids, categories)
+        self._last_positive_pairs = int(positive_pairs.shape[0])
+        if self.debug_enabled:
+            self._debug_batch_index += 1
         
         zero = embeddings.sum() * 0.0
 
@@ -70,6 +87,29 @@ class AlignmentContrastiveLoss(nn.Module):
         )
 
         return pos_loss + neg_loss
+
+    def configure_debug(self, enabled: bool, log_path: Optional[str]) -> None:
+        self.debug_enabled = bool(enabled)
+        self.debug_log_path = log_path if self.debug_enabled else None
+
+    def _serialize_debug_value(self, value: Any) -> Any:
+        if isinstance(value, torch.Tensor):
+            if value.numel() == 1:
+                return float(value.item())
+            return value.detach().cpu().tolist()
+        if isinstance(value, (int, float, str, bool)) or value is None:
+            return value
+        return str(value)
+
+    def _log_debug(self, event: str, payload: Dict[str, Any]) -> None:
+        if not self.debug_enabled or not self.debug_log_path:
+            return
+        try:
+            info = {"event": event, "batch_index": self._debug_batch_index}
+            info.update({k: self._serialize_debug_value(v) for k, v in payload.items()})
+            log_information(self.debug_log_path, info, "AlignmentLoss Debug")
+        except Exception:
+            pass
 
     def _create_positive_pairs_efficient(self, labels, graph_ids, categories):
         """Create positive pairs using pure tensor operations - no Python loops or .item() calls."""
@@ -123,6 +163,16 @@ class AlignmentContrastiveLoss(nn.Module):
         zero = embeddings.sum() * 0.0
 
         if max_samples < 100:  # Not enough data
+            self._log_debug(
+                "negative_sampling_guard",
+                {
+                    "message": "max_samples < 100 guard triggered; negative loss set to zero",
+                    "node_count": n,
+                    "max_samples": max_samples,
+                    "requested_max_negatives": self.max_negatives,
+                    "positive_pairs": self._last_positive_pairs,
+                },
+            )
             return zero
             
         # Generate random pairs
@@ -137,6 +187,15 @@ class AlignmentContrastiveLoss(nn.Module):
         valid_neg_mask = different_graphs & different_labels & at_least_one_conserved
         
         if not valid_neg_mask.any():
+            self._log_debug(
+                "no_valid_negatives",
+                {
+                    "message": "No valid negative pairs after masking; negative loss set to zero",
+                    "node_count": n,
+                    "max_samples": max_samples,
+                    "positive_pairs": self._last_positive_pairs,
+                },
+            )
             return zero
             
         # Apply mask to get valid pairs
@@ -179,6 +238,15 @@ class AlignmentContrastiveLoss(nn.Module):
                     selected_indices.append(easy_indices)
         
         if not selected_indices:
+            self._log_debug(
+                "no_selected_negatives",
+                {
+                    "message": "Sampling produced no negative pairs; negative loss set to zero",
+                    "node_count": n,
+                    "available_pairs": len(valid_idx1),
+                    "positive_pairs": self._last_positive_pairs,
+                },
+            )
             return zero
             
         # Combine all selected indices
@@ -196,5 +264,14 @@ class AlignmentContrastiveLoss(nn.Module):
         # Apply margin penalty
         penalties = F.relu(neg_sims - self.margin)
         if len(penalties) == 0:
+            self._log_debug(
+                "empty_penalties",
+                {
+                    "message": "All negative similarities below margin; penalty is zero",
+                    "node_count": n,
+                    "selected_negatives": len(final_idx1),
+                    "positive_pairs": self._last_positive_pairs,
+                },
+            )
             return zero
         return penalties.mean()

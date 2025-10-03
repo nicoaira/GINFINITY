@@ -893,6 +893,7 @@ def _build_dataloaders_and_criterion(args, train_df, val_df, alignment_map):
         criterion = AlignmentContrastiveLoss(
             margin=args.alignment_margin,
             hard_negative_fraction=args.hard_negative_fraction,
+            debug=getattr(args, "debug", False),
         )
         alignment_max_unaligned = max(0, int(args.alignment_unaligned_per_graph))
         worker_count = max(0, int(args.num_workers))
@@ -1032,6 +1033,7 @@ def train_model_with_early_stopping(
         initial_eval_fraction: float = 0.05,
         checkpoint_path: Optional[str] = None,
         diagnostic_alignment: bool = False,
+        debug_enabled: bool = False,
 ):
     """
     Train a GIN model with early stopping.
@@ -1041,6 +1043,10 @@ def train_model_with_early_stopping(
         min_delta (float): Minimum change in validation loss to qualify as improvement
     """
     model.to(device)
+    if hasattr(criterion, "configure_debug"):
+        should_debug = debug_enabled and training_mode == "alignment"
+        log_target = log_path if should_debug else None
+        criterion.configure_debug(should_debug, log_target)
     early_stopping = EarlyStopping(patience=patience, min_delta=min_delta)
     best_val_loss = float('inf')
     best_model_state_dict = None
@@ -1331,6 +1337,8 @@ def main():
         action='store_true',
         help=argparse.SUPPRESS,
     )
+    parser.add_argument('--debug', action='store_true', default=False,
+                        help='Enable verbose debug logging (alignment mode).')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for data splitting (default: 42)')
     parser.add_argument('--training_mode', choices=['triplet', 'regression', 'alignment'], default='triplet',
                         help='Select the training strategy for the model.')
@@ -1481,6 +1489,7 @@ def main():
             "gin_eps": args.gin_eps,
             "train_eps": args.train_eps,
             "initial_eval_fraction": args.initial_eval_fraction,
+            "debug": args.debug,
         }
 
         if args.training_mode == "alignment":
@@ -1512,6 +1521,7 @@ def main():
             initial_eval_fraction=args.initial_eval_fraction,
             checkpoint_path=default_checkpoint_path,
             diagnostic_alignment=args.diagnostic_alignment,
+            debug_enabled=args.debug,
         )
 
         end_time = time.time()
@@ -1620,6 +1630,7 @@ def main():
                 "train_eps": args.train_eps,
                 "initial_eval_fraction": args.initial_eval_fraction,
                 "keep_weights": keep_weights,
+                "debug": args.debug,
             }
             training_params.update({
                 "alignment_map_path": round_cfg["alignment_map_path"],
@@ -1649,6 +1660,7 @@ def main():
                 initial_eval_fraction=args.initial_eval_fraction,
                 checkpoint_path=checkpoint_path,
                 diagnostic_alignment=args.diagnostic_alignment,
+                debug_enabled=args.debug,
             )
 
             round_elapsed_minutes = (time.time() - round_start_time) / 60
