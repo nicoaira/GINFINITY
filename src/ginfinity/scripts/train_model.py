@@ -3,7 +3,12 @@ import json
 import random
 import argparse
 import math
-from typing import Optional
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn.functional as F
@@ -77,6 +82,232 @@ def remove_invalid_structures_alignment(df, structure_column: str):
         )
     valid_structures = df[structure_column].apply(is_valid_dot_bracket)
     return df[valid_structures]
+
+
+def _resolve_diagnostic_dataset_path() -> str:
+    env_override = os.environ.get("GINFINITY_DIAGNOSTIC_ALIGNMENT_PATH")
+    if env_override:
+        return os.path.abspath(os.path.expanduser(env_override))
+    return os.path.abspath(os.path.join(os.getcwd(), "dev", "terts.csv"))
+
+
+def _setup_diagnostic_alignment_context(
+    log_path: str,
+    output_dir: str,
+) -> Optional[Dict[str, Any]]:
+    dataset_path = _resolve_diagnostic_dataset_path()
+    if not os.path.exists(dataset_path):
+        log_information(
+            log_path,
+            {"status": "missing_dataset", "path": dataset_path},
+            "diagnostic_alignment_setup",
+        )
+        print(f"[diagnostic-alignment] Dataset not found at {dataset_path}; skipping diagnostics.")
+        return None
+
+    try:
+        df = pd.read_csv(dataset_path)
+    except Exception as exc:  # pragma: no cover - defensive I/O guard
+        log_information(
+            log_path,
+            {"status": "read_error", "path": dataset_path, "error": str(exc)},
+            "diagnostic_alignment_setup",
+        )
+        print(f"[diagnostic-alignment] Failed to read {dataset_path}: {exc}")
+        return None
+
+    required_cols = {"Name", "DotBracket"}
+    missing_cols = required_cols - set(df.columns)
+    if missing_cols:
+        log_information(
+            log_path,
+            {
+                "status": "missing_columns",
+                "path": dataset_path,
+                "missing": ",".join(sorted(missing_cols)),
+            },
+            "diagnostic_alignment_setup",
+        )
+        print(
+            f"[diagnostic-alignment] Required columns {missing_cols} not found in {dataset_path}; skipping diagnostics."
+        )
+        return None
+
+    if len(df) < 2:
+        log_information(
+            log_path,
+            {"status": "insufficient_rows", "path": dataset_path, "rows": len(df)},
+            "diagnostic_alignment_setup",
+        )
+        print(
+            f"[diagnostic-alignment] Expected at least two sequences in {dataset_path}; skipping diagnostics."
+        )
+        return None
+
+    rna1 = str(df.iloc[0]["Name"])
+    rna2 = str(df.iloc[1]["Name"])
+    keep_cols = [col for col in ("DotBracket", "seq") if col in df.columns]
+
+    similarity_dir = os.path.join(output_dir, "similarity_matrices")
+
+    log_information(
+        log_path,
+        {
+            "status": "ready",
+            "dataset": dataset_path,
+            "rna1": rna1,
+            "rna2": rna2,
+            "keep_cols": ",".join(keep_cols) if keep_cols else "",
+            "output_dir": similarity_dir,
+        },
+        "diagnostic_alignment_setup",
+    )
+
+    return {
+        "input_path": dataset_path,
+        "rna1": rna1,
+        "rna2": rna2,
+        "id_column": "Name",
+        "structure_column": "DotBracket",
+        "keep_cols": keep_cols,
+        "similarity_dir": similarity_dir,
+    }
+
+
+def _ensure_pythonpath(env: Dict[str, str]) -> Dict[str, str]:
+    src_dir = str(Path(__file__).resolve().parents[2])
+    existing = env.get("PYTHONPATH")
+    if existing:
+        paths = existing.split(os.pathsep)
+        if src_dir not in paths:
+            env["PYTHONPATH"] = os.pathsep.join([src_dir] + paths)
+    else:
+        env["PYTHONPATH"] = src_dir
+    return env
+
+
+def _run_alignment_diagnostics(
+    model: GINModel,
+    epoch_index: int,
+    cfg: Dict[str, Any],
+    device: str,
+    log_path: str,
+) -> None:
+    similarity_dir = cfg["similarity_dir"]
+    os.makedirs(similarity_dir, exist_ok=True)
+
+    env = _ensure_pythonpath(os.environ.copy())
+    env["PYTHONUNBUFFERED"] = "1"
+
+    with tempfile.TemporaryDirectory(prefix="diagnostic_alignment_") as tmpdir:
+        checkpoint_path = os.path.join(tmpdir, f"epoch_{epoch_index:03d}.pth")
+        model.save_checkpoint(checkpoint_path)
+
+        node_embeddings_path = os.path.join(tmpdir, "node_embeddings.tsv")
+        gen_cmd = [
+            sys.executable,
+            "-m",
+            "ginfinity.scripts.generate_node_embeddings",
+            "--input",
+            cfg["input_path"],
+            "--output",
+            node_embeddings_path,
+            "--id-column",
+            cfg["id_column"],
+            "--structure-column-name",
+            cfg["structure_column"],
+            "--device",
+            device,
+            "--model-path",
+            checkpoint_path,
+            "--num-workers",
+            "0",
+            "--batch-size",
+            "32",
+            "--quiet",
+        ]
+        if cfg["keep_cols"]:
+            gen_cmd.extend(["--keep-cols", ",".join(cfg["keep_cols"])])
+
+        try:
+            subprocess.run(gen_cmd, check=True, env=env)
+        except subprocess.CalledProcessError as exc:
+            log_information(
+                log_path,
+                {
+                    "epoch": epoch_index,
+                    "stage": "generate_node_embeddings",
+                    "returncode": exc.returncode,
+                    "cmd": " ".join(map(str, exc.cmd)) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd),
+                },
+                "diagnostic_alignment_error",
+            )
+            print(f"[diagnostic-alignment] generate_node_embeddings failed for epoch {epoch_index}: {exc}")
+            return
+
+        align_prefix = os.path.join(tmpdir, "alignment")
+        align_cmd = [
+            sys.executable,
+            "-m",
+            "ginfinity.scripts.align_node_embeddings",
+            "--input",
+            node_embeddings_path,
+            "--id-column",
+            cfg["id_column"],
+            "--rna1",
+            cfg["rna1"],
+            "--rna2",
+            cfg["rna2"],
+            "--structure-column-name",
+            cfg["structure_column"],
+            "--output-prefix",
+            align_prefix,
+            "--plot-matrix",
+        ]
+
+        try:
+            subprocess.run(align_cmd, check=True, env=env)
+        except subprocess.CalledProcessError as exc:
+            log_information(
+                log_path,
+                {
+                    "epoch": epoch_index,
+                    "stage": "align_node_embeddings",
+                    "returncode": exc.returncode,
+                    "cmd": " ".join(map(str, exc.cmd)) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd),
+                },
+                "diagnostic_alignment_error",
+            )
+            print(f"[diagnostic-alignment] align_node_embeddings failed for epoch {epoch_index}: {exc}")
+            return
+
+        png_source = align_prefix + ".matrix.png"
+        if not os.path.exists(png_source):
+            log_information(
+                log_path,
+                {"epoch": epoch_index, "stage": "missing_png", "expected": png_source},
+                "diagnostic_alignment_error",
+            )
+            print(
+                f"[diagnostic-alignment] Expected PNG at {png_source} for epoch {epoch_index}, but it was not created."
+            )
+            return
+
+        destination = os.path.join(similarity_dir, f"epoch_{epoch_index:03d}.png")
+        shutil.move(png_source, destination)
+
+        log_information(
+            log_path,
+            {
+                "epoch": epoch_index,
+                "png": destination,
+                "dataset": cfg["input_path"],
+            },
+            "diagnostic_alignment",
+        )
+        print(
+            f"[diagnostic-alignment] Saved similarity matrix for epoch {epoch_index} to {destination}"
+        )
 
 def save_model_to_local(model, optimizer, epoch, model_id, log_path, output_path=None):
     """Save model checkpoint with metadata and return the storage path."""
@@ -798,6 +1029,7 @@ def train_model_with_early_stopping(
         alignment_max_unaligned: int = 0,
         initial_eval_fraction: float = 0.05,
         checkpoint_path: Optional[str] = None,
+        diagnostic_alignment: bool = False,
 ):
     """
     Train a GIN model with early stopping.
@@ -818,6 +1050,7 @@ def train_model_with_early_stopping(
     val_losses = []
     output_dir = os.path.dirname(log_path)
     saved_epoch_for_plot = None
+    diagnostic_cfg = _setup_diagnostic_alignment_context(log_path, output_dir) if diagnostic_alignment else None
 
     early_stopping_params = {
         "Early Stopping Parameters": {
@@ -872,6 +1105,15 @@ def train_model_with_early_stopping(
         f"Epoch 0/{num_epochs}, Training Loss: {initial_train_loss}, "
         f"Validation Loss: {initial_val_loss}"
     )
+
+    if diagnostic_cfg is not None:
+        _run_alignment_diagnostics(
+            model,
+            0,
+            diagnostic_cfg,
+            device,
+            log_path,
+        )
 
     saved_checkpoint_path = None
 
@@ -939,6 +1181,14 @@ def train_model_with_early_stopping(
                 if save_best_weights:
                     best_model_state_dict = model.state_dict()
                     best_model_epoch = epoch
+                if diagnostic_cfg is not None:
+                    _run_alignment_diagnostics(
+                        model,
+                        epoch + 1,
+                        diagnostic_cfg,
+                        device,
+                        log_path,
+                    )
 
             early_stopping(avg_val_loss, model)
 
@@ -1066,6 +1316,19 @@ def main():
     )
     parser.add_argument('--initial_eval_fraction', type=float, default=0.05,
                         help='Fraction of batches used during the initial pre-training evaluation (default: 0.05).')
+    parser.add_argument(
+        '--diagnostic-aligment',
+        dest='diagnostic_alignment',
+        action='store_true',
+        default=False,
+        help='After each new best validation loss, run alignment diagnostics on dev/terts.csv and save the similarity matrix PNG.'
+    )
+    parser.add_argument(
+        '--diagnostic-alignment',
+        dest='diagnostic_alignment',
+        action='store_true',
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument('--seed', type=int, default=42, help='Random seed for data splitting (default: 42)')
     parser.add_argument('--training_mode', choices=['triplet', 'regression', 'alignment'], default='triplet',
                         help='Select the training strategy for the model.')
@@ -1246,6 +1509,7 @@ def main():
             alignment_max_unaligned=alignment_max_unaligned,
             initial_eval_fraction=args.initial_eval_fraction,
             checkpoint_path=default_checkpoint_path,
+            diagnostic_alignment=args.diagnostic_alignment,
         )
 
         end_time = time.time()
@@ -1382,6 +1646,7 @@ def main():
                 alignment_max_unaligned=alignment_max_unaligned,
                 initial_eval_fraction=args.initial_eval_fraction,
                 checkpoint_path=checkpoint_path,
+                diagnostic_alignment=args.diagnostic_alignment,
             )
 
             round_elapsed_minutes = (time.time() - round_start_time) / 60
