@@ -522,6 +522,8 @@ def compute_average_loss(
             scaled = math.ceil(total_batches * max_batch_fraction)
             batch_limit = min(total_batches, max(1, scaled))
 
+    limit_batches = batch_limit < total_batches
+
     iterable = enumerate(dataloader)
     progress_bar = None
     if desc:
@@ -564,7 +566,7 @@ def compute_average_loss(
             processed_batches += 1
             if progress_bar is not None:
                 progress_bar.set_postfix({"Loss": total_loss / processed_batches})
-            if processed_batches >= batch_limit:
+            if limit_batches and processed_batches >= batch_limit:
                 break
 
     if progress_bar is not None:
