@@ -959,6 +959,7 @@ def _create_model(args, hidden_dim):
         node_feature_dim=node_feature_dim,
         edge_feature_dim=edge_feature_dim,
         norm_type=args.norm_type,
+        use_residual=args.use_residual,
         node_embed_norm=args.node_embed_norm,
         normalize_nodes_before_pool=args.normalize_nodes_before_pool,
         gin_eps=args.gin_eps,
@@ -1320,6 +1321,8 @@ def main():
     parser.add_argument('--min_delta', type=float, default=0.001, help='Minimum validation loss decrease to qualify as improvement (default: 0.001)')
     parser.add_argument('--decay_rate', type=float, default=0.01, help='Decay rate for the learning rate.')
     parser.add_argument('--pooling_type', type=str, choices=['global_add_pool','global_mean_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the GIN model.')
+    parser.add_argument('--use_residual', action=argparse.BooleanOptionalAction, default=True,
+                        help='Enable residual connections in the GIN blocks (default: True).')
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate for the GIN model (default: 0.0).')
     parser.add_argument('--val_fraction', type=float, default=0.2, help='Fraction of data for validation (default: 0.2)')
     parser.add_argument(
@@ -1494,6 +1497,7 @@ def main():
             "training_mode": args.training_mode,
             "seq_weight": args.seq_weight,
             "norm_type": args.norm_type,
+            "use_residual": args.use_residual,
             "node_embed_norm": args.node_embed_norm,
             "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
             "gin_eps": args.gin_eps,
@@ -1634,6 +1638,7 @@ def main():
                 "training_mode": args.training_mode,
                 "seq_weight": args.seq_weight,
                 "norm_type": args.norm_type,
+                "use_residual": args.use_residual,
                 "node_embed_norm": args.node_embed_norm,
                 "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
                 "gin_eps": args.gin_eps,
