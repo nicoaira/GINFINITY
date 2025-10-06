@@ -172,8 +172,11 @@ class AlignmentContrastiveLoss(nn.Module):
         Nodes that participate in positive pairs are always included while a
         limited number of additional nodes are sampled to act as negatives. The
         logits are built with cosine similarities (embeddings are already
-        normalized) scaled by ``temperature``. Only pairs belonging to different
-        graphs are considered valid, mirroring the alignment setup.
+        normalized) scaled by ``temperature``.  All pairs that do not share the
+        same alignment label are treated as negatives, even when the nodes come
+        from the same graph.  This prevents the model from mapping unrelated
+        positions inside a graph to similar representations, which would in turn
+        make cross-graph comparisons degenerate.
         """
 
         device = embeddings.device
@@ -252,15 +255,16 @@ class AlignmentContrastiveLoss(nn.Module):
         conserved_j_subset = subset_categories.unsqueeze(1) < 3
 
         positive_mask_subset = same_label_subset & (~same_graph_subset) & conserved_i_subset & conserved_j_subset
-        # Treat every pair drawn from different graphs with different labels
-        # as a valid negative.  The previous implementation restricted
-        # negatives to cases where at least one node was annotated as
-        # conserved.  As training progressed this allowed groups of
-        # unannotated nodes to collapse towards the same representation since
-        # they never received any explicit repulsive signal.  Including those
-        # pairs in the negative mask prevents this behaviour and preserves the
-        # contrast between unrelated structures.
-        negative_mask_subset = (~same_graph_subset) & (~same_label_subset)
+        # Treat every pair of nodes that do not share an alignment label as a
+        # valid negative, regardless of whether the nodes originate from the
+        # same structure.  Earlier implementations ignored intra-graph pairs
+        # which meant that unrelated positions inside the same RNA could drift
+        # towards identical embeddings without receiving any penalty.  By
+        # expanding the negative mask to cover all mismatched labels we provide
+        # a consistent repulsive signal that keeps unrelated nodes separated
+        # both within a graph and across graphs, stabilising the similarity
+        # matrix during training.
+        negative_mask_subset = ~same_label_subset
 
         valid_mask = positive_mask_subset | negative_mask_subset
 
