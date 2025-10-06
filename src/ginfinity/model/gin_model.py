@@ -52,9 +52,9 @@ class GINModel(nn.Module):
         # Feature dimensionalities (fallbacks depend on encoding)
         if node_feature_dim is None:
             if graph_encoding == "forgi":
-                computed_node_dim = 1 + 2 + 4 + 1 + len(FORGI_NODE_TYPES)
+                computed_node_dim = 2 + 2 + 4 + 1 + len(FORGI_NODE_TYPES)
             else:
-                computed_node_dim = 3
+                computed_node_dim = 4
         else:
             computed_node_dim = int(node_feature_dim)
 

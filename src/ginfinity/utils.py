@@ -395,11 +395,17 @@ def _graph_to_tensor_standard(G, seq_weight: float):
     pair_weight = 1.0 - seq_weight
     for node in nodes:
         node_data = G.nodes[node]
-        pair_val = 1.0 if node_data['label'] == 'paired' else 0.0
+        pair_flag = 1.0 if node_data['label'] == 'paired' else 0.0
+        unpaired_flag = 1.0 - pair_flag
         loop_size_norm = float(node_data.get('loop_size_norm', 0.0))
         loop_pos_norm = float(node_data.get('loop_pos_norm', 0.0))
 
-        features = [pair_weight * pair_val, loop_size_norm, loop_pos_norm]
+        features = [
+            pair_weight * pair_flag,
+            pair_weight * unpaired_flag,
+            loop_size_norm,
+            loop_pos_norm,
+        ]
         if use_sequence:
             base_vec = _one_hot_base(node_data.get('base'))
             features.extend(seq_weight * b for b in base_vec)
@@ -450,11 +456,23 @@ def _graph_to_tensor_forgi(G, seq_weight: float):
         is_base = 1.0 if node_kind == 'base' else 0.0
         base_mask_list.append(bool(is_base))
 
-        pair_val = 1.0 if (node_kind == 'base' and node_data.get('label') == 'paired') else 0.0
-        loop_size_norm = float(node_data.get('loop_size_norm', 0.0)) if node_kind == 'base' else 0.0
-        loop_pos_norm = float(node_data.get('loop_pos_norm', 0.0)) if node_kind == 'base' else 0.0
+        if node_kind == 'base':
+            pair_flag = 1.0 if node_data.get('label') == 'paired' else 0.0
+            unpaired_flag = 1.0 - pair_flag
+            loop_size_norm = float(node_data.get('loop_size_norm', 0.0))
+            loop_pos_norm = float(node_data.get('loop_pos_norm', 0.0))
+        else:
+            pair_flag = 0.0
+            unpaired_flag = 0.0
+            loop_size_norm = 0.0
+            loop_pos_norm = 0.0
 
-        base_features = [pair_weight * pair_val, loop_size_norm, loop_pos_norm]
+        base_features = [
+            pair_weight * pair_flag,
+            pair_weight * unpaired_flag,
+            loop_size_norm,
+            loop_pos_norm,
+        ]
 
         if use_sequence and node_kind == 'base':
             base_vec = _one_hot_base(node_data.get('base'))

@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from ginfinity.model.gin_model import GINModel
 from ginfinity.utils import (
+    FORGI_NODE_TYPES,
     setup_and_read_input,
     dotbracket_to_graph,
     graph_to_tensor,
@@ -159,9 +160,10 @@ def _get_base_node_mask(data, device: Optional[torch.device] = None) -> torch.Te
     x = getattr(data, "x", None)
     if isinstance(x, torch.Tensor) and x.dim() == 2:
         feature_dim = x.size(1)
-        if feature_dim >= 15:
-            # Forgi encoding stores an explicit is_base indicator at index 7
-            base_scores = x[:, 7]
+        minimum_forgi_dim = 9 + len(FORGI_NODE_TYPES)  # paired/unpaired + loops + seq + base + forgi types
+        if feature_dim >= minimum_forgi_dim:
+            base_indicator_idx = feature_dim - len(FORGI_NODE_TYPES) - 1
+            base_scores = x[:, base_indicator_idx]
             mask = base_scores > 0.5
             if device is not None:
                 mask = mask.to(device=device)

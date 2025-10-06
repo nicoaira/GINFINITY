@@ -938,7 +938,7 @@ def _build_dataloaders_and_criterion(args, train_df, val_df, alignment_map):
 
 def _create_model(args, hidden_dim):
     loop_feature_dim = 2  # loop size + relative position
-    base_pair_dim = 1
+    base_pair_dim = 2  # paired + unpaired channels
     if args.graph_encoding == "forgi":
         seq_feature_dim = 4  # sequence channels always reserved (zeros if seq_weight=0)
         structural_bridge_dim = 1 + len(FORGI_NODE_TYPES)
