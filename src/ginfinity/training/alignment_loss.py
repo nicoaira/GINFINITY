@@ -252,7 +252,15 @@ class AlignmentContrastiveLoss(nn.Module):
         conserved_j_subset = subset_categories.unsqueeze(1) < 3
 
         positive_mask_subset = same_label_subset & (~same_graph_subset) & conserved_i_subset & conserved_j_subset
-        negative_mask_subset = (~same_graph_subset) & (~same_label_subset) & (conserved_i_subset | conserved_j_subset)
+        # Treat every pair drawn from different graphs with different labels
+        # as a valid negative.  The previous implementation restricted
+        # negatives to cases where at least one node was annotated as
+        # conserved.  As training progressed this allowed groups of
+        # unannotated nodes to collapse towards the same representation since
+        # they never received any explicit repulsive signal.  Including those
+        # pairs in the negative mask prevents this behaviour and preserves the
+        # contrast between unrelated structures.
+        negative_mask_subset = (~same_graph_subset) & (~same_label_subset)
 
         valid_mask = positive_mask_subset | negative_mask_subset
 
