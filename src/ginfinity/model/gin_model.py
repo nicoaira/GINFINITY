@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GINEConv, global_add_pool, Set2Set, global_mean_pool
+from torch_geometric.nn import PNAConv, global_add_pool, Set2Set, global_mean_pool
 from torch_geometric.nn.norm import BatchNorm as PYG_BatchNorm, GraphNorm, LayerNorm as PYG_LayerNorm, InstanceNorm
 
 try:  # pragma: no cover - import-time guard for lightweight downstream scripts
@@ -16,13 +16,13 @@ except Exception:  # pragma: no cover - fallback if utils has heavyweight deps u
         "other",
     ]
 
-class GINModel(nn.Module):
+class PNAModel(nn.Module):
     def __init__(
         self,
         hidden_dim,
         output_dim,
         graph_encoding="standard",
-        gin_layers=1,
+        pna_layers=1,
         dropout=0.05,
         pooling_type="global_add_pool",
         node_embed_norm: str = "none",     # {"none","l2","zscore","zscore_l2"}
@@ -32,20 +32,25 @@ class GINModel(nn.Module):
         normalize_nodes_before_pool: bool = False,
         node_feature_dim: int = None,
         edge_feature_dim: int = 4,
-        gin_eps: float = 0.0,              # GIN epsilon parameter
-        train_eps: bool = True,            # Whether to make GIN epsilon learnable
+        pna_aggregators=None,
+        pna_scalers=None,
+        pna_towers: int = 1,
+        pna_pre_layers: int = 1,
+        pna_post_layers: int = 1,
+        pna_divide_input: bool = False,
+        degree_histogram=None,
     ):
         super().__init__()
 
         # Process hidden_dim to handle both int and list inputs
         if isinstance(hidden_dim, (int, float)):
-            hidden_dims = [int(hidden_dim)] * gin_layers
+            hidden_dims = [int(hidden_dim)] * pna_layers
         elif isinstance(hidden_dim, list):
-            if len(hidden_dim) != gin_layers and len(hidden_dim) != 1:
+            if len(hidden_dim) != pna_layers and len(hidden_dim) != 1:
                 raise ValueError(
-                    f"hidden_dim list must be of length 1 or {gin_layers}, got length {len(hidden_dim)}"
+                    f"hidden_dim list must be of length 1 or {pna_layers}, got length {len(hidden_dim)}"
                 )
-            hidden_dims = hidden_dim if len(hidden_dim) == gin_layers else hidden_dim * gin_layers
+            hidden_dims = hidden_dim if len(hidden_dim) == pna_layers else hidden_dim * pna_layers
         else:
             raise TypeError("hidden_dim must be an integer or a list of integers")
 
@@ -70,7 +75,7 @@ class GINModel(nn.Module):
             "hidden_dims": list(hidden_dims),
             "output_dim": output_dim,
             "graph_encoding": graph_encoding,
-            "gin_layers": gin_layers,
+            "pna_layers": pna_layers,
             "dropout": dropout,
             "pooling_type": pooling_type,
             "node_embed_norm": node_embed_norm,
@@ -80,11 +85,33 @@ class GINModel(nn.Module):
             "normalize_nodes_before_pool": bool(normalize_nodes_before_pool),
             "node_feature_dim": input_dim,
             "edge_feature_dim": edge_dim,
-            "gin_eps": gin_eps,
-            "train_eps": train_eps,
+            "pna_aggregators": None if pna_aggregators is None else list(pna_aggregators),
+            "pna_scalers": None if pna_scalers is None else list(pna_scalers),
+            "pna_towers": int(pna_towers),
+            "pna_pre_layers": int(pna_pre_layers),
+            "pna_post_layers": int(pna_post_layers),
+            "pna_divide_input": bool(pna_divide_input),
+            "degree_histogram": None
         }
 
         self.hidden_dims = list(hidden_dims)
+
+        if pna_aggregators is None:
+            pna_aggregators = ["mean", "max", "min", "sum", "std"]
+        if pna_scalers is None:
+            pna_scalers = ["identity"]
+
+        self.pna_aggregators = list(pna_aggregators)
+        self.pna_scalers = list(pna_scalers)
+        self.pna_towers = int(pna_towers)
+        self.pna_pre_layers = int(pna_pre_layers)
+        self.pna_post_layers = int(pna_post_layers)
+        self.pna_divide_input = bool(pna_divide_input)
+
+        if degree_histogram is not None:
+            degree_histogram = torch.as_tensor(degree_histogram, dtype=torch.long)
+        self.degree_histogram = degree_histogram
+        self.metadata["degree_histogram"] = None if degree_histogram is None else degree_histogram.tolist()
 
         # Node encoder
         self.node_encoder = nn.Linear(input_dim, hidden_dims[0])
@@ -94,23 +121,23 @@ class GINModel(nn.Module):
         self.norms = nn.ModuleList()
         self.dropouts = nn.ModuleList()
 
-        for i in range(gin_layers):
+        for i in range(pna_layers):
             in_dim = hidden_dims[i - 1] if i > 0 else hidden_dims[0]
             out_dim = hidden_dims[i]
 
-            # MLP inside GINEConv (simple 2-layer MLP; keep norms outside for graph-aware ops)
-            net_layers = [
-                nn.Linear(in_dim, out_dim),
-                nn.ReLU(),
-            ]
-            if dropout > 0:
-                net_layers.append(nn.Dropout(p=dropout))
-            net_layers.extend([
-                nn.Linear(out_dim, out_dim),
-                nn.ReLU(),
-            ])
-            net = nn.Sequential(*net_layers)
-            self.convs.append(GINEConv(nn=net, eps=gin_eps, train_eps=train_eps, edge_dim=edge_dim))
+            conv = PNAConv(
+                in_dim,
+                out_dim,
+                aggregators=self.pna_aggregators,
+                scalers=self.pna_scalers,
+                deg=self.degree_histogram,
+                edge_dim=edge_dim,
+                towers=self.pna_towers,
+                pre_layers=self.pna_pre_layers,
+                post_layers=self.pna_post_layers,
+                divide_input=self.pna_divide_input,
+            )
+            self.convs.append(conv)
             self.norms.append(self._make_norm(norm_type, out_dim))
             self.dropouts.append(nn.Dropout(p=dropout) if dropout > 0 else nn.Identity())
 
@@ -163,11 +190,11 @@ class GINModel(nn.Module):
         edge_feature_dim = metadata.get('edge_feature_dim')
         if edge_feature_dim is None:
             edge_feature_dim = 4 if node_feature_dim is not None else 2
-        model = GINModel(
+        model = PNAModel(
             hidden_dim=metadata['hidden_dims'],
             output_dim=metadata['output_dim'],
             graph_encoding=metadata['graph_encoding'],
-            gin_layers=metadata['gin_layers'],
+            pna_layers=metadata.get('pna_layers', metadata.get('gin_layers', 1)),
             dropout=metadata['dropout'],
             pooling_type=metadata['pooling_type'],
             node_embed_norm=metadata.get('node_embed_norm', 'none'),
@@ -177,11 +204,28 @@ class GINModel(nn.Module):
             normalize_nodes_before_pool=metadata.get('normalize_nodes_before_pool', False),
             node_feature_dim=node_feature_dim,
             edge_feature_dim=edge_feature_dim,
-            gin_eps=metadata.get('gin_eps', 0.0),
-            train_eps=metadata.get('train_eps', True),
+            pna_aggregators=metadata.get('pna_aggregators'),
+            pna_scalers=metadata.get('pna_scalers'),
+            pna_towers=metadata.get('pna_towers', 1),
+            pna_pre_layers=metadata.get('pna_pre_layers', 1),
+            pna_post_layers=metadata.get('pna_post_layers', 1),
+            pna_divide_input=metadata.get('pna_divide_input', False),
+            degree_histogram=metadata.get('degree_histogram'),
         )
         model.load_state_dict(checkpoint['state_dict'])
         return model
+
+    def set_degree_histogram(self, degree_histogram):
+        if degree_histogram is None:
+            self.degree_histogram = None
+        else:
+            degree_histogram = torch.as_tensor(degree_histogram, dtype=torch.long)
+            if degree_histogram.dim() != 1:
+                raise ValueError("degree_histogram must be a 1D tensor or sequence")
+            self.degree_histogram = degree_histogram
+        self.metadata["degree_histogram"] = None if self.degree_histogram is None else self.degree_histogram.tolist()
+        for conv in self.convs:
+            conv.deg = self.degree_histogram
 
     def save_checkpoint(self, path, optimizer=None, epoch=None):
         checkpoint = {
@@ -298,3 +342,7 @@ class GINModel(nn.Module):
         p = self.forward_once(positive)
         n = self.forward_once(negative)
         return a, p, n
+
+
+# Backwards compatibility alias for legacy imports
+GINModel = PNAModel

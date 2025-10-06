@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+python -m ginfinity.scripts.train_model \
+    --schedule training_schedule.json \
+    --val_fraction 0.03 \
+    --f_sample_dataset 0.15 \
+    --model_id gin_alignment_forgi17 \
+    --training_mode alignment \
+    --gin_layers 5 \
+    --graph_encoding forgi \
+    --hidden_dim "256,256,256,256,256" \
+    --output_dim 512 \
+    --pooling_type global_mean_pool \
+    --dropout 0.05 \
+    --batch_size 32 \
+    --num_epochs 300 \
+    --patience 20 \
+    --min_delta 0.0001 \
+    --decay_rate 0.95 \
+    --norm_type graph \
+    --node_embed_norm zscore_l2 \
+    --normalize_nodes_before_pool \
+    --num_workers 16 \
+    --hard_negative_fraction 0.9 \
+    --save_best_weights True \
+    --device cuda \
+    --structure_column 'structure' \
+    --train_eps \
+    --seed 42 \
+    --diagnostic-aligment \
+    --debug \
+    --alignment_margin 0.2 \
+    --alignment_temperature 0.05

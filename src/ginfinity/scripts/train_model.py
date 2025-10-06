@@ -7,15 +7,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import warnings
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch_geometric.loader import DataLoader as GeoDataLoader
-from torch_geometric.data import Batch
+from torch_geometric.data import Batch, Data
+from torch_geometric.utils import degree
 from sklearn.model_selection import train_test_split
 import pandas as pd
 from tqdm import tqdm
@@ -63,6 +65,65 @@ def _ensure_open_file_limit(min_soft: int = 4096) -> None:
         resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
     except (ValueError, OSError):  # pragma: no cover - insufficient perms
         pass
+
+
+def _iter_graph_tensors(item):
+    """Yield PyG Data objects contained in dataset items."""
+    if item is None:
+        return
+    if isinstance(item, Data):
+        yield item
+        return
+    if isinstance(item, dict):
+        structures = item.get("structures")
+        if structures is not None:
+            for struct in structures:
+                yield from _iter_graph_tensors(struct)
+        return
+    if isinstance(item, (list, tuple)):
+        for element in item:
+            yield from _iter_graph_tensors(element)
+
+
+def _accumulate_degree_histogram(hist: Optional[torch.Tensor], data_obj: Data) -> Optional[torch.Tensor]:
+    """Update a running degree histogram with the degrees from ``data_obj``."""
+    num_nodes = getattr(data_obj, "num_nodes", None)
+    if num_nodes is None:
+        x = getattr(data_obj, "x", None)
+        num_nodes = x.size(0) if x is not None else 0
+
+    edge_index = getattr(data_obj, "edge_index", None)
+    if edge_index is None or edge_index.numel() == 0 or num_nodes == 0:
+        return hist
+
+    deg = degree(edge_index[1], num_nodes=num_nodes, dtype=torch.long)
+    if deg.numel() == 0:
+        return hist
+
+    max_deg = int(deg.max().item())
+    if hist is None:
+        hist = torch.zeros(max_deg + 1, dtype=torch.long)
+    elif hist.size(0) <= max_deg:
+        hist = F.pad(hist, (0, max_deg + 1 - hist.size(0)))
+
+    counts = torch.bincount(deg, minlength=hist.size(0))
+    hist[:counts.size(0)] += counts
+    return hist
+
+
+def _compute_degree_histogram_from_dataset(dataset, running_hist: Optional[torch.Tensor] = None) -> Optional[torch.Tensor]:
+    """Compute (or update) a degree histogram over all graphs in ``dataset``."""
+    hist = running_hist
+    if dataset is None:
+        return hist
+
+    length = len(dataset)
+    for idx in range(length):
+        item = dataset[idx]
+        for data_obj in _iter_graph_tensors(item):
+            hist = _accumulate_degree_histogram(hist, data_obj)
+
+    return hist
 
 def remove_invalid_structures_triplet(df):
     """Filters out rows with invalid dot-bracket structures for triplet training."""
@@ -949,11 +1010,20 @@ def _create_model(args, hidden_dim):
         node_feature_dim = base_pair_dim + loop_feature_dim + seq_feature_dim
         edge_feature_dim = 4
 
+    aggregators = args.pna_aggregators
+    if aggregators is not None and len(aggregators) == 0:
+        aggregators = None
+    scalers = args.pna_scalers
+    if scalers is not None and len(scalers) == 0:
+        scalers = None
+
+    degree_histogram = args.degree_histogram
+
     model = GINModel(
         hidden_dim=hidden_dim,
         output_dim=args.output_dim,
         graph_encoding=args.graph_encoding,
-        gin_layers=args.gin_layers,
+        pna_layers=args.pna_layers,
         pooling_type=args.pooling_type,
         dropout=args.dropout,
         node_feature_dim=node_feature_dim,
@@ -961,8 +1031,13 @@ def _create_model(args, hidden_dim):
         norm_type=args.norm_type,
         node_embed_norm=args.node_embed_norm,
         normalize_nodes_before_pool=args.normalize_nodes_before_pool,
-        gin_eps=args.gin_eps,
-        train_eps=args.train_eps,
+        pna_aggregators=aggregators,
+        pna_scalers=scalers,
+        pna_towers=args.pna_towers,
+        pna_pre_layers=args.pna_pre_layers,
+        pna_post_layers=args.pna_post_layers,
+        pna_divide_input=args.pna_divide_input,
+        degree_histogram=degree_histogram,
     )
     model.metadata["seq_weight"] = float(args.seq_weight)
     return model
@@ -1303,24 +1378,39 @@ def train_model_with_early_stopping(
 
 def main():
     # Argument parsing
-    parser = argparse.ArgumentParser(description="Train a GIN model on RNA secondary structures.")
+    parser = argparse.ArgumentParser(description="Train a Principal Neighbourhood Aggregation (PNA) model on RNA secondary structures.")
     parser.add_argument('--input_path', type=str, default=None, help='Path to the input CSV/TSV file containing RNA secondary structures.')
-    parser.add_argument('--model_id', type=str, default='gin_model', help='Model id')
+    parser.add_argument('--model_id', type=str, default='pna_model', help='Model id')
     parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard', help='Encoding to use for the transformation to graph')
-    parser.add_argument('--hidden_dim', type=str, default='256', help='Hidden dimension size(s) for the model. Can be a single number or a comma-separated list of numbers of the same size of gin_layers(e.g. "256,126,256)" .')
-    parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model.')
+    parser.add_argument('--hidden_dim', type=str, default='256', help='Hidden dimension size(s) for the model. Can be a single number or a comma-separated list matching the number of PNA layers (e.g. "256,126,256").')
+    parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the PNA model.')
     parser.add_argument('--batch_size', type=int, default=100, help='Batch size for training and validation.')
     parser.add_argument('--num_epochs', type=int, default=10, help='Number of epochs to train the model.')
     parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping.')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for the optimizer.')
-    parser.add_argument('--gin_layers', type=int, default=1, help='Number of gin layers.')
+    parser.add_argument('--pna_layers', type=int, default=1, help='Number of PNA convolution layers.')
+    parser.add_argument('--gin_layers', dest='pna_layers', type=int, help=argparse.SUPPRESS)
     parser.add_argument('--num_workers', type=int, default=None, help='Number of worker threads for data loading.')
     parser.add_argument('--save_best_weights', type=bool, default=True, help='Save the best model weights during early stopping.')
     parser.add_argument('--device', type=str, choices=['cuda', 'cpu'], default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use for training.')
     parser.add_argument('--min_delta', type=float, default=0.001, help='Minimum validation loss decrease to qualify as improvement (default: 0.001)')
     parser.add_argument('--decay_rate', type=float, default=0.01, help='Decay rate for the learning rate.')
-    parser.add_argument('--pooling_type', type=str, choices=['global_add_pool','global_mean_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the GIN model.')
-    parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate for the GIN model (default: 0.0).')
+    parser.add_argument('--pooling_type', type=str, choices=['global_add_pool','global_mean_pool', 'set2set'], default='global_add_pool', help='Pooling type to use in the PNA model.')
+    parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate for the PNA model (default: 0.0).')
+    parser.add_argument('--pna_aggregators', type=str, default=None,
+                        help='Comma-separated list of aggregator names for the PNA convolution (e.g. "mean,max,sum").')
+    parser.add_argument('--pna_scalers', type=str, default=None,
+                        help='Comma-separated list of scaler names for the PNA convolution (e.g. "identity,amplification").')
+    parser.add_argument('--pna_towers', type=int, default=1,
+                        help='Number of towers to use in the PNA convolution (default: 1).')
+    parser.add_argument('--pna_pre_layers', type=int, default=1,
+                        help='Number of pre-aggregation feedforward layers inside each PNA tower (default: 1).')
+    parser.add_argument('--pna_post_layers', type=int, default=1,
+                        help='Number of post-aggregation feedforward layers inside each PNA tower (default: 1).')
+    parser.add_argument('--pna_divide_input', action='store_true',
+                        help='Divide the input features evenly across PNA towers.')
+    parser.add_argument('--degree_histogram', type=str, default=None,
+                        help='Comma-separated histogram of node degrees used by PNA scalers (e.g. "100,50,10").')
     parser.add_argument('--val_fraction', type=float, default=0.2, help='Fraction of data for validation (default: 0.2)')
     parser.add_argument(
         '--f_sample_dataset',
@@ -1398,13 +1488,44 @@ def main():
         default=1,
         help='Prefetch factor for alignment DataLoader workers (default: 1).'
     )
-    parser.add_argument('--gin_eps', type=float, default=0.0,
-                        help='GIN epsilon parameter value. If train_eps is True, this is the initial value (default: 0.0).')
-    parser.add_argument('--train_eps', action='store_true',
-                        help='Make GIN epsilon parameter learnable during training (default: False for fixed epsilon).')
     parser.add_argument('--schedule', type=str, default=None,
                         help='Path to a JSON file describing sequential alignment training rounds.')
     args = parser.parse_args()
+
+    if '--gin_layers' in sys.argv:
+        warnings.warn(
+            "--gin_layers is deprecated and will be removed in a future release. Use --pna_layers instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    def _parse_str_list(value: Optional[str]):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            parts = [item.strip() for item in value.split(',')]
+            return [item for item in parts if item]
+        return list(value)
+
+    def _parse_int_list(value: Optional[str]):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            parts = [item.strip() for item in value.split(',') if item.strip()]
+            if not parts:
+                return []
+            try:
+                return [int(item) for item in parts]
+            except ValueError as exc:  # pragma: no cover - defensive parsing
+                raise ValueError("degree_histogram must be a comma-separated list of integers") from exc
+        try:
+            return [int(v) for v in value]
+        except ValueError as exc:  # pragma: no cover - defensive parsing
+            raise ValueError("degree_histogram must contain integers") from exc
+
+    args.pna_aggregators = _parse_str_list(args.pna_aggregators)
+    args.pna_scalers = _parse_str_list(args.pna_scalers)
+    args.degree_histogram = _parse_int_list(args.degree_histogram)
 
     if not math.isfinite(args.initial_eval_fraction) or args.initial_eval_fraction <= 0:
         raise ValueError("initial_eval_fraction must be a positive, finite value.")
@@ -1445,9 +1566,11 @@ def main():
 
     random.seed(args.seed)
 
-    device = args.device
-    model = _create_model(args, hidden_dim)
-    hidden_dims_log = hidden_dim if isinstance(hidden_dim, list) else [hidden_dim] * args.gin_layers
+    single_run_data: Optional[Dict[str, Any]] = None
+    preloaded_round_data: Dict[int, Dict[str, Any]] = {}
+    rounds_to_execute: Optional[List[Dict[str, Any]]] = None
+    running_hist: Optional[torch.Tensor] = None
+    schedule_histogram_inferred = False
 
     if schedule_plan is None:
         dataset_path = args.input_path
@@ -1462,6 +1585,94 @@ def main():
             val_df,
             alignment_map,
         )
+        if args.degree_histogram is None:
+            inferred_hist = _compute_degree_histogram_from_dataset(train_loader.dataset)
+            if inferred_hist is None:
+                raise RuntimeError(
+                    "Unable to infer degree histogram from training dataset; supply --degree_histogram explicitly."
+                )
+            args.degree_histogram = [int(v) for v in inferred_hist.tolist()]
+        single_run_data = {
+            "dataset_path": dataset_path,
+            "df": df,
+            "train_df": train_df,
+            "val_df": val_df,
+            "alignment_map": alignment_map,
+            "expanded_dataset_path": expanded_dataset_path,
+            "train_loader": train_loader,
+            "val_loader": val_loader,
+            "criterion": criterion,
+            "alignment_max_unaligned": alignment_max_unaligned,
+        }
+    else:
+        schedule_rounds = schedule_plan["rounds"]
+        start_from_round = schedule_plan["start_from_round"]
+        initial_checkpoint_path = schedule_plan["checkpoint"]
+        rounds_to_execute = [cfg for cfg in schedule_rounds if cfg["round"] >= start_from_round]
+        if not rounds_to_execute:
+            raise ValueError(
+                "No rounds to execute after applying 'start_from_round'."
+            )
+
+        if args.degree_histogram is not None:
+            running_hist = torch.as_tensor(args.degree_histogram, dtype=torch.long)
+            args.degree_histogram = [int(v) for v in running_hist.tolist()]
+        else:
+            total_rounds = len(rounds_to_execute)
+            first_round_cfg = rounds_to_execute[0]
+            dataset_path = first_round_cfg["dataset_path"]
+            alignment_map_path = first_round_cfg["alignment_map_path"]
+            print(
+                f"Preparing data for round {first_round_cfg['round']} (1/{total_rounds})..."
+            )
+            df, train_df, val_df, alignment_map, expanded_dataset_path = _prepare_dataset(
+                args,
+                dataset_path,
+                alignment_map_path,
+            )
+            train_loader, val_loader, criterion, alignment_max_unaligned = _build_dataloaders_and_criterion(
+                args,
+                train_df,
+                val_df,
+                alignment_map,
+            )
+            running_hist = _compute_degree_histogram_from_dataset(train_loader.dataset)
+            if running_hist is None:
+                raise RuntimeError(
+                    "Unable to infer degree histogram from scheduled datasets; supply --degree_histogram."
+                )
+            args.degree_histogram = [int(v) for v in running_hist.tolist()]
+            schedule_histogram_inferred = True
+            preloaded_round_data[first_round_cfg["round"]] = {
+                "df": df,
+                "train_df": train_df,
+                "val_df": val_df,
+                "alignment_map": alignment_map,
+                "expanded_dataset_path": expanded_dataset_path,
+                "train_loader": train_loader,
+                "val_loader": val_loader,
+                "criterion": criterion,
+                "alignment_max_unaligned": alignment_max_unaligned,
+                "alignment_map_path": alignment_map_path,
+            }
+
+    device = args.device
+    model = _create_model(args, hidden_dim)
+    hidden_dims_log = hidden_dim if isinstance(hidden_dim, list) else [hidden_dim] * args.pna_layers
+
+    if schedule_plan is None:
+        if single_run_data is None:
+            raise RuntimeError("Internal error: training dataset preparation failed.")
+        dataset_path = single_run_data["dataset_path"]
+        df = single_run_data["df"]
+        train_df = single_run_data["train_df"]
+        val_df = single_run_data["val_df"]
+        alignment_map = single_run_data["alignment_map"]
+        expanded_dataset_path = single_run_data["expanded_dataset_path"]
+        train_loader = single_run_data["train_loader"]
+        val_loader = single_run_data["val_loader"]
+        criterion = single_run_data["criterion"]
+        alignment_max_unaligned = single_run_data["alignment_max_unaligned"]
 
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
@@ -1489,15 +1700,20 @@ def main():
                 if args.training_mode == "regression"
                 else "AlignmentContrastiveLoss"
             ),
-            "gin_layers": args.gin_layers,
+            "pna_layers": args.pna_layers,
+            "pna_aggregators": args.pna_aggregators,
+            "pna_scalers": args.pna_scalers,
+            "pna_towers": args.pna_towers,
+            "pna_pre_layers": args.pna_pre_layers,
+            "pna_post_layers": args.pna_post_layers,
+            "pna_divide_input": args.pna_divide_input,
+            "degree_histogram": args.degree_histogram,
             "graph_encoding": args.graph_encoding,
             "training_mode": args.training_mode,
             "seq_weight": args.seq_weight,
             "norm_type": args.norm_type,
             "node_embed_norm": args.node_embed_norm,
             "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
-            "gin_eps": args.gin_eps,
-            "train_eps": args.train_eps,
             "initial_eval_fraction": args.initial_eval_fraction,
             "debug": args.debug,
         }
@@ -1550,14 +1766,9 @@ def main():
             }
         log_information(log_path, execution_time, "Execution time")
     else:
-        schedule_rounds = schedule_plan["rounds"]
-        start_from_round = schedule_plan["start_from_round"]
-        initial_checkpoint_path = schedule_plan["checkpoint"]
-        rounds_to_execute = [cfg for cfg in schedule_rounds if cfg["round"] >= start_from_round]
-        if not rounds_to_execute:
-            raise ValueError(
-                "No rounds to execute after applying 'start_from_round'."
-            )
+        if rounds_to_execute is None:
+            raise RuntimeError("Internal error: schedule rounds unavailable.")
+
         base_output_dir = os.path.join("output", args.model_id)
         os.makedirs(base_output_dir, exist_ok=True)
         schedule_start_time = time.time()
@@ -1566,6 +1777,7 @@ def main():
         delete_after_load = False
         schedule_interrupted = False
         executed_rounds = 0
+        total_rounds = len(rounds_to_execute)
 
         for exec_idx, round_cfg in enumerate(rounds_to_execute):
             round_start_time = time.time()
@@ -1584,6 +1796,8 @@ def main():
             if executed_rounds == 0:
                 if pending_checkpoint_path:
                     _load_checkpoint_into_model(model, pending_checkpoint_path, device)
+                    if running_hist is None and getattr(model, "degree_histogram", None) is not None:
+                        running_hist = model.degree_histogram.detach().cpu()
                 pending_checkpoint_path = None
                 delete_after_load = False
             else:
@@ -1596,18 +1810,50 @@ def main():
                     os.remove(pending_checkpoint_path)
                 delete_after_load = False
                 pending_checkpoint_path = None
+                if running_hist is None and getattr(model, "degree_histogram", None) is not None:
+                    running_hist = model.degree_histogram.detach().cpu()
 
-            df, train_df, val_df, alignment_map, expanded_dataset_path = _prepare_dataset(
-                args,
-                round_cfg["dataset_path"],
-                round_cfg["alignment_map_path"],
-            )
-            train_loader, val_loader, criterion, alignment_max_unaligned = _build_dataloaders_and_criterion(
-                args,
-                train_df,
-                val_df,
-                alignment_map,
-            )
+            preloaded = preloaded_round_data.pop(round_number, None)
+            if preloaded is not None:
+                df = preloaded["df"]
+                train_df = preloaded["train_df"]
+                val_df = preloaded["val_df"]
+                alignment_map = preloaded["alignment_map"]
+                expanded_dataset_path = preloaded["expanded_dataset_path"]
+                train_loader = preloaded["train_loader"]
+                val_loader = preloaded["val_loader"]
+                criterion = preloaded["criterion"]
+                alignment_max_unaligned = preloaded["alignment_max_unaligned"]
+                alignment_map_path = preloaded["alignment_map_path"]
+                used_preloaded = True
+            else:
+                dataset_path = round_cfg["dataset_path"]
+                alignment_map_path = round_cfg["alignment_map_path"]
+                print(
+                    f"Preparing data for round {round_number} ({exec_idx + 1}/{total_rounds})..."
+                )
+                df, train_df, val_df, alignment_map, expanded_dataset_path = _prepare_dataset(
+                    args,
+                    dataset_path,
+                    alignment_map_path,
+                )
+                train_loader, val_loader, criterion, alignment_max_unaligned = _build_dataloaders_and_criterion(
+                    args,
+                    train_df,
+                    val_df,
+                    alignment_map,
+                )
+                used_preloaded = False
+
+            if running_hist is None and getattr(model, "degree_histogram", None) is not None:
+                running_hist = model.degree_histogram.detach().cpu()
+
+            if schedule_histogram_inferred and not used_preloaded:
+                updated_hist = _compute_degree_histogram_from_dataset(train_loader.dataset, running_hist)
+                if updated_hist is not None:
+                    running_hist = updated_hist
+                    model.set_degree_histogram(running_hist)
+                    args.degree_histogram = [int(v) for v in running_hist.tolist()]
 
             current_lr = round_cfg["lr"]
             current_decay = round_cfg["decay_rate"]
@@ -1629,21 +1875,26 @@ def main():
                 "lr": current_lr,
                 "decay_rate": current_decay,
                 "criterion": "AlignmentContrastiveLoss",
-                "gin_layers": args.gin_layers,
+                "pna_layers": args.pna_layers,
+                "pna_aggregators": args.pna_aggregators,
+                "pna_scalers": args.pna_scalers,
+                "pna_towers": args.pna_towers,
+                "pna_pre_layers": args.pna_pre_layers,
+                "pna_post_layers": args.pna_post_layers,
+                "pna_divide_input": args.pna_divide_input,
+                "degree_histogram": args.degree_histogram,
                 "graph_encoding": args.graph_encoding,
                 "training_mode": args.training_mode,
                 "seq_weight": args.seq_weight,
                 "norm_type": args.norm_type,
                 "node_embed_norm": args.node_embed_norm,
                 "normalize_nodes_before_pool": args.normalize_nodes_before_pool,
-                "gin_eps": args.gin_eps,
-                "train_eps": args.train_eps,
                 "initial_eval_fraction": args.initial_eval_fraction,
                 "keep_weights": keep_weights,
                 "debug": args.debug,
             }
             training_params.update({
-                "alignment_map_path": round_cfg["alignment_map_path"],
+                "alignment_map_path": alignment_map_path,
                 "alignment_margin": args.alignment_margin,
                 "alignment_unaligned_per_graph": alignment_max_unaligned,
             })
