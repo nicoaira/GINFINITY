@@ -18,8 +18,8 @@ class AlignmentContrastiveLoss(nn.Module):
 
     * ``1 - cos_sim`` for nodes that are annotated as equivalent across
       different structures (positives).
-    * ``relu(cos_sim - margin)`` for nodes annotated with different
-      alignment positions (negatives), with hard negatives prioritized.
+    * A supervised InfoNCE term that contrasts each positive pair against
+      a temperature-scaled partition function built from sampled negatives.
 
     Parameters
     ----------
@@ -31,7 +31,13 @@ class AlignmentContrastiveLoss(nn.Module):
         Fraction of negatives that should be hard negatives (same category).
         Default: 0.85
     max_negatives:
-        Maximum number of negatives to sample for efficiency. Default: 5000
+        Maximum number of additional negative nodes to sample for the InfoNCE
+        denominator. A value of ``None`` or ``0`` keeps only nodes that
+        participate in positive pairs. Default: 5000
+    temperature:
+        Temperature applied to cosine similarities inside the InfoNCE term.
+        Lower temperatures sharpen the distribution and penalize unrelated
+        nodes with high similarity more aggressively. Default: 0.1
     """
 
     def __init__(
@@ -39,12 +45,14 @@ class AlignmentContrastiveLoss(nn.Module):
         margin: float = 0.0,
         hard_negative_fraction: float = 0.85,
         max_negatives: int = 5000,
+        temperature: float = 0.1,
         debug: bool = False,
     ):
         super().__init__()
         self.margin = float(margin)
         self.hard_negative_fraction = float(hard_negative_fraction)
         self.max_negatives = max_negatives
+        self.temperature = float(temperature)
         self.debug_enabled = bool(debug)
         self.debug_log_path: Optional[str] = None
         self._debug_batch_index = 0
@@ -81,12 +89,11 @@ class AlignmentContrastiveLoss(nn.Module):
             pos_sims = torch.sum(pos_emb1 * pos_emb2, dim=1)
             pos_loss = (1.0 - pos_sims).mean()
 
-        # Compute negative loss using efficient sampling
-        neg_loss = self._compute_negative_loss_vectorized(
-            embeddings, labels, graph_ids, categories, device
+        contrastive_loss = self._compute_contrastive_info_nce(
+            embeddings, labels, graph_ids, categories
         )
 
-        return pos_loss + neg_loss
+        return pos_loss + contrastive_loss
 
     def configure_debug(self, enabled: bool, log_path: Optional[str]) -> None:
         self.debug_enabled = bool(enabled)
@@ -153,125 +160,136 @@ class AlignmentContrastiveLoss(nn.Module):
         
         return torch.stack([actual_i, actual_j], dim=1)
 
-    def _compute_negative_loss_vectorized(self, embeddings, labels, graph_ids, categories, device):
-        """Compute negative loss with fully vectorized sampling."""
+    def _compute_contrastive_info_nce(
+        self,
+        embeddings: torch.Tensor,
+        labels: torch.Tensor,
+        graph_ids: torch.Tensor,
+        categories: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute a supervised InfoNCE loss over sampled nodes.
+
+        Nodes that participate in positive pairs are always included while a
+        limited number of additional nodes are sampled to act as negatives. The
+        logits are built with cosine similarities (embeddings are already
+        normalized) scaled by ``temperature``. Only pairs belonging to different
+        graphs are considered valid, mirroring the alignment setup.
+        """
+
+        device = embeddings.device
         n = embeddings.shape[0]
-        
-        # Sample indices efficiently
-        max_samples = min(self.max_negatives, n * n // 4)  # Quarter of all pairs
-        
         zero = embeddings.sum() * 0.0
 
-        if max_samples < 100:  # Not enough data
+        if n < 2:
+            return zero
+
+        same_graph = graph_ids.unsqueeze(0) == graph_ids.unsqueeze(1)
+        same_label = labels.unsqueeze(0) == labels.unsqueeze(1)
+        conserved_i = categories.unsqueeze(0) < 3
+        conserved_j = categories.unsqueeze(1) < 3
+
+        positive_mask = same_label & (~same_graph) & conserved_i & conserved_j
+
+        if not positive_mask.any():
             self._log_debug(
-                "negative_sampling_guard",
+                "no_positive_pairs",
                 {
-                    "message": "max_samples < 100 guard triggered; negative loss set to zero",
+                    "message": "No positive pairs available for InfoNCE; returning zero loss",
                     "node_count": n,
-                    "max_samples": max_samples,
-                    "requested_max_negatives": self.max_negatives,
+                },
+            )
+            return zero
+
+        # Determine which nodes need to be kept in the contrastive set
+        participating_mask = positive_mask.any(dim=0) | positive_mask.any(dim=1)
+        participating_indices = torch.nonzero(participating_mask, as_tuple=False).squeeze(-1)
+
+        if participating_indices.numel() == 0:
+            return zero
+
+        if self.max_negatives is not None and self.max_negatives > 0 and participating_indices.numel() < n:
+            selection_mask = torch.zeros(n, dtype=torch.bool, device=device)
+            selection_mask[participating_indices] = True
+
+            negative_candidates = torch.nonzero(~selection_mask, as_tuple=False).squeeze(-1)
+            if negative_candidates.numel() > 0:
+                sample_size = min(self.max_negatives, int(negative_candidates.numel()))
+                if sample_size > 0:
+                    hard_candidates = negative_candidates[categories[negative_candidates] < 3]
+                    easy_candidates = negative_candidates[categories[negative_candidates] >= 3]
+
+                    n_hard = int(round(sample_size * self.hard_negative_fraction))
+                    n_hard = min(n_hard, int(hard_candidates.numel()))
+                    n_easy = sample_size - n_hard
+                    n_easy = min(n_easy, int(easy_candidates.numel()))
+
+                    selected_parts = []
+                    if n_hard > 0:
+                        perm = torch.randperm(hard_candidates.numel(), device=device)[:n_hard]
+                        selected_parts.append(hard_candidates[perm])
+                    if n_easy > 0:
+                        perm = torch.randperm(easy_candidates.numel(), device=device)[:n_easy]
+                        selected_parts.append(easy_candidates[perm])
+
+                    if selected_parts:
+                        sampled_negatives = torch.cat(selected_parts)
+                        selection_mask[sampled_negatives] = True
+
+            subset_indices = torch.nonzero(selection_mask, as_tuple=False).squeeze(-1)
+        else:
+            subset_indices = participating_indices
+
+        subset_embeddings = embeddings[subset_indices]
+        subset_labels = labels[subset_indices]
+        subset_graphs = graph_ids[subset_indices]
+        subset_categories = categories[subset_indices]
+
+        sim_matrix = torch.matmul(subset_embeddings, subset_embeddings.T) / max(self.temperature, 1e-8)
+
+        same_graph_subset = subset_graphs.unsqueeze(0) == subset_graphs.unsqueeze(1)
+        same_label_subset = subset_labels.unsqueeze(0) == subset_labels.unsqueeze(1)
+        conserved_i_subset = subset_categories.unsqueeze(0) < 3
+        conserved_j_subset = subset_categories.unsqueeze(1) < 3
+
+        positive_mask_subset = same_label_subset & (~same_graph_subset) & conserved_i_subset & conserved_j_subset
+        negative_mask_subset = (~same_graph_subset) & (~same_label_subset) & (conserved_i_subset | conserved_j_subset)
+
+        valid_mask = positive_mask_subset | negative_mask_subset
+
+        if not positive_mask_subset.any():
+            self._log_debug(
+                "no_positive_pairs_subset",
+                {
+                    "message": "Positive pairs disappeared after sampling; returning zero loss",
+                    "node_count": int(subset_indices.numel()),
+                    "original_nodes": n,
                     "positive_pairs": self._last_positive_pairs,
                 },
             )
             return zero
-            
-        # Generate random pairs
-        idx1 = torch.randint(0, n, (max_samples,), device=device)
-        idx2 = torch.randint(0, n, (max_samples,), device=device)
-        
-        # Vectorized filtering for valid negatives
-        different_graphs = graph_ids[idx1] != graph_ids[idx2]
-        different_labels = labels[idx1] != labels[idx2]
-        at_least_one_conserved = (categories[idx1] < 3) | (categories[idx2] < 3)
-        
-        valid_neg_mask = different_graphs & different_labels & at_least_one_conserved
-        
-        if not valid_neg_mask.any():
-            self._log_debug(
-                "no_valid_negatives",
-                {
-                    "message": "No valid negative pairs after masking; negative loss set to zero",
-                    "node_count": n,
-                    "max_samples": max_samples,
-                    "positive_pairs": self._last_positive_pairs,
-                },
-            )
+
+        diag_mask = torch.eye(sim_matrix.size(0), dtype=torch.bool, device=device)
+        valid_mask = valid_mask & (~diag_mask)
+
+        masked_logits = sim_matrix.masked_fill(~valid_mask, float("-inf"))
+
+        logsumexp = torch.logsumexp(masked_logits, dim=1, keepdim=True)
+        logsumexp = torch.where(torch.isfinite(logsumexp), logsumexp, torch.zeros_like(logsumexp))
+
+        log_probs = masked_logits - logsumexp
+        log_probs = torch.where(torch.isfinite(log_probs), log_probs, torch.zeros_like(log_probs))
+
+        positive_log_probs = log_probs[positive_mask_subset]
+        if positive_log_probs.numel() == 0:
             return zero
-            
-        # Apply mask to get valid pairs
-        valid_idx1 = idx1[valid_neg_mask]
-        valid_idx2 = idx2[valid_neg_mask]
-        
-        # Separate hard and easy negatives vectorized
-        same_category = categories[valid_idx1] == categories[valid_idx2]
-        
-        n_valid = len(valid_idx1)
-        n_hard_target = int(n_valid * self.hard_negative_fraction)
-        
-        # Get hard negatives
-        hard_mask = same_category
-        hard_indices = torch.nonzero(hard_mask, as_tuple=False).squeeze(-1)
-        
-        # Get easy negatives  
-        easy_mask = ~same_category
-        easy_indices = torch.nonzero(easy_mask, as_tuple=False).squeeze(-1)
-        
-        # Sample from each category
-        selected_indices = []
-        
-        if len(hard_indices) > 0:
-            n_hard_sample = min(len(hard_indices), n_hard_target)
-            if n_hard_sample < len(hard_indices):
-                perm = torch.randperm(len(hard_indices), device=device)[:n_hard_sample]
-                selected_indices.append(hard_indices[perm])
-            else:
-                selected_indices.append(hard_indices)
-        
-        if len(easy_indices) > 0:
-            n_easy_target = max_samples - (len(selected_indices[0]) if selected_indices else 0)
-            n_easy_sample = min(len(easy_indices), n_easy_target)
-            if n_easy_sample > 0:
-                if n_easy_sample < len(easy_indices):
-                    perm = torch.randperm(len(easy_indices), device=device)[:n_easy_sample]
-                    selected_indices.append(easy_indices[perm])
-                else:
-                    selected_indices.append(easy_indices)
-        
-        if not selected_indices:
-            self._log_debug(
-                "no_selected_negatives",
-                {
-                    "message": "Sampling produced no negative pairs; negative loss set to zero",
-                    "node_count": n,
-                    "available_pairs": len(valid_idx1),
-                    "positive_pairs": self._last_positive_pairs,
-                },
-            )
-            return zero
-            
-        # Combine all selected indices
-        final_indices = torch.cat(selected_indices)
-        
-        # Get final pairs
-        final_idx1 = valid_idx1[final_indices]
-        final_idx2 = valid_idx2[final_indices]
-        
-        # Compute similarities vectorized
-        emb1 = embeddings[final_idx1]
-        emb2 = embeddings[final_idx2]
-        neg_sims = torch.sum(emb1 * emb2, dim=1)
-        
-        # Apply margin penalty
-        penalties = F.relu(neg_sims - self.margin)
-        if len(penalties) == 0:
-            self._log_debug(
-                "empty_penalties",
-                {
-                    "message": "All negative similarities below margin; penalty is zero",
-                    "node_count": n,
-                    "selected_negatives": len(final_idx1),
-                    "positive_pairs": self._last_positive_pairs,
-                },
-            )
-            return zero
-        return penalties.mean()
+
+        contrastive_loss = -positive_log_probs.mean()
+
+        # Add a soft margin regularizer to keep unrelated nodes apart even when
+        # they slip through the sampling mask.
+        if self.margin > 0.0 and negative_mask_subset.any():
+            negative_sims = sim_matrix[negative_mask_subset]
+            margin_penalty = F.relu(negative_sims - self.margin).mean()
+            contrastive_loss = contrastive_loss + margin_penalty
+
+        return contrastive_loss

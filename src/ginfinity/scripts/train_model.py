@@ -890,9 +890,15 @@ def _build_dataloaders_and_criterion(args, train_df, val_df, alignment_map):
             progress_desc="Preprocessing validation alignments",
             cache_preprocessed=args.alignment_cache_preprocessed,
         )
+        alignment_max_negatives = args.alignment_max_negatives
+        if alignment_max_negatives is not None and alignment_max_negatives <= 0:
+            alignment_max_negatives = None
+
         criterion = AlignmentContrastiveLoss(
             margin=args.alignment_margin,
             hard_negative_fraction=args.hard_negative_fraction,
+            max_negatives=alignment_max_negatives,
+            temperature=args.alignment_temperature,
             debug=getattr(args, "debug", False),
         )
         alignment_max_unaligned = max(0, int(args.alignment_unaligned_per_graph))
@@ -1360,6 +1366,10 @@ def main():
                         help='Maximum number of unaligned nodes per structure to include as negatives.')
     parser.add_argument('--hard_negative_fraction', type=float, default=0.85,
                         help='Fraction of negatives that should be hard negatives (same category). Default: 0.85')
+    parser.add_argument('--alignment_temperature', type=float, default=0.1,
+                        help='Temperature for the alignment contrastive InfoNCE loss (default: 0.1).')
+    parser.add_argument('--alignment_max_negatives', type=int, default=5000,
+                        help='Maximum additional negatives sampled per alignment batch (<=0 disables extra sampling).')
     parser.add_argument('--structure_column', type=str, default='structure',
                         help='Name of the column containing dot-bracket structures.')
     parser.add_argument(
