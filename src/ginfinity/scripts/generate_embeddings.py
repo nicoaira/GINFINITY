@@ -234,7 +234,7 @@ def main():
         # __file__ is something like ".../site-packages/ginfinity/scripts/generate_embeddings.py"
         script_dir = os.path.dirname(__file__)                # .../site-packages/ginfinity/scripts
         package_dir = os.path.dirname(script_dir)             # .../site-packages/ginfinity
-        default_weights = os.path.join(package_dir, "weights", "gin_weights_regression_180925.pth")
+        default_weights = os.path.join(package_dir, "weights", "gin_weights_alignment_061025.pth")
 
         if not os.path.exists(default_weights):
             sys.exit(f"ERROR: Default weights not found at {default_weights}. "
