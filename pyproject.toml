@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ginfinity"
-version = "0.2.2"
+version = "0.2.3"
 description = "GINFINITY: Graph-based RNA Structure Embedding Generator"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT License" }
 authors = [
-    { name = "Nicolas Aira", email = "nicoaira@example.com" }
+    { name = "Nicolas Aira", email = "naira@uic.es" }
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -28,7 +28,7 @@ classifiers = [
 
 dependencies = [
   "pandas >=2.2, <3.0",
-  "torch >=2.4, <3.0",
+  "torch ==2.8.0",
   "tqdm >=4.67, <5.0",
   "networkx >=3.4, <4.0",
   "gputil >=1.4, <2.0",
@@ -43,8 +43,7 @@ dependencies = [
   "torch-spline-conv ==1.2.2",
   
   # Force source build of forgi (avoids old NumPy-1.x wheels)
-  "Cython>3.0, <4.0",
-  "forgi @ git+https://github.com/ViennaRNA/forgi.git@v2.2.3"
+  "forgi @ git+https://github.com/nicoaira/forgi.git@v2.2.3-patch"
 ]
 
 [project.urls]

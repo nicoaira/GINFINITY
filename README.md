@@ -68,31 +68,31 @@ nvcc --version
 
 #### Choose Your Installation Command
 
-Note that you can install any version older than your CUDA driver. For example, if you have CUDA 12.5, you can install the version for CUDA 12.4 but not for CUDA 12.6
+Note that you can install any version older than your CUDA driver. For example, if you have CUDA 12.9, you can install the version for CUDA 12.8 but not for CUDA 13.0.
 
-- **For CUDA 12.6 systems (latest):**
+- **For CUDA 12.9 systems (latest):**
 ```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.6.0+cu126.html
+pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.8.0+cu129.html
 ```
 
-- **For CUDA 12.4 systems:**
+- **For CUDA 12.8 systems:**
 ```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
+pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
 ```
 
-- **For CUDA 11.8 systems (legacy clusters):**
+- **For CUDA 12.6 systems:**
 ```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.6.0+cu118.html
+pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.8.0+cu126.html
 ```
 
-**For CPU-only systems (no GPU):**
+- **For CPU-only systems (no GPU):**
 ```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.6.0+cpu.html
+pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.8.0+cpu.html
 ```
 
-- **To install a specific version (e.g., v2.0.1) with CUDA 12.8:**
+- **To install a specific version (e.g., v2.0.1) with CUDA 12.9:**
 ```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git@v2.0.1#egg=ginfinity -f https://data.pyg.org/whl/torch-2.6.0+cu128.html
+pip install git+https://github.com/nicoaira/GINFINITY.git@v2.0.1#egg=ginfinity -f https://data.pyg.org/whl/torch-2.8.0+cu129.html
 ```
 
 > **Important**: The `-f` flag specifies the PyTorch Geometric wheel index that matches your CUDA version. This ensures that the PyTorch Geometric extensions (torch-scatter, torch-sparse, torch-cluster, torch-spline-conv) are compiled for your specific CUDA version.
