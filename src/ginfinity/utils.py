@@ -208,8 +208,7 @@ def dotbracket_to_graph(dotbracket, sequence=None, graph_encoding: str = "standa
             continue
         if current_loop:
             loop_size = len(current_loop)
-            norm_denom = max(1, seq_len)
-            loop_size_norm = loop_size / norm_denom
+            loop_size_norm = float(loop_size)
             for pos_in_loop, node_idx in enumerate(current_loop):
                 if loop_size > 1:
                     rel_pos = pos_in_loop / (loop_size - 1)
@@ -224,8 +223,7 @@ def dotbracket_to_graph(dotbracket, sequence=None, graph_encoding: str = "standa
             current_loop = []
     if current_loop:
         loop_size = len(current_loop)
-        norm_denom = max(1, seq_len)
-        loop_size_norm = loop_size / norm_denom
+        loop_size_norm = float(loop_size)
         for pos_in_loop, node_idx in enumerate(current_loop):
             if loop_size > 1:
                 rel_pos = pos_in_loop / (loop_size - 1)
