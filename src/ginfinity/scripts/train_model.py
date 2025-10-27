@@ -94,7 +94,7 @@ def _resolve_diagnostic_dataset_path() -> str:
 def _setup_diagnostic_alignment_context(
     log_path: str,
     output_dir: str,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[list]:
     dataset_path = _resolve_diagnostic_dataset_path()
     if not os.path.exists(dataset_path):
         log_information(
@@ -133,45 +133,69 @@ def _setup_diagnostic_alignment_context(
         )
         return None
 
-    if len(df) < 2:
+    if len(df) < 5:
         log_information(
             log_path,
             {"status": "insufficient_rows", "path": dataset_path, "rows": len(df)},
             "diagnostic_alignment_setup",
         )
         print(
-            f"[diagnostic-alignment] Expected at least two sequences in {dataset_path}; skipping diagnostics."
+            f"[diagnostic-alignment] Expected at least 5 sequences in {dataset_path}; skipping diagnostics."
         )
         return None
 
-    rna1 = str(df.iloc[0]["Name"])
-    rna2 = str(df.iloc[1]["Name"])
     keep_cols = [col for col in ("DotBracket", "seq") if col in df.columns]
+    base_similarity_dir = os.path.join(output_dir, "similarity_matrices")
 
-    similarity_dir = os.path.join(output_dir, "similarity_matrices")
-
-    log_information(
-        log_path,
+    # Define multiple RNA pair comparisons with their subdirectories
+    comparisons = [
         {
-            "status": "ready",
-            "dataset": dataset_path,
+            "rna1_idx": 0,  # TRS00004A7003_9606_Hsapiens
+            "rna2_idx": 1,  # TRS000036E3A4_118256_Rporos
+            "subdir": "TERTS_matrices",
+        },
+        {
+            "rna1_idx": 2,  # DDX11L16
+            "rna2_idx": 3,  # DDX11L16_400
+            "subdir": "DDX11L16_vs_long_DDX11L16",
+        },
+        {
+            "rna1_idx": 2,  # DDX11L16
+            "rna2_idx": 4,  # DDX11L16_98
+            "subdir": "DDX11L16_vs_short_DDX11L16",
+        },
+    ]
+
+    configs = []
+    for comp in comparisons:
+        rna1 = str(df.iloc[comp["rna1_idx"]]["Name"])
+        rna2 = str(df.iloc[comp["rna2_idx"]]["Name"])
+        similarity_dir = os.path.join(base_similarity_dir, comp["subdir"])
+
+        configs.append({
+            "input_path": dataset_path,
             "rna1": rna1,
             "rna2": rna2,
-            "keep_cols": ",".join(keep_cols) if keep_cols else "",
-            "output_dir": similarity_dir,
-        },
-        "diagnostic_alignment_setup",
-    )
+            "id_column": "Name",
+            "structure_column": "DotBracket",
+            "keep_cols": keep_cols,
+            "similarity_dir": similarity_dir,
+        })
 
-    return {
-        "input_path": dataset_path,
-        "rna1": rna1,
-        "rna2": rna2,
-        "id_column": "Name",
-        "structure_column": "DotBracket",
-        "keep_cols": keep_cols,
-        "similarity_dir": similarity_dir,
-    }
+        log_information(
+            log_path,
+            {
+                "status": "ready",
+                "dataset": dataset_path,
+                "rna1": rna1,
+                "rna2": rna2,
+                "keep_cols": ",".join(keep_cols) if keep_cols else "",
+                "output_dir": similarity_dir,
+            },
+            "diagnostic_alignment_setup",
+        )
+
+    return configs
 
 
 def _ensure_pythonpath(env: Dict[str, str]) -> Dict[str, str]:
@@ -189,13 +213,10 @@ def _ensure_pythonpath(env: Dict[str, str]) -> Dict[str, str]:
 def _run_alignment_diagnostics(
     model: GINModel,
     epoch_index: int,
-    cfg: Dict[str, Any],
+    configs: list,
     device: str,
     log_path: str,
 ) -> None:
-    similarity_dir = cfg["similarity_dir"]
-    os.makedirs(similarity_dir, exist_ok=True)
-
     env = _ensure_pythonpath(os.environ.copy())
     env["PYTHONUNBUFFERED"] = "1"
 
@@ -203,19 +224,22 @@ def _run_alignment_diagnostics(
         checkpoint_path = os.path.join(tmpdir, f"epoch_{epoch_index:03d}.pth")
         model.save_checkpoint(checkpoint_path)
 
+        # Generate node embeddings once for all comparisons
         node_embeddings_path = os.path.join(tmpdir, "node_embeddings.tsv")
+        # Use the first config for common parameters (all configs share the same input file)
+        cfg_ref = configs[0]
         gen_cmd = [
             sys.executable,
             "-m",
             "ginfinity.scripts.generate_node_embeddings",
             "--input",
-            cfg["input_path"],
+            cfg_ref["input_path"],
             "--output",
             node_embeddings_path,
             "--id-column",
-            cfg["id_column"],
+            cfg_ref["id_column"],
             "--structure-column-name",
-            cfg["structure_column"],
+            cfg_ref["structure_column"],
             "--device",
             device,
             "--model-path",
@@ -226,8 +250,8 @@ def _run_alignment_diagnostics(
             "32",
             "--quiet",
         ]
-        if cfg["keep_cols"]:
-            gen_cmd.extend(["--keep-cols", ",".join(cfg["keep_cols"])])
+        if cfg_ref["keep_cols"]:
+            gen_cmd.extend(["--keep-cols", ",".join(cfg_ref["keep_cols"])])
 
         try:
             subprocess.run(gen_cmd, check=True, env=env)
@@ -245,69 +269,84 @@ def _run_alignment_diagnostics(
             print(f"[diagnostic-alignment] generate_node_embeddings failed for epoch {epoch_index}: {exc}")
             return
 
-        align_prefix = os.path.join(tmpdir, "alignment")
-        align_cmd = [
-            sys.executable,
-            "-m",
-            "ginfinity.scripts.align_node_embeddings",
-            "--input",
-            node_embeddings_path,
-            "--id-column",
-            cfg["id_column"],
-            "--rna1",
-            cfg["rna1"],
-            "--rna2",
-            cfg["rna2"],
-            "--structure-column-name",
-            cfg["structure_column"],
-            "--output-prefix",
-            align_prefix,
-            "--plot-matrix",
-        ]
+        # Generate alignment matrices for each RNA pair comparison
+        for cfg in configs:
+            similarity_dir = cfg["similarity_dir"]
+            os.makedirs(similarity_dir, exist_ok=True)
 
-        try:
-            subprocess.run(align_cmd, check=True, env=env)
-        except subprocess.CalledProcessError as exc:
+            align_prefix = os.path.join(tmpdir, f"alignment_{cfg['rna1']}_{cfg['rna2']}")
+            align_cmd = [
+                sys.executable,
+                "-m",
+                "ginfinity.scripts.align_node_embeddings",
+                "--input",
+                node_embeddings_path,
+                "--id-column",
+                cfg["id_column"],
+                "--rna1",
+                cfg["rna1"],
+                "--rna2",
+                cfg["rna2"],
+                "--structure-column-name",
+                cfg["structure_column"],
+                "--output-prefix",
+                align_prefix,
+                "--plot-matrix",
+            ]
+
+            try:
+                subprocess.run(align_cmd, check=True, env=env)
+            except subprocess.CalledProcessError as exc:
+                log_information(
+                    log_path,
+                    {
+                        "epoch": epoch_index,
+                        "rna1": cfg["rna1"],
+                        "rna2": cfg["rna2"],
+                        "stage": "align_node_embeddings",
+                        "returncode": exc.returncode,
+                        "cmd": " ".join(map(str, exc.cmd)) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd),
+                    },
+                    "diagnostic_alignment_error",
+                )
+                print(f"[diagnostic-alignment] align_node_embeddings failed for {cfg['rna1']} vs {cfg['rna2']} at epoch {epoch_index}: {exc}")
+                continue
+
+            png_source = align_prefix + ".matrix.png"
+            if not os.path.exists(png_source):
+                log_information(
+                    log_path,
+                    {
+                        "epoch": epoch_index,
+                        "rna1": cfg["rna1"],
+                        "rna2": cfg["rna2"],
+                        "stage": "missing_png",
+                        "expected": png_source,
+                    },
+                    "diagnostic_alignment_error",
+                )
+                print(
+                    f"[diagnostic-alignment] Expected PNG at {png_source} for {cfg['rna1']} vs {cfg['rna2']} at epoch {epoch_index}, but it was not created."
+                )
+                continue
+
+            destination = os.path.join(similarity_dir, f"epoch_{epoch_index:03d}.png")
+            shutil.move(png_source, destination)
+
             log_information(
                 log_path,
                 {
                     "epoch": epoch_index,
-                    "stage": "align_node_embeddings",
-                    "returncode": exc.returncode,
-                    "cmd": " ".join(map(str, exc.cmd)) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd),
+                    "rna1": cfg["rna1"],
+                    "rna2": cfg["rna2"],
+                    "png": destination,
+                    "dataset": cfg["input_path"],
                 },
-                "diagnostic_alignment_error",
-            )
-            print(f"[diagnostic-alignment] align_node_embeddings failed for epoch {epoch_index}: {exc}")
-            return
-
-        png_source = align_prefix + ".matrix.png"
-        if not os.path.exists(png_source):
-            log_information(
-                log_path,
-                {"epoch": epoch_index, "stage": "missing_png", "expected": png_source},
-                "diagnostic_alignment_error",
+                "diagnostic_alignment",
             )
             print(
-                f"[diagnostic-alignment] Expected PNG at {png_source} for epoch {epoch_index}, but it was not created."
+                f"[diagnostic-alignment] Saved similarity matrix for {cfg['rna1']} vs {cfg['rna2']} at epoch {epoch_index} to {destination}"
             )
-            return
-
-        destination = os.path.join(similarity_dir, f"epoch_{epoch_index:03d}.png")
-        shutil.move(png_source, destination)
-
-        log_information(
-            log_path,
-            {
-                "epoch": epoch_index,
-                "png": destination,
-                "dataset": cfg["input_path"],
-            },
-            "diagnostic_alignment",
-        )
-        print(
-            f"[diagnostic-alignment] Saved similarity matrix for epoch {epoch_index} to {destination}"
-        )
 
 def save_model_to_local(model, optimizer, epoch, model_id, log_path, output_path=None):
     """Save model checkpoint with metadata and return the storage path."""
