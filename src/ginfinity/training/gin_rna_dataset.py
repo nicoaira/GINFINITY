@@ -97,6 +97,8 @@ class GINAlignmentDataset(Dataset):
         show_progress: bool = False,
         progress_desc: str = "Preparing alignment dataset",
         cache_preprocessed: bool = False,
+        use_context_features: bool = True,
+        k_hops: int = 2,
     ):
         if isinstance(dataframe, str):
             df = pd.read_csv(dataframe, comment="#")
@@ -105,6 +107,8 @@ class GINAlignmentDataset(Dataset):
 
         self.graph_encoding = graph_encoding
         self.seq_weight = seq_weight
+        self.use_context_features = use_context_features
+        self.k_hops = k_hops
         self.alignment_groups: List[Dict[str, Any]] = []
         self.alignment_map = alignment_map
         self._progress_enabled = show_progress
@@ -253,7 +257,13 @@ class GINAlignmentDataset(Dataset):
             structure = row_data[self.structure_column]
             sequence = row_data.get("sequence")
             g = dotbracket_to_graph(structure, sequence, graph_encoding=self.graph_encoding)
-            data = graph_to_tensor(g, self.seq_weight, graph_encoding=self.graph_encoding)
+            data = graph_to_tensor(
+                g,
+                self.seq_weight,
+                graph_encoding=self.graph_encoding,
+                use_context_features=self.use_context_features,
+                k_hops=self.k_hops
+            )
 
             sequence_id = row_data.get("sequence_id")
             if sequence_id is not None and pd.notna(sequence_id):

@@ -34,6 +34,8 @@ class GINModel(nn.Module):
         edge_feature_dim: int = 4,
         gin_eps: float = 0.0,              # GIN epsilon parameter
         train_eps: bool = True,            # Whether to make GIN epsilon learnable
+        use_context_features: bool = False,  # Whether multi-hop context features are used
+        k_hops: int = 2,                   # Number of hops for context features
     ):
         super().__init__()
 
@@ -82,6 +84,8 @@ class GINModel(nn.Module):
             "edge_feature_dim": edge_dim,
             "gin_eps": gin_eps,
             "train_eps": train_eps,
+            "use_context_features": use_context_features,
+            "k_hops": k_hops,
         }
 
         self.hidden_dims = list(hidden_dims)
@@ -179,6 +183,8 @@ class GINModel(nn.Module):
             edge_feature_dim=edge_feature_dim,
             gin_eps=metadata.get('gin_eps', 0.0),
             train_eps=metadata.get('train_eps', True),
+            use_context_features=metadata.get('use_context_features', False),
+            k_hops=metadata.get('k_hops', 2),
         )
         model.load_state_dict(checkpoint['state_dict'])
         return model

@@ -373,8 +373,16 @@ def _one_hot_base(base):
         return [0.0, 0.0, 0.0, 0.0]
     return mapping.get(base.upper(), [0.0, 0.0, 0.0, 0.0])
 
-def graph_to_tensor(G, seq_weight: float = 0.0, graph_encoding: str = None):
-    """Convert a NetworkX graph to torch_geometric Data with weighted features."""
+def graph_to_tensor(G, seq_weight: float = 0.0, graph_encoding: str = None, use_context_features: bool = False, k_hops: int = 2):
+    """Convert a NetworkX graph to torch_geometric Data with weighted features.
+
+    Args:
+        G: NetworkX graph
+        seq_weight: Weight for sequence features (0-1)
+        graph_encoding: 'standard' or 'forgi'
+        use_context_features: Whether to add multi-hop context features (forgi encoding only). Default: False
+        k_hops: Number of hops for context features
+    """
 
     encoding = graph_encoding or G.graph.get('graph_encoding', 'standard')
     encoding = (encoding or 'standard').lower()
@@ -382,7 +390,7 @@ def graph_to_tensor(G, seq_weight: float = 0.0, graph_encoding: str = None):
     if encoding == 'standard':
         return _graph_to_tensor_standard(G, seq_weight)
     if encoding == 'forgi':
-        return _graph_to_tensor_forgi(G, seq_weight)
+        return _graph_to_tensor_forgi(G, seq_weight, use_context_features=use_context_features, k_hops=k_hops)
     raise ValueError(f"Unsupported graph_encoding '{encoding}'")
 
 
@@ -439,7 +447,57 @@ def _graph_to_tensor_standard(G, seq_weight: float):
     return data
 
 
-def _graph_to_tensor_forgi(G, seq_weight: float):
+def _compute_multi_hop_context_features(G, node, k_hops=2):
+    """Compute multi-hop context features for a node.
+
+    Returns a feature vector capturing the structural context within k hops:
+    - Count of each forgi element type within k hops (normalized)
+    - Total number of nodes within k hops (normalized by max possible)
+    - Diversity of structural elements (number of unique forgi types)
+    """
+    import networkx as nx
+
+    # Get k-hop neighborhood
+    try:
+        neighbors = set()
+        for hop in range(1, k_hops + 1):
+            # Use BFS to get nodes at exactly hop distance
+            hop_neighbors = nx.single_source_shortest_path_length(G, node, cutoff=hop)
+            neighbors.update(n for n, d in hop_neighbors.items() if d == hop)
+    except:
+        neighbors = set()
+
+    # Initialize feature vector
+    forgi_type_counts = {ft: 0 for ft in FORGI_NODE_TYPES}
+    total_neighbors = len(neighbors)
+
+    # Count forgi elements in neighborhood
+    for neighbor in neighbors:
+        neighbor_data = G.nodes[neighbor]
+        node_kind = neighbor_data.get('node_kind', 'base')
+        if node_kind == 'forgi':
+            forgi_type = neighbor_data.get('forgi_type', 'other')
+            forgi_type_counts[forgi_type] += 1
+
+    # Normalize counts by neighborhood size
+    if total_neighbors > 0:
+        forgi_counts_norm = [forgi_type_counts[ft] / total_neighbors for ft in FORGI_NODE_TYPES]
+    else:
+        forgi_counts_norm = [0.0] * len(FORGI_NODE_TYPES)
+
+    # Diversity: number of unique forgi types present
+    unique_forgi_types = sum(1 for count in forgi_type_counts.values() if count > 0)
+    diversity = unique_forgi_types / len(FORGI_NODE_TYPES)
+
+    # Neighborhood size (normalized by typical max - 50 nodes)
+    neighborhood_size_norm = min(total_neighbors / 50.0, 1.0)
+
+    # Combine features: [forgi_counts (7 dims), diversity (1 dim), size (1 dim)]
+    context_features = forgi_counts_norm + [diversity, neighborhood_size_norm]
+    return context_features
+
+
+def _graph_to_tensor_forgi(G, seq_weight: float, use_context_features: bool = False, k_hops: int = 2):
     nodes = sorted(G.nodes())
     node_features = []
     use_sequence = seq_weight > 0
@@ -487,6 +545,14 @@ def _graph_to_tensor_forgi(G, seq_weight: float):
             type_idx = FORGI_TYPE_TO_INDEX.get(forgi_type, FORGI_TYPE_TO_INDEX['other'])
             forgi_type_vec[type_idx] = 1.0
         features.extend(forgi_type_vec)
+
+        # Add multi-hop context features for base nodes only (forgi nodes already aggregate this info)
+        if use_context_features and node_kind == 'base':
+            context_feats = _compute_multi_hop_context_features(G, node, k_hops=k_hops)
+            features.extend(context_feats)
+        elif use_context_features:
+            # For forgi nodes, add zero padding to maintain consistent feature dimension
+            features.extend([0.0] * 9)  # 7 forgi counts + diversity + size
 
         node_features.append(features)
 

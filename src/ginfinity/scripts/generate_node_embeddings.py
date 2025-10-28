@@ -63,12 +63,12 @@ def _serialize_matrix(mat: torch.Tensor) -> str:
     return json.dumps(rounded, separators=(",", ":"))
 
 
-def _preprocess(args: Tuple[int, str, str, str, str, float, bool]):
+def _preprocess(args: Tuple[int, str, str, str, str, float, bool, bool, int]):
     """
     Worker: dot-bracket string -> torch_geometric Data
-    args: (idx, uid, struct, log_path, graph_encoding, seq_weight, debug_flag)
+    args: (idx, uid, struct, log_path, graph_encoding, seq_weight, debug_flag, use_context_features, k_hops)
     """
-    idx, uid, struct, log_path, graph_encoding, seq_weight, debug_preproc = args
+    idx, uid, struct, log_path, graph_encoding, seq_weight, debug_preproc, use_context_features, k_hops = args
     start_time = time.perf_counter()
     stage_timings = None
     if debug_preproc:
@@ -96,7 +96,13 @@ def _preprocess(args: Tuple[int, str, str, str, str, float, bool]):
         stage_timings["dotbracket_to_graph_s"] = round(graph_time, 3)
 
     tensor_start = time.perf_counter()
-    data = graph_to_tensor(graph, seq_weight=seq_weight, graph_encoding=graph_encoding) if graph is not None else None
+    data = graph_to_tensor(
+        graph,
+        seq_weight=seq_weight,
+        graph_encoding=graph_encoding,
+        use_context_features=use_context_features,
+        k_hops=k_hops
+    ) if graph is not None else None
     tensor_time = time.perf_counter() - tensor_start if graph is not None else 0.0
     if stage_timings is not None:
         stage_timings["graph_to_tensor_s"] = round(tensor_time, 3)
@@ -245,12 +251,16 @@ def generate_node_embeddings(
 
     metadata_encoding = 'standard'
     metadata_seq_weight = 0.0
+    metadata_use_context_features = False
+    metadata_k_hops = 2
     if model_path:
         temp_model = load_trained_model(model_path, 'cpu')
         if hasattr(temp_model, 'metadata'):
             metadata = temp_model.metadata
             metadata_encoding = metadata.get('graph_encoding', metadata_encoding)
             metadata_seq_weight = float(metadata.get('seq_weight', metadata_seq_weight) or 0.0)
+            metadata_use_context_features = metadata.get('use_context_features', False)
+            metadata_k_hops = metadata.get('k_hops', 2)
         del temp_model
 
     graph_encoding = (graph_encoding_override or metadata_encoding or 'standard').lower()
@@ -262,6 +272,9 @@ def generate_node_embeddings(
     else:
         seq_weight = float(metadata_seq_weight)
     seq_weight = max(0.0, min(1.0, seq_weight))
+
+    use_context_features = metadata_use_context_features
+    k_hops = metadata_k_hops
 
     run_context = {
         "total_rows": len(input_df),
@@ -290,6 +303,8 @@ def generate_node_embeddings(
             graph_encoding,
             seq_weight,
             debug_preprocessing,
+            use_context_features,
+            k_hops,
         )
         for idx, row in input_df.iterrows()
     ]

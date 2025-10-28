@@ -38,6 +38,18 @@ class AlignmentContrastiveLoss(nn.Module):
         Temperature applied to cosine similarities inside the InfoNCE term.
         Lower temperatures sharpen the distribution and penalize unrelated
         nodes with high similarity more aggressively. Default: 0.1
+    lambda_contrastive:
+        Weight for the contrastive loss term relative to the positive loss.
+        Higher values increase the emphasis on separating negatives.
+        Default: 1.0
+    intra_structure_weight:
+        Additional weight for intra-structure negative pairs (same RNA, different positions).
+        Higher values penalize false positives within the same structure more strongly.
+        Default: 2.0
+    diversity_weight:
+        Weight for diversity regularization that penalizes low variance within structures.
+        Encourages embeddings of different nodes in same structure to remain distinct.
+        Default: 0.1
     """
 
     def __init__(
@@ -46,6 +58,9 @@ class AlignmentContrastiveLoss(nn.Module):
         hard_negative_fraction: float = 0.85,
         max_negatives: int = 5000,
         temperature: float = 0.1,
+        lambda_contrastive: float = 1.0,
+        intra_structure_weight: float = 2.0,
+        diversity_weight: float = 0.1,
         debug: bool = False,
     ):
         super().__init__()
@@ -53,6 +68,9 @@ class AlignmentContrastiveLoss(nn.Module):
         self.hard_negative_fraction = float(hard_negative_fraction)
         self.max_negatives = max_negatives
         self.temperature = float(temperature)
+        self.lambda_contrastive = float(lambda_contrastive)
+        self.intra_structure_weight = float(intra_structure_weight)
+        self.diversity_weight = float(diversity_weight)
         self.debug_enabled = bool(debug)
         self.debug_log_path: Optional[str] = None
         self._debug_batch_index = 0
@@ -93,11 +111,62 @@ class AlignmentContrastiveLoss(nn.Module):
             embeddings, labels, graph_ids, categories
         )
 
-        return pos_loss + contrastive_loss
+        # Add diversity regularization to prevent collapse where all nodes in same structure become identical
+        diversity_loss = zero
+        if self.diversity_weight > 0.0:
+            diversity_loss = self._compute_diversity_loss(embeddings, graph_ids)
+
+        return pos_loss + self.lambda_contrastive * contrastive_loss + self.diversity_weight * diversity_loss
 
     def configure_debug(self, enabled: bool, log_path: Optional[str]) -> None:
         self.debug_enabled = bool(enabled)
         self.debug_log_path = log_path if self.debug_enabled else None
+
+    def set_temperature(self, temperature: float) -> None:
+        """Update the temperature parameter (useful for annealing schedules)."""
+        self.temperature = float(temperature)
+
+    def _compute_diversity_loss(self, embeddings: torch.Tensor, graph_ids: torch.Tensor) -> torch.Tensor:
+        """Compute diversity regularization loss.
+
+        Penalizes low variance of embeddings within each structure.
+        This prevents all nodes in the same structure from collapsing to identical embeddings.
+
+        Returns:
+            Loss value (higher when variance is low, i.e., nodes are too similar)
+        """
+        device = embeddings.device
+        unique_graphs = torch.unique(graph_ids)
+
+        if len(unique_graphs) == 0:
+            return embeddings.sum() * 0.0
+
+        per_graph_diversity_losses = []
+
+        for graph_id in unique_graphs:
+            # Get all nodes from this graph
+            graph_mask = graph_ids == graph_id
+            graph_embeddings = embeddings[graph_mask]
+
+            if graph_embeddings.shape[0] < 2:
+                # Need at least 2 nodes to compute variance
+                continue
+
+            # Compute variance along feature dimension, then mean across features
+            # High variance = high diversity (good), so loss = -log(variance + eps)
+            variance = torch.var(graph_embeddings, dim=0, unbiased=False)  # variance per feature
+            mean_variance = variance.mean()  # average variance across features
+
+            # Loss is inversely related to variance (we want to maximize variance)
+            # Using negative log to make it numerically stable
+            diversity_loss_for_graph = -torch.log(mean_variance + 1e-8)
+            per_graph_diversity_losses.append(diversity_loss_for_graph)
+
+        if len(per_graph_diversity_losses) == 0:
+            return embeddings.sum() * 0.0
+
+        # Average diversity loss across all graphs
+        return torch.stack(per_graph_diversity_losses).mean()
 
     def _serialize_debug_value(self, value: Any) -> Any:
         if isinstance(value, torch.Tensor):
@@ -296,6 +365,36 @@ class AlignmentContrastiveLoss(nn.Module):
             return zero
 
         contrastive_loss = -positive_log_probs.mean()
+
+        # Add explicit penalty for intra-structure negatives (same RNA, different positions)
+        # This directly addresses the problem of different loops within the same structure
+        # having spuriously high similarity
+        if self.intra_structure_weight > 0.0:
+            intra_structure_negative_mask = same_graph_subset & negative_mask_subset & (~diag_mask)
+            if intra_structure_negative_mask.any():
+                # For each node, compute the mean log probability of intra-structure negatives
+                # We want to maximize the probability of assigning low similarity to these pairs
+                intra_negative_logits = masked_logits.clone()
+                intra_negative_logits[~intra_structure_negative_mask] = float("-inf")
+
+                # Count how many intra-structure negatives each node has
+                intra_neg_count = intra_structure_negative_mask.sum(dim=1, keepdim=True).float()
+                has_intra_negs = intra_neg_count > 0
+
+                if has_intra_negs.any():
+                    # Compute log-sum-exp over intra-structure negatives only
+                    intra_logsumexp = torch.logsumexp(intra_negative_logits, dim=1, keepdim=True)
+                    intra_logsumexp = torch.where(torch.isfinite(intra_logsumexp), intra_logsumexp, torch.zeros_like(intra_logsumexp))
+
+                    # Compute mean similarity to intra-structure negatives (we want this low)
+                    # Average over the temperature-scaled logits
+                    intra_mean_sim = intra_logsumexp.squeeze() - torch.log(intra_neg_count.squeeze() + 1e-8)
+                    intra_mean_sim = intra_mean_sim[has_intra_negs.squeeze()]
+
+                    # Penalize high similarity to intra-structure negatives
+                    # The higher the similarity, the higher the penalty
+                    intra_structure_penalty = intra_mean_sim.mean()
+                    contrastive_loss = contrastive_loss + self.intra_structure_weight * intra_structure_penalty
 
         # Add a soft margin regularizer to keep unrelated nodes apart even when
         # they slip through the sampling mask.

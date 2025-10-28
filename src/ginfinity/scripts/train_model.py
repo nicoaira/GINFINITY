@@ -918,6 +918,8 @@ def _build_dataloaders_and_criterion(args, train_df, val_df, alignment_map):
             show_progress=args.preprocessing_progress,
             progress_desc="Preprocessing train alignments",
             cache_preprocessed=args.alignment_cache_preprocessed,
+            use_context_features=args.use_context_features,
+            k_hops=args.k_hops,
         )
         val_dataset = GINAlignmentDataset(
             val_df,
@@ -928,6 +930,8 @@ def _build_dataloaders_and_criterion(args, train_df, val_df, alignment_map):
             show_progress=args.preprocessing_progress,
             progress_desc="Preprocessing validation alignments",
             cache_preprocessed=args.alignment_cache_preprocessed,
+            use_context_features=args.use_context_features,
+            k_hops=args.k_hops,
         )
         alignment_max_negatives = args.alignment_max_negatives
         if alignment_max_negatives is not None and alignment_max_negatives <= 0:
@@ -938,6 +942,9 @@ def _build_dataloaders_and_criterion(args, train_df, val_df, alignment_map):
             hard_negative_fraction=args.hard_negative_fraction,
             max_negatives=alignment_max_negatives,
             temperature=args.alignment_temperature,
+            lambda_contrastive=args.alignment_lambda_contrastive,
+            intra_structure_weight=args.alignment_intra_structure_weight,
+            diversity_weight=args.alignment_diversity_weight,
             debug=getattr(args, "debug", False),
         )
         alignment_max_unaligned = max(0, int(args.alignment_unaligned_per_graph))
@@ -982,6 +989,12 @@ def _create_model(args, hidden_dim):
         seq_feature_dim = 4  # sequence channels always reserved (zeros if seq_weight=0)
         structural_bridge_dim = 1 + len(FORGI_NODE_TYPES)
         node_feature_dim = base_pair_dim + loop_feature_dim + seq_feature_dim + structural_bridge_dim
+
+        # Add context feature dimensions if enabled
+        if args.use_context_features:
+            context_feature_dim = 9  # 7 forgi counts + 1 diversity + 1 size
+            node_feature_dim += context_feature_dim
+
         edge_feature_dim = 7
     else:
         seq_feature_dim = 4 if args.seq_weight > 0 else 0
@@ -1003,6 +1016,8 @@ def _create_model(args, hidden_dim):
         normalize_nodes_before_pool=args.normalize_nodes_before_pool,
         gin_eps=args.gin_eps,
         train_eps=args.train_eps,
+        use_context_features=args.use_context_features,
+        k_hops=args.k_hops,
     )
     model.metadata["seq_weight"] = float(args.seq_weight)
     return model
@@ -1080,6 +1095,10 @@ def train_model_with_early_stopping(
         checkpoint_path: Optional[str] = None,
         diagnostic_alignment: bool = False,
         debug_enabled: bool = False,
+        temperature_annealing: bool = False,
+        temperature_initial: float = 0.2,
+        temperature_final: float = 0.1,
+        temperature_anneal_epochs: Optional[int] = None,
 ):
     """
     Train a GIN model with early stopping.
@@ -1174,6 +1193,21 @@ def train_model_with_early_stopping(
     try:
         for epoch in range(num_epochs):
             last_epoch = epoch
+
+            # Temperature annealing for alignment training
+            if training_mode == "alignment" and temperature_annealing:
+                anneal_epochs = temperature_anneal_epochs if temperature_anneal_epochs is not None else (num_epochs // 2)
+                if epoch < anneal_epochs:
+                    # Linear annealing from temperature_initial to temperature_final
+                    progress = epoch / anneal_epochs
+                    current_temp = temperature_initial + (temperature_final - temperature_initial) * progress
+                    criterion.set_temperature(current_temp)
+                    if epoch == 0 or epoch % 10 == 0:
+                        print(f"[Temperature Annealing] Epoch {epoch + 1}: temperature = {current_temp:.4f}")
+                else:
+                    # Keep at final temperature
+                    criterion.set_temperature(temperature_final)
+
             # Training phase
             model.train()
             running_loss = 0.0
@@ -1347,6 +1381,10 @@ def main():
     parser.add_argument('--input_path', type=str, default=None, help='Path to the input CSV/TSV file containing RNA secondary structures.')
     parser.add_argument('--model_id', type=str, default='gin_model', help='Model id')
     parser.add_argument('--graph_encoding', type=str, choices=['standard', 'forgi'], default='standard', help='Encoding to use for the transformation to graph')
+    parser.add_argument('--use_context_features', action='store_true',
+                        help='Add multi-hop context features to node representations (forgi encoding only). Default: False, use --use_context_features to enable.')
+    parser.add_argument('--k_hops', type=int, default=2,
+                        help='Number of hops for context feature computation (default: 2)')
     parser.add_argument('--hidden_dim', type=str, default='256', help='Hidden dimension size(s) for the model. Can be a single number or a comma-separated list of numbers of the same size of gin_layers(e.g. "256,126,256)" .')
     parser.add_argument('--output_dim', type=int, default=128, help='Output embedding size for the GIN model.')
     parser.add_argument('--batch_size', type=int, default=100, help='Batch size for training and validation.')
@@ -1410,6 +1448,18 @@ def main():
                         help='Fraction of negatives that should be hard negatives (same category). Default: 0.85')
     parser.add_argument('--alignment_temperature', type=float, default=0.1,
                         help='Temperature for the alignment contrastive InfoNCE loss (default: 0.1).')
+    parser.add_argument('--alignment_lambda_contrastive', type=float, default=1.0,
+                        help='Weight for the contrastive loss term. Higher values emphasize negative separation (default: 1.0).')
+    parser.add_argument('--alignment_intra_structure_weight', type=float, default=2.0,
+                        help='Additional weight for intra-structure negative pairs (same RNA, different positions). Default: 2.0')
+    parser.add_argument('--alignment_diversity_weight', type=float, default=0.1,
+                        help='Weight for diversity regularization (penalizes low variance within structures). Default: 0.1')
+    parser.add_argument('--temperature_annealing', action='store_true',
+                        help='Enable temperature annealing from initial temperature to final temperature.')
+    parser.add_argument('--temperature_initial', type=float, default=0.2,
+                        help='Initial temperature for annealing schedule (default: 0.2).')
+    parser.add_argument('--temperature_anneal_epochs', type=int, default=None,
+                        help='Number of epochs over which to anneal temperature (default: 50% of total epochs).')
     parser.add_argument('--alignment_max_negatives', type=int, default=5000,
                         help='Maximum additional negatives sampled per alignment batch (<=0 disables extra sampling).')
     parser.add_argument('--structure_column', type=str, default='structure',
@@ -1575,6 +1625,10 @@ def main():
             checkpoint_path=default_checkpoint_path,
             diagnostic_alignment=args.diagnostic_alignment,
             debug_enabled=args.debug,
+            temperature_annealing=args.temperature_annealing if args.training_mode == "alignment" else False,
+            temperature_initial=args.temperature_initial if args.training_mode == "alignment" else 0.2,
+            temperature_final=args.alignment_temperature if args.training_mode == "alignment" else 0.1,
+            temperature_anneal_epochs=args.temperature_anneal_epochs if args.training_mode == "alignment" else None,
         )
 
         end_time = time.time()
@@ -1715,6 +1769,10 @@ def main():
                 checkpoint_path=checkpoint_path,
                 diagnostic_alignment=args.diagnostic_alignment,
                 debug_enabled=args.debug,
+                temperature_annealing=args.temperature_annealing if args.training_mode == "alignment" else False,
+                temperature_initial=args.temperature_initial if args.training_mode == "alignment" else 0.2,
+                temperature_final=args.alignment_temperature if args.training_mode == "alignment" else 0.1,
+                temperature_anneal_epochs=args.temperature_anneal_epochs if args.training_mode == "alignment" else None,
             )
 
             round_elapsed_minutes = (time.time() - round_start_time) / 60
