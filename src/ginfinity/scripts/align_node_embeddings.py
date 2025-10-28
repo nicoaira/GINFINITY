@@ -18,17 +18,71 @@ def read_table_auto(path: str) -> pd.DataFrame:
     return pd.read_csv(path, sep=None, engine="python")
 
 
-def parse_embeddings(cell: str) -> np.ndarray:
+def parse_embeddings_legacy_json(cell: str) -> np.ndarray:
     """
-    Parse the JSON-encoded LxD matrix into a numpy array (float32).
+    Parse legacy nested JSON format for base embeddings (LxD matrix as JSON).
+    Used for backward compatibility with base_embeddings column.
     """
     try:
         arr = json.loads(cell)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse node_embeddings JSON: {e}") from e
+        raise ValueError(f"Failed to parse embeddings JSON: {e}") from e
     mat = np.asarray(arr, dtype=np.float32)
     if mat.ndim != 2:
-        raise ValueError("node_embeddings must be a 2D array [L x D].")
+        raise ValueError("Embeddings must be a 2D array [L x D].")
+    return mat
+
+
+def parse_embeddings_from_flat_format(df: pd.DataFrame, molecule_id: str, id_column: str) -> np.ndarray:
+    """
+    Parse node embeddings from flat format where each row represents one node.
+
+    Args:
+        df: DataFrame with columns [id_column, 'node_index', 'embedding_vector']
+        molecule_id: The molecule identifier to extract
+        id_column: Name of the ID column
+
+    Returns:
+        numpy array of shape (L, D) where L is number of nodes, D is embedding dimension
+    """
+    # Get all rows for this molecule
+    rows = df[df[id_column] == molecule_id]
+
+    if len(rows) == 0:
+        raise ValueError(f"No rows found for {id_column} == {molecule_id}")
+
+    # Check for required columns
+    if 'node_index' not in rows.columns:
+        raise ValueError("Input does not contain 'node_index' column (flat format required)")
+    if 'embedding_vector' not in rows.columns:
+        raise ValueError("Input does not contain 'embedding_vector' column (flat format required)")
+
+    # Sort by node_index to ensure correct order
+    rows = rows.sort_values('node_index')
+
+    # Verify node indices are sequential starting from 0
+    expected_indices = list(range(len(rows)))
+    actual_indices = rows['node_index'].tolist()
+    if actual_indices != expected_indices:
+        raise ValueError(
+            f"Node indices for {molecule_id} are not sequential 0..{len(rows)-1}. "
+            f"Got: {actual_indices}"
+        )
+
+    # Parse embedding vectors (comma-separated floats)
+    embeddings = []
+    for idx, row in rows.iterrows():
+        vec_str = str(row['embedding_vector']).strip()
+        try:
+            vec = np.array([float(x) for x in vec_str.split(',')], dtype=np.float32)
+            embeddings.append(vec)
+        except (ValueError, AttributeError) as e:
+            raise ValueError(
+                f"Failed to parse embedding_vector for {molecule_id} node {row['node_index']}: {e}"
+            ) from e
+
+    # Stack into matrix
+    mat = np.stack(embeddings, axis=0)
     return mat
 
 
@@ -552,22 +606,15 @@ def main():
     df = read_table_auto(args.input)
     if args.id_column not in df.columns:
         raise ValueError(f"Required column '{args.id_column}' not found in input.")
-    if "node_embeddings" not in df.columns:
-        raise ValueError("Input does not contain a 'node_embeddings' column.")
+    if "node_index" not in df.columns or "embedding_vector" not in df.columns:
+        raise ValueError(
+            "Input must be in flat format with 'node_index' and 'embedding_vector' columns. "
+            "Old nested format is no longer supported."
+        )
 
-    rows1 = df[df[args.id_column] == args.rna1]
-    rows2 = df[df[args.id_column] == args.rna2]
-    if len(rows1) == 0:
-        raise ValueError(f"No row found where {args.id_column} == {args.rna1}")
-    if len(rows2) == 0:
-        raise ValueError(f"No row found where {args.id_column} == {args.rna2}")
-    if len(rows1) > 1:
-        raise ValueError(f"Multiple rows found for {args.id_column} == {args.rna1}; expected exactly one.")
-    if len(rows2) > 1:
-        raise ValueError(f"Multiple rows found for {args.id_column} == {args.rna2}; expected exactly one.")
-
-    A_struct = parse_embeddings(rows1.iloc[0]["node_embeddings"])
-    B_struct = parse_embeddings(rows2.iloc[0]["node_embeddings"])
+    # Parse embeddings from flat format
+    A_struct = parse_embeddings_from_flat_format(df, args.rna1, args.id_column)
+    B_struct = parse_embeddings_from_flat_format(df, args.rna2, args.id_column)
     sim_struct = cosine_similarity_matrix(A_struct, B_struct)
 
     sim = sim_struct
@@ -588,8 +635,9 @@ def main():
             br1 = base_df[base_df[args.id_column] == args.rna1]
             br2 = base_df[base_df[args.id_column] == args.rna2]
             if len(br1) == 1 and len(br2) == 1:
-                A_base = parse_embeddings(br1.iloc[0][args.base_embeds_col])
-                B_base = parse_embeddings(br2.iloc[0][args.base_embeds_col])
+                # Base embeddings are still in legacy nested JSON format
+                A_base = parse_embeddings_legacy_json(br1.iloc[0][args.base_embeds_col])
+                B_base = parse_embeddings_legacy_json(br2.iloc[0][args.base_embeds_col])
                 if A_base.shape[0] != A_struct.shape[0] or B_base.shape[0] != B_struct.shape[0]:
                     trimmed = False
                     if A_base.shape[0] == A_struct.shape[0] + 2 and B_base.shape[0] == B_struct.shape[0] + 2:

@@ -27,25 +27,65 @@ import pandas as pd
 # -----------------------------------------------------------------------------
 
 def read_embeddings_table(path: str) -> pd.DataFrame:
+    """Read embeddings table in flat format."""
     if path.endswith(".tsv"):
         df = pd.read_csv(path, sep="\t", low_memory=False)
     elif path.endswith(".csv"):
         df = pd.read_csv(path)
     else:
         df = pd.read_csv(path, sep=None, engine="python")
-    if "node_embeddings" not in df.columns:
-        raise ValueError("Input does not contain a 'node_embeddings' column.")
+    if "node_index" not in df.columns or "embedding_vector" not in df.columns:
+        raise ValueError(
+            "Input must be in flat format with 'node_index' and 'embedding_vector' columns. "
+            "Old nested format is no longer supported."
+        )
     return df
 
 
-def parse_node_embeddings(cell: str) -> np.ndarray:
-    try:
-        arr = json.loads(cell)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse node_embeddings JSON: {e}") from e
-    mat = np.asarray(arr, dtype=np.float32)
-    if mat.ndim != 2:
-        raise ValueError("node_embeddings must be a 2D array [L x D].")
+def parse_node_embeddings_from_flat(df: pd.DataFrame, molecule_id: str, id_column: str) -> np.ndarray:
+    """
+    Parse node embeddings from flat format where each row represents one node.
+
+    Args:
+        df: DataFrame with columns [id_column, 'node_index', 'embedding_vector']
+        molecule_id: The molecule identifier to extract
+        id_column: Name of the ID column
+
+    Returns:
+        numpy array of shape (L, D) where L is number of nodes, D is embedding dimension
+    """
+    # Get all rows for this molecule
+    rows = df[df[id_column] == molecule_id]
+
+    if len(rows) == 0:
+        raise ValueError(f"No rows found for {id_column} == {molecule_id}")
+
+    # Sort by node_index to ensure correct order
+    rows = rows.sort_values('node_index')
+
+    # Verify node indices are sequential starting from 0
+    expected_indices = list(range(len(rows)))
+    actual_indices = rows['node_index'].tolist()
+    if actual_indices != expected_indices:
+        raise ValueError(
+            f"Node indices for {molecule_id} are not sequential 0..{len(rows)-1}. "
+            f"Got: {actual_indices}"
+        )
+
+    # Parse embedding vectors (comma-separated floats)
+    embeddings = []
+    for idx, row in rows.iterrows():
+        vec_str = str(row['embedding_vector']).strip()
+        try:
+            vec = np.array([float(x) for x in vec_str.split(',')], dtype=np.float32)
+            embeddings.append(vec)
+        except (ValueError, AttributeError) as e:
+            raise ValueError(
+                f"Failed to parse embedding_vector for {molecule_id} node {row['node_index']}: {e}"
+            ) from e
+
+    # Stack into matrix
+    mat = np.stack(embeddings, axis=0)
     return mat
 
 
@@ -409,16 +449,27 @@ def main():
     if args.structure_column_name and args.structure_column_name not in df.columns:
         raise ValueError(f"Structure column '{args.structure_column_name}' not found in input.")
 
-    # Load and cache per-row embeddings and structures
+    # Load and cache per-molecule embeddings and structures
+    # In flat format, we have multiple rows per molecule (one per node)
+    # Get unique molecule IDs
+    unique_ids = df[args.id_column].unique().tolist()
+
     ids: List[str] = []
     mats: List[np.ndarray] = []
     structs: List[Optional[str]] = []
-    for _, row in df.iterrows():
-        ids.append(str(row[args.id_column]))
-        M = parse_node_embeddings(row["node_embeddings"])
+
+    for molecule_id in unique_ids:
+        ids.append(str(molecule_id))
+        M = parse_node_embeddings_from_flat(df, molecule_id, args.id_column)
         mats.append(M.astype(np.float32, copy=False))
+
+        # Get structure if available (from first row of this molecule)
         if args.structure_column_name:
-            structs.append(str(row[args.structure_column_name]))
+            mol_rows = df[df[args.id_column] == molecule_id]
+            if len(mol_rows) > 0 and args.structure_column_name in mol_rows.columns:
+                structs.append(str(mol_rows.iloc[0][args.structure_column_name]))
+            else:
+                structs.append(None)
         else:
             structs.append(None)
 

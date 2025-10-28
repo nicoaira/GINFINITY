@@ -193,62 +193,143 @@ def load_tsv(path: str,
              paired_col: Optional[str] = None,
              base_embeds_col: Optional[str] = None) -> List[SequenceRecord]:
     df = pd.read_csv(path, sep='\t')
-    if name_col not in df.columns or embeds_col not in df.columns:
-        raise ValueError(f"Missing required columns: {name_col}, {embeds_col}")
+    if name_col not in df.columns:
+        raise ValueError(f"Missing required column: {name_col}")
 
-    records: List[SequenceRecord] = []
-    for idx, row in df.iterrows():
-        name = str(row[name_col])
-        embeds_raw = _json_loads_maybe(row[embeds_col])
-        if embeds_raw is None:
-            print(f"[WARN] Row {idx} ('{name}') has invalid embeddings; skipping.")
-            continue
-        try:
-            emb = np.array(embeds_raw, dtype=np.float32)
-        except Exception:
-            print(f"[WARN] Row {idx} ('{name}') embeddings parse failed; skipping.")
-            continue
-        if emb.ndim != 2 or emb.shape[0] == 0:
-            print(f"[WARN] Row {idx} ('{name}') embeddings malformed; skipping.")
-            continue
+    # Check if we're using flat format (new) or nested format (legacy)
+    is_flat_format = 'node_index' in df.columns and 'embedding_vector' in df.columns
 
-        dotbracket = None
-        paired_idx = None
-        if paired_col and paired_col in df.columns:
-            paired_raw = _json_loads_maybe(row[paired_col])
-            if isinstance(paired_raw, list) and len(paired_raw) == emb.shape[0]:
+    if is_flat_format:
+        # New flat format: one row per node
+        if embeds_col != 'node_embeddings' and embeds_col != 'embedding_vector':
+            print(f"[INFO] Using flat format; ignoring --embeds-col={embeds_col}, using 'embedding_vector' column")
+
+        # Get unique molecule IDs
+        unique_ids = df[name_col].unique()
+        records: List[SequenceRecord] = []
+
+        for mol_id in unique_ids:
+            # Get all rows for this molecule
+            mol_rows = df[df[name_col] == mol_id].sort_values('node_index')
+
+            # Parse embeddings from flat format
+            embeddings = []
+            for _, row in mol_rows.iterrows():
+                vec_str = str(row['embedding_vector']).strip()
                 try:
-                    paired_idx = [int(v) for v in paired_raw]
-                except Exception:
-                    paired_idx = None
-        if paired_idx is None and dotbracket_col and dotbracket_col in df.columns:
-            db = row[dotbracket_col]
-            if isinstance(db, str) and len(db) == emb.shape[0]:
-                dotbracket = db
-                paired_idx = _dotbracket_to_pairs(db)
+                    vec = np.array([float(x) for x in vec_str.split(',')], dtype=np.float32)
+                    embeddings.append(vec)
+                except (ValueError, AttributeError) as e:
+                    print(f"[WARN] Molecule '{mol_id}' node {row['node_index']} has invalid embedding; skipping molecule.")
+                    embeddings = None
+                    break
 
-        # Optional base embeddings
-        base_arr: Optional[np.ndarray] = None
-        if base_embeds_col and base_embeds_col in df.columns:
-            base_raw = _json_loads_maybe(row[base_embeds_col])
-            if isinstance(base_raw, list):
-                try:
-                    base_arr = np.array(base_raw, dtype=np.float32)
-                except Exception:
-                    base_arr = None
-                if base_arr is not None:
-                    if base_arr.ndim != 2:
-                        base_arr = None
-                    elif base_arr.shape[0] == emb.shape[0] + 2:
-                        # Trim BOS/EOS to match structural length
-                        base_arr = base_arr[1:-1]
-                    elif base_arr.shape[0] != emb.shape[0]:
-                        print(
-                            f"[WARN] Row {idx} ('{name}') base embeddings length mismatch; ignoring base for this sequence."
-                        )
-                        base_arr = None
+            if embeddings is None or len(embeddings) == 0:
+                continue
 
-        records.append(SequenceRecord(name=name, emb=emb, dotbracket=dotbracket, paired_idx=paired_idx, base_emb=base_arr))
+            emb = np.stack(embeddings, axis=0)
+
+            # Get dotbracket/paired from first row
+            first_row = mol_rows.iloc[0]
+            dotbracket = None
+            paired_idx = None
+
+            if paired_col and paired_col in df.columns:
+                paired_raw = _json_loads_maybe(first_row[paired_col])
+                if isinstance(paired_raw, list) and len(paired_raw) == emb.shape[0]:
+                    try:
+                        paired_idx = [int(v) for v in paired_raw]
+                    except Exception:
+                        paired_idx = None
+
+            if paired_idx is None and dotbracket_col and dotbracket_col in df.columns:
+                db = first_row[dotbracket_col]
+                if isinstance(db, str) and len(db) == emb.shape[0]:
+                    dotbracket = db
+                    paired_idx = _dotbracket_to_pairs(db)
+
+            # Optional base embeddings (still in nested format)
+            base_arr: Optional[np.ndarray] = None
+            if base_embeds_col and base_embeds_col in df.columns:
+                base_raw = _json_loads_maybe(first_row[base_embeds_col])
+                if isinstance(base_raw, list):
+                    try:
+                        base_arr = np.array(base_raw, dtype=np.float32)
+                    except Exception:
+                        base_arr = None
+                    if base_arr is not None:
+                        if base_arr.ndim != 2:
+                            base_arr = None
+                        elif base_arr.shape[0] == emb.shape[0] + 2:
+                            # Trim BOS/EOS to match structural length
+                            base_arr = base_arr[1:-1]
+                        elif base_arr.shape[0] != emb.shape[0]:
+                            print(
+                                f"[WARN] Molecule '{mol_id}' base embeddings length mismatch; ignoring base for this sequence."
+                            )
+                            base_arr = None
+
+            records.append(SequenceRecord(name=str(mol_id), emb=emb, dotbracket=dotbracket, paired_idx=paired_idx, base_emb=base_arr))
+
+    else:
+        # Legacy nested format: one row per molecule
+        if embeds_col not in df.columns:
+            raise ValueError(f"Missing required column: {embeds_col}")
+
+        records: List[SequenceRecord] = []
+        for idx, row in df.iterrows():
+            name = str(row[name_col])
+            embeds_raw = _json_loads_maybe(row[embeds_col])
+            if embeds_raw is None:
+                print(f"[WARN] Row {idx} ('{name}') has invalid embeddings; skipping.")
+                continue
+            try:
+                emb = np.array(embeds_raw, dtype=np.float32)
+            except Exception:
+                print(f"[WARN] Row {idx} ('{name}') embeddings parse failed; skipping.")
+                continue
+            if emb.ndim != 2 or emb.shape[0] == 0:
+                print(f"[WARN] Row {idx} ('{name}') embeddings malformed; skipping.")
+                continue
+
+            dotbracket = None
+            paired_idx = None
+            if paired_col and paired_col in df.columns:
+                paired_raw = _json_loads_maybe(row[paired_col])
+                if isinstance(paired_raw, list) and len(paired_raw) == emb.shape[0]:
+                    try:
+                        paired_idx = [int(v) for v in paired_raw]
+                    except Exception:
+                        paired_idx = None
+            if paired_idx is None and dotbracket_col and dotbracket_col in df.columns:
+                db = row[dotbracket_col]
+                if isinstance(db, str) and len(db) == emb.shape[0]:
+                    dotbracket = db
+                    paired_idx = _dotbracket_to_pairs(db)
+
+            # Optional base embeddings
+            base_arr: Optional[np.ndarray] = None
+            if base_embeds_col and base_embeds_col in df.columns:
+                base_raw = _json_loads_maybe(row[base_embeds_col])
+                if isinstance(base_raw, list):
+                    try:
+                        base_arr = np.array(base_raw, dtype=np.float32)
+                    except Exception:
+                        base_arr = None
+                    if base_arr is not None:
+                        if base_arr.ndim != 2:
+                            base_arr = None
+                        elif base_arr.shape[0] == emb.shape[0] + 2:
+                            # Trim BOS/EOS to match structural length
+                            base_arr = base_arr[1:-1]
+                        elif base_arr.shape[0] != emb.shape[0]:
+                            print(
+                                f"[WARN] Row {idx} ('{name}') base embeddings length mismatch; ignoring base for this sequence."
+                            )
+                            base_arr = None
+
+            records.append(SequenceRecord(name=name, emb=emb, dotbracket=dotbracket, paired_idx=paired_idx, base_emb=base_arr))
+
     return records
 
 

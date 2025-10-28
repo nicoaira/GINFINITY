@@ -401,7 +401,7 @@ def generate_node_embeddings(
             f"duration={inference_summary['duration_s']}s"
         )
 
-    # 3) Assemble output
+    # 3) Assemble output - flat format (one row per node)
     assemble_start = time.perf_counter()
     rows = []
     for idx, uid, node_json in results:
@@ -410,27 +410,31 @@ def generate_node_embeddings(
         except KeyError:
             log_information(log_path, {"warning": f"Row {idx} missing after inference"})
             continue
-        out = {c: base[c] for c in final_keep if c in base}
-        out["node_embeddings"] = node_json
-        rows.append(out)
+
+        # Deserialize the node embeddings matrix (List of lists: L x D)
+        node_matrix = json.loads(node_json)
+
+        # Create one row per node
+        for node_idx, embedding in enumerate(node_matrix):
+            row = {
+                id_column: base[id_column],
+                "node_index": node_idx,
+                "embedding_vector": ",".join(f"{v:.6f}" for v in embedding)
+            }
+            rows.append(row)
 
     out_df = pd.DataFrame(rows)
 
-    # Reorder: id, optional window_{start,end}, node_embeddings, then the rest
-    cols = [id_column]
-    if "window_start" in out_df.columns:
-        cols.append("window_start")
-    if "window_end" in out_df.columns:
-        cols.append("window_end")
-    cols.append("node_embeddings")
-    others = [c for c in out_df.columns if c not in cols]
-    out_df = out_df[cols + sorted(others)]
+    # Column order: id_column, node_index, embedding_vector
+    cols = [id_column, "node_index", "embedding_vector"]
+    out_df = out_df[cols]
 
     out_df.to_csv(output_path, sep="\t", index=False, na_rep="NaN")
     assemble_duration = time.perf_counter() - assemble_start
     total_duration = time.perf_counter() - total_start
     output_summary = {
-        "num_node_embeddings": len(out_df),
+        "num_node_rows": len(out_df),
+        "num_molecules": len(results),
         "duration_s": round(assemble_duration, 3),
         "output_path": output_path,
         "total_duration_s": round(total_duration, 3),
@@ -439,11 +443,12 @@ def generate_node_embeddings(
     if not quiet:
         print(
             "[generate_node_embeddings] Wrote output: "
-            f"rows={output_summary['num_node_embeddings']} "
+            f"node_rows={output_summary['num_node_rows']} "
+            f"molecules={output_summary['num_molecules']} "
             f"duration={output_summary['duration_s']}s "
             f"total={output_summary['total_duration_s']}s"
         )
-    print(f"Per-node embeddings saved to {output_path}")
+    print(f"Per-node embeddings (flat format) saved to {output_path}")
 
 
 def preprocess_and_save(
@@ -618,8 +623,9 @@ def preprocess_and_save(
 def main():
     parser = argparse.ArgumentParser(
         description=(
-            "Generate per-node embeddings (LxD) before pooling from either raw "
-            "dot-bracket TSV/CSV or precomputed PyG graphs."
+            "Generate per-node embeddings from either raw dot-bracket TSV/CSV or "
+            "precomputed PyG graphs. Output is in flat format: one row per node "
+            "with columns [id, node_index, embedding_vector]."
         )
     )
 
@@ -629,7 +635,7 @@ def main():
     parser.add_argument("--graph-pt", help="Path to windows_graphs.pt")
     parser.add_argument("--meta-tsv", help="Path to windows_metadata.tsv")
 
-    parser.add_argument("--output", required=True, help="Output TSV for per-node embeddings.")
+    parser.add_argument("--output", required=True, help="Output TSV for per-node embeddings in flat format (one row per node).")
 
     parser.add_argument(
         "--model-path",
@@ -786,26 +792,32 @@ def main():
                 pbar.update(len(chunk))
             pbar.close()
 
-        # Assemble & write
+        # Assemble & write - flat format (one row per node)
         rows = []
         for meta, node_json in results:
-            row = meta.copy()
-            row["node_embeddings"] = node_json
-            rows.append(row)
+            # Deserialize the node embeddings matrix (List of lists: L x D)
+            node_matrix = json.loads(node_json)
+
+            # Get the molecule ID from metadata
+            mol_id = meta[args.id_column]
+
+            # Create one row per node
+            for node_idx, embedding in enumerate(node_matrix):
+                row = {
+                    args.id_column: mol_id,
+                    "node_index": node_idx,
+                    "embedding_vector": ",".join(f"{v:.6f}" for v in embedding)
+                }
+                rows.append(row)
 
         out_df = pd.DataFrame(rows)
-        # reorder columns if present
-        cols = []
-        for c in ["window_id", args.id_column, "window_start", "window_end"]:
-            if c in out_df.columns:
-                cols.append(c)
-        cols.append("node_embeddings")
-        others = [c for c in out_df.columns if c not in cols]
-        out_df = out_df[cols + others]
+        # Column order: id_column, node_index, embedding_vector
+        cols = [args.id_column, "node_index", "embedding_vector"]
+        out_df = out_df[cols]
 
         out_df.to_csv(args.output, sep="\t", index=False, na_rep="NaN")
-        log_information(os.path.splitext(args.output)[0] + ".log", {"num_node_embeddings": len(out_df)}, "generate_node_embeddings")
-        print(f"Per-node embeddings saved to {args.output}")
+        log_information(os.path.splitext(args.output)[0] + ".log", {"num_node_rows": len(out_df), "num_molecules": len(results)}, "generate_node_embeddings")
+        print(f"Per-node embeddings (flat format) saved to {args.output}: {len(out_df)} node rows from {len(results)} molecules")
         sys.exit(0)
 
     # Otherwise raw TSV/CSV mode
