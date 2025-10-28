@@ -446,6 +446,175 @@ def generate_node_embeddings(
     print(f"Per-node embeddings saved to {output_path}")
 
 
+def preprocess_and_save(
+    input_df: pd.DataFrame,
+    graph_output_path: str,
+    meta_output_path: str,
+    log_path: str,
+    structure_column: str,
+    id_column: str,
+    num_workers: int = 4,
+    keep_cols: Optional[List[str]] = None,
+    quiet: bool = False,
+    graph_encoding_override: Optional[str] = None,
+    seq_weight_override: Optional[float] = None,
+    debug_preprocessing: bool = False,
+    model_path: Optional[str] = None,
+):
+    """Preprocess structures and save graphs+metadata for later inference."""
+    if num_workers and num_workers > 1:
+        _ensure_spawn_start_method()
+
+    # Decide which columns to carry through
+    final_keep = [id_column]
+    if "seq_len" in input_df.columns:
+        final_keep.append("seq_len")
+    if keep_cols:
+        final_keep.extend(keep_cols)
+
+    total_start = time.perf_counter()
+
+    # Load metadata from model if available
+    metadata_encoding = 'standard'
+    metadata_seq_weight = 0.0
+    metadata_use_context_features = False
+    metadata_k_hops = 2
+    if model_path:
+        temp_model = load_trained_model(model_path, 'cpu')
+        if hasattr(temp_model, 'metadata'):
+            metadata = temp_model.metadata
+            metadata_encoding = metadata.get('graph_encoding', metadata_encoding)
+            metadata_seq_weight = float(metadata.get('seq_weight', metadata_seq_weight) or 0.0)
+            metadata_use_context_features = metadata.get('use_context_features', False)
+            metadata_k_hops = metadata.get('k_hops', 2)
+        del temp_model
+
+    graph_encoding = (graph_encoding_override or metadata_encoding or 'standard').lower()
+    if graph_encoding not in {'standard', 'forgi'}:
+        raise ValueError(f"Unsupported graph encoding '{graph_encoding}'")
+
+    if seq_weight_override is not None:
+        seq_weight = float(seq_weight_override)
+    else:
+        seq_weight = float(metadata_seq_weight)
+    seq_weight = max(0.0, min(1.0, seq_weight))
+
+    use_context_features = metadata_use_context_features
+    k_hops = metadata_k_hops
+
+    run_context = {
+        "total_rows": len(input_df),
+        "graph_encoding": graph_encoding,
+        "seq_weight": seq_weight,
+        "num_workers": num_workers,
+        "debug_preprocessing": debug_preprocessing,
+        "mode": "preprocess_only",
+    }
+    log_information(log_path, run_context, "preprocess_only_config")
+    if not quiet:
+        print(
+            "[preprocess_only] Starting preprocessing: "
+            f"rows={run_context['total_rows']} "
+            f"graph_encoding={graph_encoding} seq_weight={seq_weight}"
+        )
+
+    # Preprocess rows -> Data
+    tasks = [
+        (
+            idx,
+            row[id_column],
+            row[structure_column],
+            log_path,
+            graph_encoding,
+            seq_weight,
+            debug_preprocessing,
+            use_context_features,
+            k_hops,
+        )
+        for idx, row in input_df.iterrows()
+    ]
+    preproc = []
+    preprocessing_start = time.perf_counter()
+    if num_workers > 1:
+        with Pool(num_workers) as pool:
+            for res in tqdm(
+                pool.imap_unordered(_preprocess, tasks),
+                total=len(tasks),
+                disable=quiet,
+                desc="Preprocessing",
+            ):
+                if res is not None:
+                    preproc.append(res)
+    else:
+        for t in tqdm(tasks, disable=quiet, desc="Preprocessing"):
+            res = _preprocess(t)
+            if res is not None:
+                preproc.append(res)
+
+    preprocessing_duration = time.perf_counter() - preprocessing_start
+    preproc_summary = {
+        "input_rows": len(tasks),
+        "valid_graphs": len(preproc),
+        "skipped": len(tasks) - len(preproc),
+        "duration_s": round(preprocessing_duration, 3),
+        "used_multiprocessing": num_workers > 1,
+    }
+    log_information(log_path, preproc_summary, "preprocessing_summary")
+    if not quiet:
+        print(
+            "[preprocess_only] Preprocessing complete: "
+            f"valid={preproc_summary['valid_graphs']}/{len(tasks)} "
+            f"skipped={preproc_summary['skipped']} "
+            f"duration={preproc_summary['duration_s']}s"
+        )
+
+    if not preproc:
+        print("No valid structures to process.")
+        return
+
+    # Build graph dictionary and metadata
+    graph_dict = {}
+    meta_rows = []
+    for idx, uid, data in preproc:
+        graph_dict[uid] = data
+        try:
+            base = input_df.loc[idx]
+        except KeyError:
+            log_information(log_path, {"warning": f"Row {idx} missing in metadata assembly"})
+            continue
+        meta = {c: base[c] for c in final_keep if c in base}
+        meta_rows.append(meta)
+
+    # Save graphs
+    save_start = time.perf_counter()
+    torch.save(graph_dict, graph_output_path)
+    if not quiet:
+        print(f"[preprocess_only] Saved {len(graph_dict)} graphs to {graph_output_path}")
+
+    # Save metadata
+    meta_df = pd.DataFrame(meta_rows)
+    meta_df.to_csv(meta_output_path, sep="\t", index=False, na_rep="NaN")
+    if not quiet:
+        print(f"[preprocess_only] Saved metadata to {meta_output_path}")
+
+    save_duration = time.perf_counter() - save_start
+    total_duration = time.perf_counter() - total_start
+
+    summary = {
+        "graphs_saved": len(graph_dict),
+        "save_duration_s": round(save_duration, 3),
+        "total_duration_s": round(total_duration, 3),
+        "graph_output": graph_output_path,
+        "meta_output": meta_output_path,
+    }
+    log_information(log_path, summary, "preprocess_only_summary")
+    if not quiet:
+        print(
+            f"[preprocess_only] Complete: {summary['graphs_saved']} graphs "
+            f"in {summary['total_duration_s']}s"
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=(
@@ -500,6 +669,19 @@ def main():
         action="store_true",
         help="Log per-structure preprocessing timings to the run log for debugging.",
     )
+    parser.add_argument(
+        "--preprocess-only",
+        action="store_true",
+        help="Only preprocess structures to PyG graphs and save. No inference.",
+    )
+    parser.add_argument(
+        "--graph-output",
+        help="(preprocess-only) Path to save preprocessed graphs (.pt file).",
+    )
+    parser.add_argument(
+        "--meta-output",
+        help="(preprocess-only) Path to save metadata (.tsv file).",
+    )
     args = parser.parse_args()
 
     if args.model_path is None:
@@ -518,12 +700,48 @@ def main():
                 % args.model_path
             )
 
+    # Preprocess-only mode
+    if args.preprocess_only:
+        if not args.input:
+            sys.exit("ERROR: --preprocess-only requires --input (raw TSV/CSV with structures).")
+        if not args.graph_output:
+            sys.exit("ERROR: --preprocess-only requires --graph-output (path to save .pt file).")
+        if not args.meta_output:
+            sys.exit("ERROR: --preprocess-only requires --meta-output (path to save .tsv file).")
+
+        df, log_path, propagate = setup_and_read_input(args, need_model=False)
+        preprocess_and_save(
+            input_df=df,
+            graph_output_path=args.graph_output,
+            meta_output_path=args.meta_output,
+            log_path=log_path,
+            structure_column=args.structure_column_name,
+            id_column=args.id_column,
+            num_workers=args.num_workers,
+            keep_cols=propagate,
+            quiet=args.quiet,
+            graph_encoding_override=args.graph_encoding,
+            seq_weight_override=args.seq_weight,
+            debug_preprocessing=args.debug_preprocessing,
+            model_path=args.model_path,
+        )
+        sys.exit(0)
+
     # Graph-PT mode
     if args.graph_pt and args.meta_tsv:
         graph_map = torch.load(args.graph_pt, weights_only=False)
         meta_df = pd.read_csv(args.meta_tsv, sep="\t")
         records = meta_df.to_dict(orient="records")
-        datas = [graph_map[r["window_id"]] for r in records]
+
+        # Support both windowed (window_id) and regular (id_column) formats
+        if "window_id" in meta_df.columns:
+            key_column = "window_id"
+        elif args.id_column in meta_df.columns:
+            key_column = args.id_column
+        else:
+            sys.exit(f"ERROR: Metadata must contain either 'window_id' or '{args.id_column}' column.")
+
+        datas = [graph_map[r[key_column]] for r in records]
 
         log_path = os.path.splitext(args.output)[0] + ".log"
         open(log_path, "a").close()
