@@ -28,7 +28,6 @@ classifiers = [
 
 dependencies = [
   "pandas >=2.2, <3.0",
-  "torch ==2.8.0",
   "tqdm >=4.67, <5.0",
   "networkx >=3.4, <4.0",
   "gputil >=1.4, <2.0",
@@ -61,8 +60,14 @@ ginfinity-embed-msa = "ginfinity.scripts.embed_msa:main"
 ginfinity-generate-node-embeddings = "ginfinity.scripts.generate_node_embeddings:main"
 
 [project.optional-dependencies]
+cuda118 = [
+  "torch ==2.7.1+cu118"
+]
+cpu = [
+  "torch ==2.7.1+cpu"
+]
 train = [
-  "scikit-learn >=1.6, <2.0"  
+  "scikit-learn >=1.6, <2.0"
 ]
 optuna = [
   "optuna >=3.6, <4.0"

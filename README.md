@@ -27,7 +27,7 @@ GINFINITY is packaged using modern Python standards and can be installed directl
 - Python 3.10 (the environment will be set up with this version)
 - `pip` and `git` installed on your system.
 
-### Step 1: Set Up Conda Environment
+### Step 1 (optional but recommended): Set Up Conda Environment
 
 1.  Create a new conda environment named `ginfinity-env` with Python 3.10:
     ```sh
@@ -40,64 +40,38 @@ GINFINITY is packaged using modern Python standards and can be installed directl
 
 ### Step 2: Install GINFINITY Package
 
-With the `ginfinity-env` activated, install the GINFINITY package from GitHub.
+With the environment active, pick the command that matches your hardware. GINFINITY ships two extras:
 
-To install the latest version from the `main` branch:
-```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity
-```
-To install a specific version (e.g., v2.0.1):
-```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git@v0.2.1#egg=ginfinity
-```
-This command will automatically handle the core dependencies listed in `pyproject.toml`.
+- `ginfinity[cuda118]` installs the CUDA 11.8 variants of PyTorch and all PyTorch Geometric ops.
+- `ginfinity[cpu]` installs the CPU-only wheels.
 
-GINFINITY requires PyTorch Geometric extensions that are hardware-specific. You must install GINFINITY with the appropriate PyTorch Geometric wheel index based on your system configuration.
+#### 1. Detect your runtime
 
-#### Check Your CUDA Version
-
-First, determine which CUDA version you have (if any):
+If you are unsure whether CUDA is available, check:
 
 ```sh
-# Check if CUDA is available
 nvidia-smi
-
-# Or check CUDA version specifically
-nvcc --version
 ```
 
-#### Choose Your Installation Command
+Any driver supporting CUDA 11.8 or newer works with the `cuda118` extra. If the command fails (or you know you are on CPU), use the `cpu` extra instead.
 
-Note that you can install any version older than your CUDA driver. For example, if you have CUDA 12.9, you can install the version for CUDA 12.8 but not for CUDA 13.0.
+#### 2. Run the install command
 
-- **For CUDA 12.9 systems (latest):**
-```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.8.0+cu129.html
-```
+- **GPU (driver ≥ CUDA 11.8):**
+  ```sh
+  pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity[cuda118] \
+      --extra-index-url https://download.pytorch.org/whl/cu118 \
+      -f https://data.pyg.org/whl/torch-2.7.1+cu118.html
+  ```
 
-- **For CUDA 12.8 systems:**
-```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
-```
+- **CPU-only:**
+  ```sh
+  pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity[cpu] \
+      --extra-index-url https://download.pytorch.org/whl/cpu \
+      -f https://data.pyg.org/whl/torch-2.7.1+cpu.html
+  ```
 
-- **For CUDA 12.6 systems:**
-```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.8.0+cu126.html
-```
-
-- **For CPU-only systems (no GPU):**
-```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity -f https://data.pyg.org/whl/torch-2.8.0+cpu.html
-```
-
-- **To install a specific version (e.g., v2.0.1) with CUDA 12.9:**
-```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git@v2.0.1#egg=ginfinity -f https://data.pyg.org/whl/torch-2.8.0+cu129.html
-```
-
-> **Important**: The `-f` flag specifies the PyTorch Geometric wheel index that matches your CUDA version. This ensures that the PyTorch Geometric extensions (torch-scatter, torch-sparse, torch-cluster, torch-spline-conv) are compiled for your specific CUDA version.
-
-#### Verify CUDA Compatibility
+#### 3. Verify CUDA availability (optional)
 
 After installation, you can verify that PyTorch detects your GPU correctly:
 
@@ -113,10 +87,20 @@ if torch.cuda.is_available():
 ### Step 3: (Optional) Install Dependencies for Training
 If you intend to train new models, you'll need additional dependencies. You can install them using:
 ```sh
-pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity[train] -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
+pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity[cuda118,train] \
+  --extra-index-url https://download.pytorch.org/whl/cu118 \
+  -f https://data.pyg.org/whl/torch-2.7.1+cu118.html
 ```
 
-(Replace the wheel index URL with the appropriate one for your CUDA version from the options above)
+On CPU-only machines use:
+
+```sh
+pip install git+https://github.com/nicoaira/GINFINITY.git#egg=ginfinity[cpu,train] \
+  --extra-index-url https://download.pytorch.org/whl/cpu \
+  -f https://data.pyg.org/whl/torch-2.7.1+cpu.html
+```
+
+Adjust the wheel URLs if you selected a different CUDA build in Step 2.
 
 ### Step 4: Verify Installation
 Pre-trained model weights are included within the package in the `src/ginfinity/weights` directory and should be accessible after installation. 
