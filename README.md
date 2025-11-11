@@ -113,6 +113,38 @@ This should display the help message for the `generate_embeddings.py` script.
 
 (The previous instruction to download `GIN-Secondary.pth` might be outdated if weights are now packaged. Please verify and update this section if necessary based on your `MANIFEST.in` and `pyproject.toml` setup for including weights.)
 
+## Docker Deployment
+
+For production pipelines and containerized workflows, GINFINITY provides optimized Docker images that are significantly smaller than traditional conda-based containers.
+
+### Minimal Inference Images
+
+For inference-only workloads (node embeddings generation), we provide two optimized Docker images:
+
+- **GPU version** (`Dockerfile.inference-gpu`): ~3-4GB (60% smaller than full image)
+  - Includes CUDA 11.8 support
+  - Ideal for GPU-accelerated batch processing
+
+- **CPU version** (`Dockerfile.inference-cpu`): ~2-3GB (70% smaller than full image)
+  - Ultra-minimal, CPU-only PyTorch
+  - Perfect for cost-effective batch processing
+
+Both images use multi-stage builds to eliminate build dependencies and include only what's needed for `ginfinity-generate-node-embeddings`.
+
+**Quick Start:**
+
+```bash
+# Build GPU version
+DOCKER_BUILDKIT=1 docker build --ssh default \
+  -f Dockerfile.inference-gpu -t ginfinity-inference:gpu .
+
+# Build CPU version
+DOCKER_BUILDKIT=1 docker build --ssh default \
+  -f Dockerfile.inference-cpu -t ginfinity-inference:cpu .
+```
+
+**📖 For complete Docker documentation, usage examples, and Nextflow integration, see [docs/DOCKER_INFERENCE.md](docs/DOCKER_INFERENCE.md)**
+
 ## Usage
 GINFINITY provides a suite of command-line tools to process RNA secondary structures, generate embeddings, train models, and perform downstream analysis.
 

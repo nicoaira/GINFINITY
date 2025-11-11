@@ -72,6 +72,12 @@ train = [
 optuna = [
   "optuna >=3.6, <4.0"
 ]
+# Minimal installation for inference only (node embeddings generation)
+# Excludes training dependencies and heavy optional features
+inference = [
+  # No extra dependencies needed - uses base dependencies only
+  # Install with: pip install ginfinity[inference,cuda118] or ginfinity[inference,cpu]
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
