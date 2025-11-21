@@ -1,16 +1,34 @@
 #!/usr/bin/env python3
 
 import argparse
+import io
 import json
 import os
 import sys
 import time
+import warnings
 from typing import List, Optional, Tuple
+
+# Disable CUDA probing in worker processes when requested and silence init warnings there.
+if os.environ.get("GINFINITY_DISABLE_CUDA_IN_WORKERS") == "1":
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+    warnings.filterwarnings(
+        "ignore",
+        message=r"CUDA initialization: .*",
+        module=r"torch.__config__",
+    )
+# Always silence the noisy CUDA initialization warning; it does not affect CPU runs
+# and keeps GPU runs cleaner when CUDA is healthy.
+warnings.filterwarnings(
+    "ignore",
+    message=r"CUDA initialization: .*",
+    module=r"torch.__config__",
+)
 
 import pandas as pd
 import torch
 from torch.multiprocessing import Pool, set_start_method, get_start_method
-from torch_geometric.data import Batch
+from torch_geometric.data import Batch, Data
 from tqdm import tqdm
 
 from ginfinity.model.gin_model import GINModel
@@ -44,6 +62,20 @@ def _ensure_spawn_start_method():
             pass
 
 
+def _configure_multiprocessing(num_workers: int) -> None:
+    """Set spawn start method and a safe sharing strategy for child processes."""
+    if not num_workers or num_workers <= 1:
+        return
+    # Flag workers to suppress CUDA init to avoid repeated warnings
+    os.environ.setdefault("GINFINITY_DISABLE_CUDA_IN_WORKERS", "1")
+    _ensure_spawn_start_method()
+    try:
+        torch.multiprocessing.set_sharing_strategy("file_system")
+    except (AttributeError, RuntimeError):
+        # Some environments (e.g., stripped-down builds) may not support changing this.
+        pass
+
+
 def load_trained_model(model_path: str, device: str = "cpu") -> GINModel:
     model = GINModel.load_from_checkpoint(model_path, device)
     model.to(device)
@@ -61,6 +93,18 @@ def _serialize_matrix(mat: torch.Tensor) -> str:
     # Round for compactness without losing much precision
     rounded = [[round(float(x), 6) for x in row] for row in arr]
     return json.dumps(rounded, separators=(",", ":"))
+
+
+def _serialize_data_object(data: Data) -> bytes:
+    """Serialize a PyG Data object to bytes to avoid FD-based tensor sharing."""
+    buffer = io.BytesIO()
+    torch.save(data, buffer)
+    return buffer.getvalue()
+
+
+def _deserialize_data_object(blob: bytes) -> Data:
+    buffer = io.BytesIO(blob)
+    return torch.load(buffer, map_location="cpu", weights_only=False)
 
 
 def _preprocess(args: Tuple[int, str, str, str, str, float, bool, bool, int]):
@@ -132,7 +176,7 @@ def _preprocess(args: Tuple[int, str, str, str, str, float, bool, bool, int]):
             "preprocess_slow",
         )
 
-    return idx, uid, data
+    return idx, uid, _serialize_data_object(data)
 
 
 def _get_base_node_mask(data, device: Optional[torch.device] = None) -> torch.Tensor:
@@ -191,13 +235,17 @@ def _filter_to_base_nodes(node_x: torch.Tensor, data) -> torch.Tensor:
 def _cpu_node_embed(args: Tuple[int, str, object, str, str]):
     """
     Worker: single-graph per-node embeddings on CPU
-    args: (idx, uid, data, model_path, log_path)
+    args: (idx, uid, data_blob_or_obj, model_path, log_path)
     returns: (idx, uid, serialized_matrix)
     """
-    idx, uid, data, model_path, _ = args
+    idx, uid, data_payload, model_path, _ = args
     global _cached_model
     if _cached_model is None:
         _cached_model = load_trained_model(model_path, "cpu")
+    if isinstance(data_payload, (bytes, bytearray, memoryview)):
+        data = _deserialize_data_object(data_payload)
+    else:
+        data = data_payload
     with torch.no_grad():
         node_x = _cached_model.get_node_embeddings(data)
         base_x = _filter_to_base_nodes(node_x, data)
@@ -238,8 +286,7 @@ def generate_node_embeddings(
     seq_weight_override: Optional[float] = None,
     debug_preprocessing: bool = False,
 ):
-    if num_workers and num_workers > 1:
-        _ensure_spawn_start_method()
+    _configure_multiprocessing(num_workers)
     # Decide which columns to carry through
     final_keep = [id_column]
     if "seq_len" in input_df.columns:
@@ -348,15 +395,15 @@ def generate_node_embeddings(
         return
 
     meta_list = [(idx, uid) for idx, uid, _ in preproc]
-    data_list = [data for _, _, data in preproc]
+    data_blobs = [blob for _, _, blob in preproc]
 
     # 2) Inference to get per-node embeddings
     results = []  # (idx, uid, serialized_matrix)
     inference_start = time.perf_counter()
     if device.lower() == "cpu":
         cpu_tasks = [
-            (idx, uid, data, model_path, log_path)
-            for (idx, uid), data in zip(meta_list, data_list)
+            (idx, uid, blob, model_path, log_path)
+            for (idx, uid), blob in zip(meta_list, data_blobs)
         ]
         with Pool(num_workers) as pool:
             for idx, uid, emb_str in tqdm(
@@ -367,6 +414,7 @@ def generate_node_embeddings(
             ):
                 results.append((idx, uid, emb_str))
     else:
+        data_list = [_deserialize_data_object(blob) for blob in data_blobs]
         model = load_trained_model(model_path, device)
         pbar = tqdm(
             total=len(data_list),
@@ -467,8 +515,7 @@ def preprocess_and_save(
     model_path: Optional[str] = None,
 ):
     """Preprocess structures and save graphs+metadata for later inference."""
-    if num_workers and num_workers > 1:
-        _ensure_spawn_start_method()
+    _configure_multiprocessing(num_workers)
 
     # Decide which columns to carry through
     final_keep = [id_column]
@@ -580,8 +627,8 @@ def preprocess_and_save(
     # Build graph dictionary and metadata
     graph_dict = {}
     meta_rows = []
-    for idx, uid, data in preproc:
-        graph_dict[uid] = data
+    for idx, uid, data_blob in preproc:
+        graph_dict[uid] = _deserialize_data_object(data_blob)
         try:
             base = input_df.loc[idx]
         except KeyError:
@@ -756,10 +803,13 @@ def main():
 
         # CPU path
         if args.device.lower() == "cpu":
-            if args.num_workers and args.num_workers > 1:
-                _ensure_spawn_start_method()
+            _configure_multiprocessing(args.num_workers)
+            data_payloads = [
+                _serialize_data_object(d) if not isinstance(d, (bytes, bytearray, memoryview)) else d
+                for d in datas
+            ]
             tasks = [
-                (i, rec[args.id_column], datas[i], args.model_path, log_path)
+                (i, rec[args.id_column], data_payloads[i], args.model_path, log_path)
                 for i, rec in enumerate(records)
             ]
             with Pool(args.num_workers) as pool:
