@@ -507,6 +507,7 @@ def preprocess_and_save(
     structure_column: str,
     id_column: str,
     num_workers: int = 4,
+    graph_chunk_size: Optional[int] = None,
     keep_cols: Optional[List[str]] = None,
     quiet: bool = False,
     graph_encoding_override: Optional[str] = None,
@@ -560,6 +561,7 @@ def preprocess_and_save(
         "seq_weight": seq_weight,
         "num_workers": num_workers,
         "debug_preprocessing": debug_preprocessing,
+        "graph_chunk_size": graph_chunk_size,
         "mode": "preprocess_only",
     }
     log_information(log_path, run_context, "preprocess_only_config")
@@ -625,10 +627,10 @@ def preprocess_and_save(
         return
 
     # Build graph dictionary and metadata
-    graph_dict = {}
+    graph_items = []
     meta_rows = []
     for idx, uid, data_blob in preproc:
-        graph_dict[uid] = _deserialize_data_object(data_blob)
+        graph_items.append((uid, data_blob))
         try:
             base = input_df.loc[idx]
         except KeyError:
@@ -637,23 +639,71 @@ def preprocess_and_save(
         meta = {c: base[c] for c in final_keep if c in base}
         meta_rows.append(meta)
 
-    # Save graphs
-    save_start = time.perf_counter()
-    torch.save(graph_dict, graph_output_path)
-    if not quiet:
-        print(f"[preprocess_only] Saved {len(graph_dict)} graphs to {graph_output_path}")
+    # Save graphs (optionally chunked)
+    def _with_chunk_suffix(path: str, chunk_idx: int) -> str:
+        base, ext = os.path.splitext(path)
+        return f"{base}.part{chunk_idx:03d}{ext}"
 
-    # Save metadata
-    meta_df = pd.DataFrame(meta_rows)
-    meta_df.to_csv(meta_output_path, sep="\t", index=False, na_rep="NaN")
-    if not quiet:
-        print(f"[preprocess_only] Saved metadata to {meta_output_path}")
+    meta_map = {row[id_column]: row for row in meta_rows if id_column in row}
+    save_start = time.perf_counter()
+    total_graphs = len(graph_items)
+
+    if graph_chunk_size and graph_chunk_size > 0:
+        chunk = 0
+        written = 0
+        while written < total_graphs:
+            slice_items = graph_items[written:written + graph_chunk_size]
+            graphs = {uid: _deserialize_data_object(blob) for uid, blob in slice_items}
+            meta_chunk = []
+            missing_meta = []
+            for uid, _ in slice_items:
+                meta = meta_map.get(uid)
+                if meta is not None:
+                    meta_chunk.append(meta)
+                else:
+                    missing_meta.append(uid)
+            g_path = _with_chunk_suffix(graph_output_path, chunk)
+            m_path = _with_chunk_suffix(meta_output_path, chunk)
+            torch.save(graphs, g_path)
+            pd.DataFrame(meta_chunk).to_csv(m_path, sep="\t", index=False, na_rep="NaN")
+            if not quiet:
+                print(f"[preprocess_only] Saved chunk {chunk} ({len(graphs)} graphs) to {g_path}")
+                if missing_meta:
+                    print(f"[preprocess_only] Warning: missing metadata for {len(missing_meta)} graphs in chunk {chunk}")
+            log_information(
+                log_path,
+                {
+                    "chunk_index": chunk,
+                    "graphs_in_chunk": len(graphs),
+                    "meta_rows_in_chunk": len(meta_chunk),
+                    "missing_meta": missing_meta,
+                    "graph_output": g_path,
+                    "meta_output": m_path,
+                },
+                "preprocess_only_chunk",
+            )
+            written += len(graphs)
+            chunk += 1
+        chunk_count = chunk
+    else:
+        graphs = {uid: _deserialize_data_object(blob) for uid, blob in graph_items}
+        torch.save(graphs, graph_output_path)
+        if not quiet:
+            print(f"[preprocess_only] Saved {len(graphs)} graphs to {graph_output_path}")
+
+        meta_df = pd.DataFrame(meta_rows)
+        meta_df.to_csv(meta_output_path, sep="\t", index=False, na_rep="NaN")
+        if not quiet:
+            print(f"[preprocess_only] Saved metadata to {meta_output_path}")
+        chunk_count = 1
 
     save_duration = time.perf_counter() - save_start
     total_duration = time.perf_counter() - total_start
 
     summary = {
-        "graphs_saved": len(graph_dict),
+        "graphs_saved": total_graphs,
+        "chunks_written": chunk_count,
+        "chunk_size": graph_chunk_size,
         "save_duration_s": round(save_duration, 3),
         "total_duration_s": round(total_duration, 3),
         "graph_output": graph_output_path,
@@ -663,7 +713,7 @@ def preprocess_and_save(
     if not quiet:
         print(
             f"[preprocess_only] Complete: {summary['graphs_saved']} graphs "
-            f"in {summary['total_duration_s']}s"
+            f"in {summary['total_duration_s']}s across {chunk_count} chunk(s)"
         )
 
 
@@ -735,6 +785,12 @@ def main():
         "--meta-output",
         help="(preprocess-only) Path to save metadata (.tsv file).",
     )
+    parser.add_argument(
+        "--graph-chunk-size",
+        type=int,
+        default=None,
+        help="(preprocess-only) Number of graphs per saved chunk. When set, writes multiple *.partXXX.pt and *.partXXX.tsv files.",
+    )
     args = parser.parse_args()
 
     if args.model_path is None:
@@ -771,6 +827,7 @@ def main():
             structure_column=args.structure_column_name,
             id_column=args.id_column,
             num_workers=args.num_workers,
+            graph_chunk_size=args.graph_chunk_size,
             keep_cols=propagate,
             quiet=args.quiet,
             graph_encoding_override=args.graph_encoding,
