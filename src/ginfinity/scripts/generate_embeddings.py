@@ -147,7 +147,7 @@ def generate_embeddings(
     else:
         model = load_trained_model(model_path, device)
         total_batches = (len(data_list) + batch_size - 1) // batch_size
-        pbar = tqdm(total=len(data_list), disable=quiet, desc="Embedding (GPU)", unit=" samples")
+        pbar = tqdm(total=len(data_list), disable=quiet, desc=f"Embedding ({device.upper()})", unit=" samples")
         for start in range(0, len(data_list), batch_size):
             chunk = data_list[start:start + batch_size]
             metas = meta_list[start:start + batch_size]
@@ -216,7 +216,7 @@ def main():
     parser.add_argument('--keep-cols', default=None,
                         help="Comma-separated list of extra columns to carry through.")
     parser.add_argument('--device', default='cpu',
-                        help="Device for inference: 'cpu' or 'cuda'.")
+                        help="Device for inference: 'cpu', 'cuda', or 'mps' (Apple Silicon).")
     parser.add_argument('--num-workers', type=int, default=4,
                         help="Number of worker processes for CPU.")
     parser.add_argument('--batch-size', type=int, default=32,
@@ -277,7 +277,7 @@ def main():
             pbar = tqdm(
                 total=len(datas),
                 disable=args.quiet,
-                desc="Embedding graphs (GPU)",
+                desc=f"Embedding graphs ({args.device.upper()})",
                 unit=" samples"
             )
             for start in range(0, len(datas), args.batch_size):
