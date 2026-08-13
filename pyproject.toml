@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ginfinity"
+version = "1.0.0"
+description = "Production RNA nucleotide embeddings from sequence and secondary structure"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = "PolyForm-Noncommercial-1.0.0"
+license-files = ["LICENSE", "LICENSE-WEIGHTS"]
+authors = [{name = "GINFINITY maintainers"}]
+keywords = ["RNA", "embeddings", "GINE", "bioinformatics"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Typing :: Typed",
+]
+dependencies = [
+  "numpy>=2.1,<2.2",
+  "safetensors>=0.5,<0.8",
+  "torch>=2.6,<2.7",
+]
+
+[project.scripts]
+ginfinity = "ginfinity.cli:main"
+
+[project.urls]
+Documentation = "https://github.com/YOUR_ORG/YOUR_REPOSITORY/tree/main/GINFINITY"
+Source = "https://github.com/YOUR_ORG/YOUR_REPOSITORY"
+Issues = "https://github.com/YOUR_ORG/YOUR_REPOSITORY/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ginfinity = ["py.typed", "data/*.pt", "data/*.json"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]

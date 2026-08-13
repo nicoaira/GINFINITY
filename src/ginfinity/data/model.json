@@ -1,0 +1,50 @@
+{
+  "format_version": 1,
+  "package": "ginfinity",
+  "package_version": "1.0.0",
+  "model_version": "1.0.0",
+  "checkpoint_sha256": "7e9cd61028c4d2ab3c50c475774aef233f3e3799690469e8c82df74ce46c3754",
+  "parameter_count": 306436,
+  "embedding_dimension": 128,
+  "maximum_length_nt": 4096,
+  "encoder_config": {
+    "hidden": 128,
+    "layers": 4,
+    "out_dim": 128,
+    "dropout": 0.023642890587088308,
+    "struct_feature": "A",
+    "positional": true,
+    "residual": true,
+    "train_eps": true,
+    "edge_dim": 10,
+    "extra_edges": [
+      "skip2"
+    ]
+  },
+  "graph_spec": {
+    "format_version": 1,
+    "struct_feature": "A",
+    "positional": true,
+    "node_feature_dimension": 7,
+    "edge_feature_dimension": 10,
+    "edge_types": {
+      "backbone_forward": 0,
+      "backbone_reverse": 1,
+      "base_pair_forward": 2,
+      "base_pair_reverse": 3,
+      "skip2_forward": 4,
+      "skip2_reverse": 5
+    },
+    "extra_edges": [
+      "skip2"
+    ]
+  },
+  "graph_spec_sha256": "da2e670e377e47667fec8a8ebb1c90c6e506b9cdd8a5555a6bfab50b202fb9bd",
+  "default_device": "cpu",
+  "output_dtype": "float32",
+  "output_normalization": "L2 per nucleotide",
+  "input": {
+    "sequence": "canonical A/C/G/U; T normalizes to U",
+    "structure": "balanced, properly nested .() supplied unchanged"
+  }
+}

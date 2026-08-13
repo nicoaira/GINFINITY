@@ -1,0 +1,126 @@
+{
+  "package": "ginfinity",
+  "version": "1.0.0",
+  "files": {
+    ".gitignore": {
+      "bytes": 74,
+      "sha256": "f22138b7566fba7bd5c483d71dd84591cd0376eb66b3c66436dd9b17560e3654"
+    },
+    "CHANGELOG.md": {
+      "bytes": 866,
+      "sha256": "cb2c764d668d68569dbadd222064113ab4c8aaac8b6212caa06b223012b8b4c6"
+    },
+    "CONTRIBUTING.md": {
+      "bytes": 584,
+      "sha256": "1ef83b5e187652ba4a13582f61d20ba3ac72bdf4ec7934e57bce4898ca4a9876"
+    },
+    "LICENSE": {
+      "bytes": 4994,
+      "sha256": "473d792d029b9c23c0a6695853808b2eba00bc0436f22a172783e332cb45be0c"
+    },
+    "LICENSE-WEIGHTS": {
+      "bytes": 20138,
+      "sha256": "1ffcdb37cc44ebe66ab8e80a3c9b6cde6b2d91a72490f95220461a20103cc9e7"
+    },
+    "NOTICE.md": {
+      "bytes": 526,
+      "sha256": "a138b304ce7b3c71777e7a53aac36730d1be0ca3e1c4d8250307ad541cb60bb0"
+    },
+    "README.md": {
+      "bytes": 8879,
+      "sha256": "57bf5ef79f9ac7ec7eeb02d15ad1e57179713cc5c7fc8a2c15742b012eec8bcc"
+    },
+    "docs/API.md": {
+      "bytes": 4153,
+      "sha256": "8bb92697420642dc36fda806ff41958b92743f36e7c11f05c2254c8fdc46c4c0"
+    },
+    "docs/GRAPH_PIPELINE.md": {
+      "bytes": 3217,
+      "sha256": "d0f8fb59e421a7ad6c6315012445cf63e45b74bcdba374990eaf08f5949d086e"
+    },
+    "docs/OPERATIONS.md": {
+      "bytes": 2100,
+      "sha256": "ab1fe9ea43537c9c192ea5374664be0341ec294480d3a7ea1705bc7a5180d4c5"
+    },
+    "pyproject.toml": {
+      "bytes": 1350,
+      "sha256": "56e18703f9fffacb6bb7ac35756b31070673877d1b5bfcf47040ad2df6ab3a8e"
+    },
+    "requirements.lock": {
+      "bytes": 45,
+      "sha256": "fd7b56e995f5ecc8c50443382129003738658d79134b6410ff87506cf7d44fd4"
+    },
+    "src/ginfinity/__init__.py": {
+      "bytes": 972,
+      "sha256": "c28e8c2c17092b0982516db400a5f449387e1c2a4f62bd23cbe467f942029b88"
+    },
+    "src/ginfinity/__main__.py": {
+      "bytes": 48,
+      "sha256": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d"
+    },
+    "src/ginfinity/_model.py": {
+      "bytes": 2809,
+      "sha256": "f9b22635039bb312ba76d9d8eb2aeaccc6678e89aa428eb68bc2cd786c242044"
+    },
+    "src/ginfinity/_validation.py": {
+      "bytes": 3598,
+      "sha256": "65e6c25beaf0be4ce8b2e6dd9af5cf81b69b1371e26edd72a0725d8b2af5d457"
+    },
+    "src/ginfinity/api.py": {
+      "bytes": 8109,
+      "sha256": "20f5d09b40b97500f83d91d3901fd08bb9ec127310b21955a592155ae1cd78d1"
+    },
+    "src/ginfinity/cli.py": {
+      "bytes": 8857,
+      "sha256": "618ca15fdb59b4da9fc07d249403be56497528f98f0dd6b4914b4ff41dd7ded2"
+    },
+    "src/ginfinity/data/alignment.json": {
+      "bytes": 471,
+      "sha256": "bd5db0a38170b4801e455ce955649e838ad2c2d7a8b07c315d9b1e23fb4b04e0"
+    },
+    "src/ginfinity/data/encoder.pt": {
+      "bytes": 1257948,
+      "sha256": "7e9cd61028c4d2ab3c50c475774aef233f3e3799690469e8c82df74ce46c3754"
+    },
+    "src/ginfinity/data/model.json": {
+      "bytes": 1305,
+      "sha256": "0061227ff51cd45b3a47f49733533aec9ff26c14f0fc69b565e3d559e651990f"
+    },
+    "src/ginfinity/graph.py": {
+      "bytes": 27114,
+      "sha256": "a2a0f9a7d0be4805d758ef33c23996a662f9a2bda8c33e44481cea667965784c"
+    },
+    "src/ginfinity/py.typed": {
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    "src/ginfinity/table.py": {
+      "bytes": 3345,
+      "sha256": "5f49aaed9c38e77274039a9acfdc8663f8b5ad44fc33564c5e4cbe34d6b957c4"
+    },
+    "tests/conftest.py": {
+      "bytes": 106,
+      "sha256": "8c75b617726556b77f7765ea7fb2d37a0203fddb8c336687122f0030b78f3bf9"
+    },
+    "tests/test_api.py": {
+      "bytes": 2387,
+      "sha256": "12faf72e1d20388c95f6130c141c761ea0d00ef8315acd5646534410ffb8bbad"
+    },
+    "tests/test_encoder_cli.py": {
+      "bytes": 2813,
+      "sha256": "55edabfda57d77fbb54a27719c0b9dd50a3418755bed1d39e59dc8421cbf6e7f"
+    },
+    "tests/test_graph.py": {
+      "bytes": 4372,
+      "sha256": "c5d83dc1ff8d7442503dc9d78a491b5535302742b877205c4d4a6779914e57ef"
+    },
+    "tests/test_table.py": {
+      "bytes": 1665,
+      "sha256": "5bcfb59654074e11cc29cc6ed636f9a11f9f2ec0f9d03953d9dfc19c291b7e63"
+    },
+    "tests/test_validation.py": {
+      "bytes": 850,
+      "sha256": "ef9899b16d2b96d75e711bb07a8678559185de2db8b5a23bac0edc3688104338"
+    }
+  }
+}
