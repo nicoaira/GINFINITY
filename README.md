@@ -23,8 +23,11 @@ python -m pip install \
 From the personal Anaconda channel:
 
 ```bash
-conda install -c nicoaira -c conda-forge ginfinity
+conda install -c YOUR_ANACONDA_CHANNEL -c conda-forge ginfinity
 ```
+
+Replace `YOUR_ANACONDA_CHANNEL` with the Anaconda.org account or organization
+that publishes GINFINITY.
 
 For a local checkout:
 
