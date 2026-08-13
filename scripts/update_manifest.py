@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import tomllib
+import re
 from pathlib import Path
 
 
@@ -31,11 +31,27 @@ def _source_files() -> list[Path]:
     )
 
 
+def _project_identity() -> tuple[str, str]:
+    text = (ROOT / "pyproject.toml").read_text()
+    section = re.search(
+        r"(?ms)^\[project\]\s*$\n(.*?)(?=^\[|\Z)", text)
+    if section is None:
+        raise ValueError("pyproject.toml has no [project] table")
+    values = {}
+    for key in ("name", "version"):
+        match = re.search(
+            rf'(?m)^{key}\s*=\s*"([^"]+)"\s*$', section.group(1))
+        if match is None:
+            raise ValueError(f"pyproject.toml [project] has no {key}")
+        values[key] = match.group(1)
+    return values["name"], values["version"]
+
+
 def _manifest() -> dict:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    name, version = _project_identity()
     return {
-        "package": project["name"],
-        "version": project["version"],
+        "package": name,
+        "version": version,
         "files": {
             path.relative_to(ROOT).as_posix(): {
                 "bytes": path.stat().st_size,
