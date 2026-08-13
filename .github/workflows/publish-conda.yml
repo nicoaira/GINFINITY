@@ -1,0 +1,46 @@
+name: Publish to Anaconda.org
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    environment: anaconda
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: conda-publish
+          channels: conda-forge
+          channel-priority: strict
+          auto-update-conda: true
+          python-version: "3.12"
+      - name: Install conda publishing tools
+        shell: bash -el {0}
+        run: conda install -y conda-build anaconda-client
+      - name: Verify version and source manifest
+        shell: bash -el {0}
+        run: |
+          python scripts/update_manifest.py --check
+          test "$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')" = "1.0.0"
+      - name: Build and test conda package
+        shell: bash -el {0}
+        run: conda build conda-recipe --output-folder conda-dist -c conda-forge
+      - name: Upload package to personal channel
+        shell: bash -el {0}
+        env:
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
+          ANACONDA_USER: ${{ vars.ANACONDA_USER }}
+        run: |
+          test -n "${ANACONDA_API_TOKEN}"
+          test -n "${ANACONDA_USER}"
+          mapfile -t packages < <(find conda-dist -type f \( -name '*.conda' -o -name '*.tar.bz2' \))
+          test "${#packages[@]}" -eq 1
+          anaconda --token "${ANACONDA_API_TOKEN}" upload \
+            --user "${ANACONDA_USER}" --label main "${packages[0]}"

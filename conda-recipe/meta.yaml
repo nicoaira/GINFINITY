@@ -1,0 +1,52 @@
+{% set name = "ginfinity" %}
+{% set version = "1.0.0" %}
+
+package:
+  name: {{ name }}
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  number: 0
+  noarch: python
+  script: "{{ PYTHON }} -m pip install . --no-deps --no-build-isolation -vv"
+  entry_points:
+    - ginfinity = ginfinity.cli:main
+
+requirements:
+  host:
+    - python >=3.10,<3.13
+    - pip
+    - setuptools >=77
+    - wheel
+  run:
+    - python >=3.10,<3.13
+    - numpy >=2.1,<2.2
+    - safetensors >=0.5,<0.8
+    - pytorch >=2.6,<2.7
+
+test:
+  requires:
+    - pip
+  imports:
+    - ginfinity
+  commands:
+    - pip check
+    - ginfinity --version
+    - python -c "from ginfinity import Ginfinity; assert Ginfinity.load().info()['package_version'] == '{{ version }}'"
+
+about:
+  home: https://github.com/nicoaira/GINFINITY
+  dev_url: https://github.com/nicoaira/GINFINITY
+  doc_url: https://github.com/nicoaira/GINFINITY/tree/main/docs
+  license: PolyForm-Noncommercial-1.0.0 AND CC-BY-NC-4.0
+  license_file:
+    - LICENSE
+    - LICENSE-WEIGHTS
+  summary: Per-nucleotide RNA structure embeddings generated with a GINE encoder
+
+extra:
+  maintainers:
+    - nicoaira

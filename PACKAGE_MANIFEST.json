@@ -2,13 +2,25 @@
   "package": "ginfinity",
   "version": "1.0.0",
   "files": {
+    ".github/workflows/ci.yml": {
+      "bytes": 719,
+      "sha256": "95665c5c50186c1c00d228f298183d9f1c7d4e476dda1b4bc695992d2d536c7b"
+    },
+    ".github/workflows/publish-conda.yml": {
+      "bytes": 1631,
+      "sha256": "a1b96f05545ba87ed612f3b45e5b8902a828d4bb5c850bd13dd654e011627c8a"
+    },
+    ".github/workflows/publish-pypi.yml": {
+      "bytes": 1397,
+      "sha256": "e5a3939743bba0486c46de4d69f75b39db38b13b8daaac04645bb8ba8d14b209"
+    },
     ".gitignore": {
-      "bytes": 74,
-      "sha256": "f22138b7566fba7bd5c483d71dd84591cd0376eb66b3c66436dd9b17560e3654"
+      "bytes": 127,
+      "sha256": "47f64eee00a3b3b34bc1e2f00ddafab6836e75163d18ff81622996a3ce34e4b0"
     },
     "CHANGELOG.md": {
-      "bytes": 866,
-      "sha256": "cb2c764d668d68569dbadd222064113ab4c8aaac8b6212caa06b223012b8b4c6"
+      "bytes": 953,
+      "sha256": "085551602867314e1967948a6e5b32b85f28c2fb09e113cde825146c5080833a"
     },
     "CONTRIBUTING.md": {
       "bytes": 584,
@@ -22,13 +34,25 @@
       "bytes": 20138,
       "sha256": "1ffcdb37cc44ebe66ab8e80a3c9b6cde6b2d91a72490f95220461a20103cc9e7"
     },
+    "MANIFEST.in": {
+      "bytes": 352,
+      "sha256": "08b7763bb660e71fabb0d714344dfca1ca0cd4b1b5db43a4e8ad92dbaf24dd93"
+    },
     "NOTICE.md": {
       "bytes": 526,
       "sha256": "a138b304ce7b3c71777e7a53aac36730d1be0ca3e1c4d8250307ad541cb60bb0"
     },
     "README.md": {
-      "bytes": 8879,
-      "sha256": "57bf5ef79f9ac7ec7eeb02d15ad1e57179713cc5c7fc8a2c15742b012eec8bcc"
+      "bytes": 8821,
+      "sha256": "42f4ba70711547d357a8281e0fd3d9a82bcd7c8fdc3ab1b2673cdfa0b9aaf2bb"
+    },
+    "conda-recipe/conda_build_config.yaml": {
+      "bytes": 15,
+      "sha256": "78bd530315a7131353383262a71ac0a27434576e9d8f0e6e6b04c48745ed1b4f"
+    },
+    "conda-recipe/meta.yaml": {
+      "bytes": 1126,
+      "sha256": "fff1efa5936d7c50eb6e6767fb41f92d047028e007769173572325e5a6955b19"
     },
     "docs/API.md": {
       "bytes": 4153,
@@ -42,13 +66,21 @@
       "bytes": 2100,
       "sha256": "ab1fe9ea43537c9c192ea5374664be0341ec294480d3a7ea1705bc7a5180d4c5"
     },
+    "docs/PUBLISHING.md": {
+      "bytes": 1698,
+      "sha256": "38ffdfededcc6c5120f4a9ff2e159da58e05c390bd7c620d4e6bec0c61b7b4d1"
+    },
     "pyproject.toml": {
-      "bytes": 1350,
-      "sha256": "56e18703f9fffacb6bb7ac35756b31070673877d1b5bfcf47040ad2df6ab3a8e"
+      "bytes": 1511,
+      "sha256": "0da9631af87ddc7b42d6dfc57e73ec8385929155b3301419d4481fdbad4a2b25"
     },
     "requirements.lock": {
       "bytes": 45,
       "sha256": "fd7b56e995f5ecc8c50443382129003738658d79134b6410ff87506cf7d44fd4"
+    },
+    "scripts/update_manifest.py": {
+      "bytes": 1981,
+      "sha256": "368fdaccd51d7f59b79d3579b31cc9c50ce74b775f73d09e3ac6b8acb69b8081"
     },
     "src/ginfinity/__init__.py": {
       "bytes": 972,

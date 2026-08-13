@@ -1,21 +1,35 @@
 # GINFINITY 🚀 : Graph-based RNA Structure Embedding Generator
 
-GINFINITY is a Python package designed to generate embeddings from RNA secondary structures using a Graph Isomorphism Network (GIN). This project converts RNA secondary structures from dot-bracket notation into graph representations, which are then processed by a GIN model to obtain meaningful embeddings. These embeddings can be used for downstream tasks such as alignment, clustering, classification, or other forms of analysis.
+GINFINITY generates per-nucleotide embeddings from RNA sequences and
+dot-bracket secondary structures with a Graph Isomorphism Network. The
+embeddings can be used for alignment, clustering, classification, and other
+downstream analyses.
 
 ## Install
 
-From a Git repository containing this directory:
+From PyPI:
+
+```bash
+python -m pip install ginfinity
+```
+
+From the tagged GitHub release:
 
 ```bash
 python -m pip install \
   "git+https://github.com/nicoaira/GINFINITY.git@v1.0.0"
 ```
 
-Replace the placeholder repository path with the URL where this monorepo is
-published. For a local checkout:
+From the personal Anaconda channel:
 
 ```bash
-python -m pip install ./GINFINITY
+conda install -c nicoaira -c conda-forge ginfinity
+```
+
+For a local checkout:
+
+```bash
+python -m pip install .
 ```
 
 ## Python API
@@ -200,10 +214,11 @@ or hardware. Use CPU when stable byte-for-byte output is required.
 
 ## Documentation
 
-- [API reference](docs/API.md)
-- [Distributed graph pipeline](docs/GRAPH_PIPELINE.md)
-- [Operations guide](docs/OPERATIONS.md)
-- [Changelog](CHANGELOG.md)
+- [API reference](https://github.com/nicoaira/GINFINITY/blob/main/docs/API.md)
+- [Distributed graph pipeline](https://github.com/nicoaira/GINFINITY/blob/main/docs/GRAPH_PIPELINE.md)
+- [Operations guide](https://github.com/nicoaira/GINFINITY/blob/main/docs/OPERATIONS.md)
+- [Publishing guide](https://github.com/nicoaira/GINFINITY/blob/main/docs/PUBLISHING.md)
+- [Changelog](https://github.com/nicoaira/GINFINITY/blob/main/CHANGELOG.md)
 
 ## Versioning
 
@@ -216,9 +231,9 @@ in automated deployments.
 This repository uses a dual-licensing structure:
 
 - **Code & Scripts:** Licensed under
-  [PolyForm Noncommercial 1.0.0](LICENSE).
+  [PolyForm Noncommercial 1.0.0](https://github.com/nicoaira/GINFINITY/blob/main/LICENSE).
 - **Model Weights, Checkpoints & Embeddings:** Licensed under
-  [CC BY-NC 4.0](LICENSE-WEIGHTS).
+  [CC BY-NC 4.0](https://github.com/nicoaira/GINFINITY/blob/main/LICENSE-WEIGHTS).
 
 ### 🔒 Non-Commercial & Academic Use
 
@@ -231,4 +246,3 @@ applicable license terms.
 Any commercial use—including using GINFINITY to deliver commercial CRO
 services, operate internal enterprise pipelines, or provide hosted APIs—requires
 a separate commercial license from the copyright holder.
-

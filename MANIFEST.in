@@ -1,0 +1,13 @@
+include CHANGELOG.md
+include CONTRIBUTING.md
+include LICENSE
+include LICENSE-WEIGHTS
+include NOTICE.md
+include PACKAGE_MANIFEST.json
+include README.md
+include requirements.lock
+recursive-include conda-recipe *.yaml
+recursive-include docs *.md
+recursive-include scripts *.py
+recursive-include src/ginfinity/data *.json *.pt
+recursive-include tests *.py

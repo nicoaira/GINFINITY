@@ -6,9 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "ginfinity"
 version = "1.0.0"
 description = "Production RNA nucleotide embeddings from sequence and secondary structure"
-readme = "README.md"
+readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.10,<3.13"
-license = "PolyForm-Noncommercial-1.0.0"
+license = "PolyForm-Noncommercial-1.0.0 AND CC-BY-NC-4.0"
 license-files = ["LICENSE", "LICENSE-WEIGHTS"]
 authors = [{name = "GINFINITY maintainers"}]
 keywords = ["RNA", "embeddings", "GINE", "bioinformatics"]
@@ -31,9 +31,11 @@ dependencies = [
 ginfinity = "ginfinity.cli:main"
 
 [project.urls]
-Documentation = "https://github.com/YOUR_ORG/YOUR_REPOSITORY/tree/main/GINFINITY"
-Source = "https://github.com/YOUR_ORG/YOUR_REPOSITORY"
-Issues = "https://github.com/YOUR_ORG/YOUR_REPOSITORY/issues"
+Homepage = "https://github.com/nicoaira/GINFINITY"
+Documentation = "https://github.com/nicoaira/GINFINITY/tree/main/docs"
+Source = "https://github.com/nicoaira/GINFINITY"
+Issues = "https://github.com/nicoaira/GINFINITY/issues"
+Changelog = "https://github.com/nicoaira/GINFINITY/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -3,6 +3,8 @@
 ## 1.0.0 - 2026-08-12
 
 - First production release.
+- Added standalone PyPI and Anaconda distribution metadata and publishing
+  workflows.
 - Dual licensing: PolyForm Noncommercial 1.0.0 for code and CC BY-NC 4.0 for
   trained weights, checkpoints, and embeddings.
 - Bundled SHA-256-verified all-data GINE checkpoint.
