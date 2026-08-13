@@ -5,6 +5,11 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
+      release_ref:
+        description: Git tag to build and publish
+        required: true
+        default: v1.0.1
+        type: string
       force:
         description: Replace an existing Anaconda.org build of this version
         type: boolean
@@ -21,6 +26,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_ref }}
       - uses: conda-incubator/setup-miniconda@v3
         with:
           activate-environment: conda-publish
@@ -33,15 +39,19 @@ jobs:
         shell: bash -el {0}
         run: |
           conda install -n base -y conda-build anaconda-client
+          conda install -y conda-build anaconda-client
+          hash -r
           conda-build --version
           anaconda --version
       - name: Verify tag and package versions
         shell: bash -el {0}
+        env:
+          RELEASE_REF: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_ref }}
         run: |
           python scripts/update_manifest.py --check
           version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           recipe_version="$(python -c 'import re; print(re.search(r"{% set version = \"([^\"]+)\" %}", open("conda-recipe/meta.yaml").read()).group(1))')"
-          test "${GITHUB_REF_NAME}" = "v${version}"
+          test "${RELEASE_REF}" = "v${version}"
           test "${recipe_version}" = "${version}"
       - name: Build and test conda package
         shell: bash -el {0}

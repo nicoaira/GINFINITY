@@ -80,10 +80,11 @@ channel `nicolas.aira`. It requires:
 
 It starts automatically when a GitHub release is published, from that release
 tag. The tag, `pyproject.toml`, and `conda-recipe/meta.yaml` must all carry the
-same version. A manual **Actions → Publish to Anaconda.org → Run workflow**
-retry is available; choose the release tag, not `main`. Enable **Replace an
-existing Anaconda.org build of this version** only when you intend to overwrite
-that version.
+same version. A manual retry is available from **Actions → Publish to
+Anaconda.org → Run workflow**. Start it from `main` and set **Git tag to
+build and publish** to the release tag, for example `v1.0.1`. Enable
+**Replace an existing Anaconda.org build of this version** only when you
+intend to overwrite that version.
 
 Users install with:
 
