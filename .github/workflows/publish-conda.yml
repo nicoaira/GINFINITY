@@ -41,8 +41,9 @@ jobs:
           conda install -n base -y conda-build anaconda-client
           conda install -y conda-build anaconda-client
           hash -r
+          command -v conda-build
+          command -v anaconda
           conda-build --version
-          anaconda --version
       - name: Verify tag and package versions
         shell: bash -el {0}
         env:
