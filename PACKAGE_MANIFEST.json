@@ -7,8 +7,8 @@
       "sha256": "95665c5c50186c1c00d228f298183d9f1c7d4e476dda1b4bc695992d2d536c7b"
     },
     ".github/workflows/publish-conda.yml": {
-      "bytes": 1631,
-      "sha256": "a1b96f05545ba87ed612f3b45e5b8902a828d4bb5c850bd13dd654e011627c8a"
+      "bytes": 1747,
+      "sha256": "8fe65bacb165692fafa9f0ff523f8ecba3aa1ce8ddd7ba5a2be6bb171d1e8ce9"
     },
     ".github/workflows/publish-pypi.yml": {
       "bytes": 1397,
