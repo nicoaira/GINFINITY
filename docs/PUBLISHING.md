@@ -69,12 +69,20 @@ Build and test the recipe locally with:
 conda build conda-recipe --output-folder conda-dist -c conda-forge
 ```
 
-The manual `publish-conda.yml` workflow requires:
+The manual `publish-conda.yml` workflow publishes to the personal Anaconda.org
+channel `nicolas.aira`. It requires:
 
 - repository environment: `anaconda`
-- repository variable: `ANACONDA_USER`
+- repository variable: `ANACONDA_USER=nicolas.aira`
 - environment secret: `ANACONDA_API_TOKEN`
 
-Set `ANACONDA_USER` to the owner of the personal Anaconda.org channel. The
+Trigger it from **Actions → Publish to Anaconda.org → Run workflow**. The
 workflow builds the package, runs the recipe tests, and uploads only the conda
-artifact created by that run.
+artifact created by that run. Do not start it for a version that is already on
+the channel unless you intend to replace that build.
+
+Users install with:
+
+```bash
+conda install -c nicolas.aira -c conda-forge ginfinity
+```
