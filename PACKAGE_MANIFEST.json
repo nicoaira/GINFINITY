@@ -1,6 +1,6 @@
 {
   "package": "ginfinity",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "files": {
     ".github/workflows/ci.yml": {
       "bytes": 719,
@@ -16,15 +16,15 @@
     },
     ".github/workflows/publish-testpypi.yml": {
       "bytes": 1829,
-      "sha256": "3e7b979673d102f6e24e7e18846bd1e9564b90a5869af1df06b353674699ff29"
+      "sha256": "e60af66c3987c148e5a28f6dbd54106ef8c07a0f716713d168d1c919d89001fb"
     },
     ".gitignore": {
       "bytes": 127,
       "sha256": "47f64eee00a3b3b34bc1e2f00ddafab6836e75163d18ff81622996a3ce34e4b0"
     },
     "CHANGELOG.md": {
-      "bytes": 953,
-      "sha256": "085551602867314e1967948a6e5b32b85f28c2fb09e113cde825146c5080833a"
+      "bytes": 1160,
+      "sha256": "ba55d677c2e3d5c3e5d1183ea22d383d7f49fbb0ab630ca6625505605a64997c"
     },
     "CONTRIBUTING.md": {
       "bytes": 584,
@@ -43,12 +43,12 @@
       "sha256": "08b7763bb660e71fabb0d714344dfca1ca0cd4b1b5db43a4e8ad92dbaf24dd93"
     },
     "NOTICE.md": {
-      "bytes": 526,
-      "sha256": "a138b304ce7b3c71777e7a53aac36730d1be0ca3e1c4d8250307ad541cb60bb0"
+      "bytes": 540,
+      "sha256": "e962caadb410cea0b7dc5725e05e9c8ffc5e6ddcae5b5e9dd19aab88eea4287a"
     },
     "README.md": {
       "bytes": 8802,
-      "sha256": "e6a75aae02dfa116712fb3bf5ef19f37664efe22860c7427e9d2962495f71a51"
+      "sha256": "e131d0dad032ae75228890fe7e9b02a0f847da5bc81d668122af06b6d227f9d3"
     },
     "conda-recipe/conda_build_config.yaml": {
       "bytes": 15,
@@ -56,7 +56,7 @@
     },
     "conda-recipe/meta.yaml": {
       "bytes": 1126,
-      "sha256": "fff1efa5936d7c50eb6e6767fb41f92d047028e007769173572325e5a6955b19"
+      "sha256": "c40e8d5828fcf82326e40770722f29914db1efdf6ecf21b81259c081bb601bbf"
     },
     "docs/API.md": {
       "bytes": 4153,
@@ -71,12 +71,12 @@
       "sha256": "ab1fe9ea43537c9c192ea5374664be0341ec294480d3a7ea1705bc7a5180d4c5"
     },
     "docs/PUBLISHING.md": {
-      "bytes": 3181,
-      "sha256": "f6e4031c0399662fc34efa97d08062b4ec505d83050c7ca35dc83473dd5d5520"
+      "bytes": 3042,
+      "sha256": "86452389545911fa7b3109b2a4fb6ec93ed5d5d98b0f9938ad5a2bb6074ca44c"
     },
     "pyproject.toml": {
       "bytes": 1511,
-      "sha256": "0da9631af87ddc7b42d6dfc57e73ec8385929155b3301419d4481fdbad4a2b25"
+      "sha256": "17024d447fc34da7660f50820ad7b48c4381b16d8be372d025f534bd23d433e6"
     },
     "requirements.lock": {
       "bytes": 45,
@@ -88,7 +88,7 @@
     },
     "src/ginfinity/__init__.py": {
       "bytes": 972,
-      "sha256": "c28e8c2c17092b0982516db400a5f449387e1c2a4f62bd23cbe467f942029b88"
+      "sha256": "2c1584a46d878041822ee48863bf8b245baf588b59978abda3ac6aecc1112c2b"
     },
     "src/ginfinity/__main__.py": {
       "bytes": 48,
@@ -120,7 +120,7 @@
     },
     "src/ginfinity/data/model.json": {
       "bytes": 1305,
-      "sha256": "0061227ff51cd45b3a47f49733533aec9ff26c14f0fc69b565e3d559e651990f"
+      "sha256": "e21751d1fed695f5d73f7c76583e37fbe1f414710ab26d268fdaed1333b527cb"
     },
     "src/ginfinity/graph.py": {
       "bytes": 27114,

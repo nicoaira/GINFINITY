@@ -31,7 +31,7 @@ Publishing. Configure a PyPI publisher with these values:
 
 Publish a GitHub release only after its tag points to the exact release commit.
 The tag name must be `v` plus the version in `pyproject.toml`, for example
-`v1.0.0`. The same release also starts the Anaconda.org workflow. The PyPI
+`v1.0.1`. The same release also starts the Anaconda.org workflow. The PyPI
 workflow builds both distribution formats, validates them with Twine, and
 publishes without a long-lived PyPI token.
 
@@ -53,14 +53,14 @@ Register a TestPyPI Trusted Publisher with these values:
 - environment: `testpypi`
 
 Run the **Publish to TestPyPI** workflow manually and retain its default
-`v1.0.0` source ref. Test installation requires PyPI as an additional index for
+`v1.0.1` source ref. Test installation requires PyPI as an additional index for
 runtime dependencies:
 
 ```bash
 python -m pip install \
   --index-url https://test.pypi.org/simple/ \
   --extra-index-url https://pypi.org/simple/ \
-  ginfinity==1.0.0
+  ginfinity==1.0.1
 ```
 
 ## Personal Anaconda channel
@@ -91,12 +91,9 @@ Users install with:
 conda install -c nicolas.aira -c conda-forge ginfinity
 ```
 
-## Replacing an already published 1.0.0
+## Previous 1.0.0 artifacts
 
-Anaconda.org can replace a build. Point `v1.0.0` at the commit you want, then
-run **Publish to Anaconda.org** on that tag with the replace option enabled.
-
-PyPI does not allow replacing files for a version that already exists. Yank
-`1.0.0` if it must not be installed, then publish a new version such as
-`1.0.1` from a new tag. Do not expect every current `1.0.0` artifact to become
-bit-identical on PyPI.
+`1.0.1` is the first tag that PyPI and Anaconda.org share. Existing `1.0.0`
+files stay published. Yank PyPI `1.0.0` if it should no longer be installed.
+Anaconda.org can replace its `1.0.0` build from the `v1.0.0` tag with the
+workflow replace option; prefer installing `1.0.1`.

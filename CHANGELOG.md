@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 - 2026-08-13
+
+- Republished the 1.0.0 encoder and APIs from one git tag so PyPI and the
+  personal Anaconda channel ship the same source tree.
+- Publish conda packages from the GitHub release tag.
+
 ## 1.0.0 - 2026-08-12
 
 - First production release.

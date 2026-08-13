@@ -17,7 +17,7 @@ From the tagged GitHub release:
 
 ```bash
 python -m pip install \
-  "git+https://github.com/nicoaira/GINFINITY.git@v1.0.0"
+  "git+https://github.com/nicoaira/GINFINITY.git@v1.0.1"
 ```
 
 Using conda:

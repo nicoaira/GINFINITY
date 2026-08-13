@@ -1,6 +1,6 @@
 # Artifact notice
 
-GINFINITY 1.0.0 contains one all-data RNA encoder checkpoint.
+GINFINITY 1.0.1 contains one all-data RNA encoder checkpoint (model 1.0.0).
 
 - Parameters: 306,436
 - Embedding dimension: 128
