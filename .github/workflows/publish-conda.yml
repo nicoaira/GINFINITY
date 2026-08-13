@@ -1,7 +1,14 @@
 name: Publish to Anaconda.org
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      force:
+        description: Replace an existing Anaconda.org build of this version
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,11 +35,14 @@ jobs:
           conda install -n base -y conda-build anaconda-client
           conda-build --version
           anaconda --version
-      - name: Verify version and source manifest
+      - name: Verify tag and package versions
         shell: bash -el {0}
         run: |
           python scripts/update_manifest.py --check
-          test "$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')" = "1.0.0"
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          recipe_version="$(python -c 'import re; print(re.search(r"{% set version = \"([^\"]+)\" %}", open("conda-recipe/meta.yaml").read()).group(1))')"
+          test "${GITHUB_REF_NAME}" = "v${version}"
+          test "${recipe_version}" = "${version}"
       - name: Build and test conda package
         shell: bash -el {0}
         run: conda-build conda-recipe --output-folder conda-dist -c conda-forge
@@ -41,10 +51,15 @@ jobs:
         env:
           ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
           ANACONDA_USER: ${{ vars.ANACONDA_USER }}
+          ANACONDA_FORCE: ${{ inputs.force }}
         run: |
           test -n "${ANACONDA_API_TOKEN}"
           test -n "${ANACONDA_USER}"
           mapfile -t packages < <(find conda-dist -type f \( -name '*.conda' -o -name '*.tar.bz2' \))
           test "${#packages[@]}" -eq 1
+          extra=()
+          if [ "${ANACONDA_FORCE}" = "true" ]; then
+            extra+=(--force)
+          fi
           anaconda --token "${ANACONDA_API_TOKEN}" upload \
-            --user "${ANACONDA_USER}" --label main "${packages[0]}"
+            --user "${ANACONDA_USER}" --label main "${extra[@]}" "${packages[0]}"
