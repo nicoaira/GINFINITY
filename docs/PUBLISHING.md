@@ -3,9 +3,41 @@
 The repository produces a platform-independent wheel, a source distribution,
 and a `noarch: python` conda package.
 
+## Release script
+
+`scripts/release.py` is the supported way to start a publish. Keep it in
+the git tree: it holds no credentials, and every checkout should run the
+same checks. It does **not** upload to PyPI or Anaconda.org. It verifies
+the tree, creates `v{version}`, and runs `gh release create`. That
+release event starts both GitHub Actions workflows.
+
+Before running it, bump the version in `pyproject.toml`,
+`conda-recipe/meta.yaml`, `src/ginfinity/__init__.py`, and
+`src/ginfinity/data/model.json` `package_version`, add a `CHANGELOG.md`
+section, run `python scripts/update_manifest.py`, commit, and push
+`main`.
+
+```bash
+python scripts/release.py --dry-run
+python scripts/release.py
+```
+
+The script refuses a dirty tree, a branch other than `main`, a `main`
+that does not match `origin/main`, mismatched version files, a stale
+`PACKAGE_MANIFEST.json`, or a tag that already exists. It runs pytest
+and `python -m build` / `twine check` unless you pass `--skip-tests` or
+`--skip-build`. Use `--yes` in a non-interactive shell.
+
+To retry only Anaconda.org after the GitHub release exists:
+
+```bash
+python scripts/release.py --retry-conda
+python scripts/release.py --retry-conda --replace   # overwrite that version
+```
+
 ## Release checks
 
-Run from the repository root:
+The script above runs these. To run them by hand from the repository root:
 
 ```bash
 python scripts/update_manifest.py
@@ -31,7 +63,8 @@ Publishing. Configure a PyPI publisher with these values:
 
 Publish a GitHub release only after its tag points to the exact release commit.
 The tag name must be `v` plus the version in `pyproject.toml`, for example
-`v1.0.1`. The same release also starts the Anaconda.org workflow. The PyPI
+`v1.1.0`. Prefer `python scripts/release.py`, which creates that release.
+The same release also starts the Anaconda.org workflow. The PyPI
 workflow builds both distribution formats, validates them with Twine, and
 publishes without a long-lived PyPI token.
 

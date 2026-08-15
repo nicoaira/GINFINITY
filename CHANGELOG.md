@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added `scripts/release.py` to preflight a release and publish it by
+  creating the GitHub release that starts the PyPI and Anaconda.org
+  workflows.
+
 ## 1.1.0 - 2026-08-15
 
 - Added sliced graphs: optional `start`/`end` windows on an RNA, including

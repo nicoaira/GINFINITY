@@ -13,4 +13,6 @@ python -m venv .venv
 Do not replace `src/ginfinity/data/encoder.pt` manually. Model artifacts and
 their JSON metadata must be generated together by the repository release
 builder, reviewed by hash, and exercised through wheel installation before
-merge. Add a changelog entry for every user-visible change.
+merge. Add a changelog entry for every user-visible change. Publish a release
+with `python scripts/release.py` after the version bump is on `main`;
+see [docs/PUBLISHING.md](docs/PUBLISHING.md).
