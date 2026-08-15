@@ -19,20 +19,8 @@
       "sha256": "e60af66c3987c148e5a28f6dbd54106ef8c07a0f716713d168d1c919d89001fb"
     },
     ".gitignore": {
-      "bytes": 127,
-      "sha256": "47f64eee00a3b3b34bc1e2f00ddafab6836e75163d18ff81622996a3ce34e4b0"
-    },
-    ".repowise/wiki.db": {
-      "bytes": 491520,
-      "sha256": "48d1effffde8ce1b0fe098037ca5fac1e9d7732bfc903237415bd17e12b158d7"
-    },
-    ".repowise/wiki.db-shm": {
-      "bytes": 32768,
-      "sha256": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
-    },
-    ".repowise/wiki.db-wal": {
-      "bytes": 0,
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "bytes": 139,
+      "sha256": "7154cde75439d52611b1b7e99e3573a3725efb222f4a92057768d8f99817e92c"
     },
     "CHANGELOG.md": {
       "bytes": 1767,
@@ -99,8 +87,8 @@
       "sha256": "fd7b56e995f5ecc8c50443382129003738658d79134b6410ff87506cf7d44fd4"
     },
     "scripts/update_manifest.py": {
-      "bytes": 2507,
-      "sha256": "01e0ee30286aed62b5ed3a1383d96b623e902a74a3f486ebdd980669c6b17f4f"
+      "bytes": 2520,
+      "sha256": "9797157041dc95a491acc026195a725de696b929a9ba08e48dfe31968d7923af"
     },
     "src/ginfinity/__init__.py": {
       "bytes": 1074,

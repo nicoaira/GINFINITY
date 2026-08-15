@@ -9,4 +9,5 @@
 *~
 /.coverage
 /.venv/
+/.repowise/
 /conda-dist/
