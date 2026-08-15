@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0 - 2026-08-15
+
+- Added sliced graphs: optional `start`/`end` windows on an RNA, including
+  several comma-separated windows per table row.
+- Added `keep_paired_neighbours` and `context_hops` so crossing-pair
+  partners and a bounded neighbourhood can take part in GINE message
+  passing. Returned embeddings keep only the core window.
+- Stored `residue_index` and `node_roles` on graphs and on shards that
+  actually contain a window or context. Role metadata is not a GINE
+  feature. Full-molecule shards stay readable by 1.0.x; older shards
+  without these tensors still load as all-core graphs.
+
 ## 1.0.1 - 2026-08-13
 
 - Republished the 1.0.0 encoder and APIs from one git tag so PyPI and the

@@ -1,6 +1,6 @@
 {
   "package": "ginfinity",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "files": {
     ".github/workflows/ci.yml": {
       "bytes": 719,
@@ -22,9 +22,21 @@
       "bytes": 127,
       "sha256": "47f64eee00a3b3b34bc1e2f00ddafab6836e75163d18ff81622996a3ce34e4b0"
     },
+    ".repowise/wiki.db": {
+      "bytes": 491520,
+      "sha256": "48d1effffde8ce1b0fe098037ca5fac1e9d7732bfc903237415bd17e12b158d7"
+    },
+    ".repowise/wiki.db-shm": {
+      "bytes": 32768,
+      "sha256": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
+    },
+    ".repowise/wiki.db-wal": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
     "CHANGELOG.md": {
-      "bytes": 1160,
-      "sha256": "ba55d677c2e3d5c3e5d1183ea22d383d7f49fbb0ab630ca6625505605a64997c"
+      "bytes": 1767,
+      "sha256": "8c09edad5cbfc10d1fed78e6981a91780d431696d828fb33d2fc04f00959bc90"
     },
     "CONTRIBUTING.md": {
       "bytes": 584,
@@ -47,8 +59,8 @@
       "sha256": "e962caadb410cea0b7dc5725e05e9c8ffc5e6ddcae5b5e9dd19aab88eea4287a"
     },
     "README.md": {
-      "bytes": 8802,
-      "sha256": "e131d0dad032ae75228890fe7e9b02a0f847da5bc81d668122af06b6d227f9d3"
+      "bytes": 10365,
+      "sha256": "6b060224ca03d22612d76757c60043443da67bcc4ebce23a2e5069e176e23e70"
     },
     "conda-recipe/conda_build_config.yaml": {
       "bytes": 15,
@@ -56,15 +68,15 @@
     },
     "conda-recipe/meta.yaml": {
       "bytes": 1126,
-      "sha256": "c40e8d5828fcf82326e40770722f29914db1efdf6ecf21b81259c081bb601bbf"
+      "sha256": "02c4589819de8e916d837ed43aeb785f83169f22c0c56669f42aab68620f3644"
     },
     "docs/API.md": {
-      "bytes": 4153,
-      "sha256": "8bb92697420642dc36fda806ff41958b92743f36e7c11f05c2254c8fdc46c4c0"
+      "bytes": 5769,
+      "sha256": "e080bf5f49d99a3915136abeda18c47ae451b2d17c1ec76f8cea33acd56019ff"
     },
     "docs/GRAPH_PIPELINE.md": {
-      "bytes": 3217,
-      "sha256": "d0f8fb59e421a7ad6c6315012445cf63e45b74bcdba374990eaf08f5949d086e"
+      "bytes": 3796,
+      "sha256": "d08646cc58f4557ce86beebfbfa8dff552ccae32ad7f9c56837c9db98e08d0d8"
     },
     "docs/OPERATIONS.md": {
       "bytes": 2100,
@@ -74,9 +86,13 @@
       "bytes": 3115,
       "sha256": "5ea036368c6e7b0732d78bccc0329131355399eab341533841e984d6defc5002"
     },
+    "docs/SLICED_GRAPHS.md": {
+      "bytes": 7380,
+      "sha256": "e3937e350699fab7f0e66d2587502668cd98a48f00862ab2b7180807474927e9"
+    },
     "pyproject.toml": {
       "bytes": 1511,
-      "sha256": "17024d447fc34da7660f50820ad7b48c4381b16d8be372d025f534bd23d433e6"
+      "sha256": "42f9e52f7e068df0728ad15a16d318f0ea91b3b12be55ecf7f23a638cf55063c"
     },
     "requirements.lock": {
       "bytes": 45,
@@ -87,8 +103,8 @@
       "sha256": "01e0ee30286aed62b5ed3a1383d96b623e902a74a3f486ebdd980669c6b17f4f"
     },
     "src/ginfinity/__init__.py": {
-      "bytes": 972,
-      "sha256": "2c1584a46d878041822ee48863bf8b245baf588b59978abda3ac6aecc1112c2b"
+      "bytes": 1074,
+      "sha256": "f9d06f6135612b697b15ebed95e5d279e52315e9d10f997b7befe1b2a9c355c5"
     },
     "src/ginfinity/__main__.py": {
       "bytes": 48,
@@ -99,16 +115,16 @@
       "sha256": "f9b22635039bb312ba76d9d8eb2aeaccc6678e89aa428eb68bc2cd786c242044"
     },
     "src/ginfinity/_validation.py": {
-      "bytes": 3598,
-      "sha256": "65e6c25beaf0be4ce8b2e6dd9af5cf81b69b1371e26edd72a0725d8b2af5d457"
+      "bytes": 9699,
+      "sha256": "15dd9ca09e8d5b64332bbc12100532df0516cd9a3695e3abf2e39226aed60121"
     },
     "src/ginfinity/api.py": {
-      "bytes": 8109,
-      "sha256": "20f5d09b40b97500f83d91d3901fd08bb9ec127310b21955a592155ae1cd78d1"
+      "bytes": 8913,
+      "sha256": "896d0f2eaac9570cc389657d13c8ff97a64582e5232c766187377586d45e3935"
     },
     "src/ginfinity/cli.py": {
-      "bytes": 8857,
-      "sha256": "618ca15fdb59b4da9fc07d249403be56497528f98f0dd6b4914b4ff41dd7ded2"
+      "bytes": 10996,
+      "sha256": "b8195a476ecfad59bfbaa4a7e013b59f367a806a33d0ef7670930a4c55fbcdf2"
     },
     "src/ginfinity/data/alignment.json": {
       "bytes": 471,
@@ -120,19 +136,19 @@
     },
     "src/ginfinity/data/model.json": {
       "bytes": 1305,
-      "sha256": "e21751d1fed695f5d73f7c76583e37fbe1f414710ab26d268fdaed1333b527cb"
+      "sha256": "08c0dcee41734a76fea8173d29a0967a7520a064a28759bbf5134a72fd837b83"
     },
     "src/ginfinity/graph.py": {
-      "bytes": 27114,
-      "sha256": "a2a0f9a7d0be4805d758ef33c23996a662f9a2bda8c33e44481cea667965784c"
+      "bytes": 39291,
+      "sha256": "35b6d62a3688451cfa7f9233bb0e652333ceffe8dcd0ea917dd819b81327fff4"
     },
     "src/ginfinity/py.typed": {
       "bytes": 1,
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     "src/ginfinity/table.py": {
-      "bytes": 3345,
-      "sha256": "5f49aaed9c38e77274039a9acfdc8663f8b5ad44fc33564c5e4cbe34d6b957c4"
+      "bytes": 4370,
+      "sha256": "ef9e4ecb6d20ec1593d3455c20f580f03c5f81599848e9fe255ca87e5b62e994"
     },
     "tests/conftest.py": {
       "bytes": 106,
@@ -147,16 +163,20 @@
       "sha256": "55edabfda57d77fbb54a27719c0b9dd50a3418755bed1d39e59dc8421cbf6e7f"
     },
     "tests/test_graph.py": {
-      "bytes": 4372,
-      "sha256": "c5d83dc1ff8d7442503dc9d78a491b5535302742b877205c4d4a6779914e57ef"
+      "bytes": 5095,
+      "sha256": "a4c5ac1b09d4a6e866a001014175f00ebcf4a6c57e519d2084b0db4ffdd2f6bd"
+    },
+    "tests/test_sliced_graphs.py": {
+      "bytes": 9935,
+      "sha256": "08a911d90b8f50a1b8f2b6496449b342878564a43392ba1d458cfde625b63914"
     },
     "tests/test_table.py": {
-      "bytes": 1665,
-      "sha256": "5bcfb59654074e11cc29cc6ed636f9a11f9f2ec0f9d03953d9dfc19c291b7e63"
+      "bytes": 3607,
+      "sha256": "8e04b2d172edea9ade6b0e3ddc6927d3c824d09ecc3a89e3d9e26d39a9e40581"
     },
     "tests/test_validation.py": {
-      "bytes": 850,
-      "sha256": "ef9899b16d2b96d75e711bb07a8678559185de2db8b5a23bac0edc3688104338"
+      "bytes": 1487,
+      "sha256": "1d08f8b32bc2c16eb597cd058695670c14ea2f3e6d0057d1bddf76cf085c7bcd"
     }
   }
 }

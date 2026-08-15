@@ -23,12 +23,45 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _record_manifest(record, value) -> dict:
+    entry = {
+        "identifier": record.identifier,
+        "length": record.length,
+        "core_length": int(value.shape[0]),
+        "shape": list(value.shape),
+    }
+    if record.start is not None and record.end is not None:
+        entry["start"] = record.start
+        entry["end"] = record.end
+    return entry
+
+
+def _slice_columns(args: argparse.Namespace) -> tuple[str | None, str | None]:
+    if getattr(args, "no_slices", False):
+        return None, None
+    return args.start_column, args.end_column
+
+
+def _graph_builder(args: argparse.Namespace) -> GraphBuilder:
+    keep = bool(args.keep_paired_neighbours)
+    hops = args.context_hops
+    if hops is not None:
+        keep = True
+        hops = int(hops)
+    else:
+        hops = 1
+    return GraphBuilder(keep_paired_neighbours=keep, context_hops=hops)
+
+
 def _read_records(args: argparse.Namespace):
+    start_column, end_column = _slice_columns(args)
     return read_rna_table(
         args.input,
         identifier_column=args.id_column,
         sequence_column=args.sequence_column,
         structure_column=args.structure_column,
+        start_column=start_column,
+        end_column=end_column,
         delimiter=args.delimiter,
     )
 
@@ -39,10 +72,13 @@ def _embed(args: argparse.Namespace) -> int:
     encoder = Ginfinity.load(
         device=args.device,
         allow_nondeterministic_cuda=args.allow_nondeterministic_cuda)
+    builder = _graph_builder(args)
     outputs = encoder.encode_many(
         records,
         max_batch_nodes=args.max_batch_nodes,
         max_batch_edges=args.max_batch_edges,
+        keep_paired_neighbours=builder.keep_paired_neighbours,
+        context_hops=builder.context_hops,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -62,9 +98,7 @@ def _embed(args: argparse.Namespace) -> int:
         "python": platform.python_version(),
         "numpy": np.__version__,
         "torch": torch.__version__,
-        "records": [{"identifier": record.identifier,
-                     "length": record.length,
-                     "shape": list(value.shape)}
+        "records": [_record_manifest(record, value)
                     for record, value in zip(records, outputs)],
         "elapsed_seconds": time.time() - started,
     }
@@ -78,7 +112,7 @@ def _embed(args: argparse.Namespace) -> int:
 def _build_graphs(args: argparse.Namespace) -> int:
     started = time.time()
     records = _read_records(args)
-    shard = GraphBuilder().build_shard(records)
+    shard = _graph_builder(args).build_shard(records)
     metadata_path = args.metadata or graph_metadata_path(args.output)
     save_graph_shard(
         shard,
@@ -136,10 +170,14 @@ def _embed_graphs(args: argparse.Namespace) -> int:
         "output": str(args.output),
         "device": args.device,
         "records": [
-            {"identifier": identifier, "length": length,
+            {"identifier": identifier,
+             "length": len(sequence),
+             "node_count": node_count,
+             "core_length": core_length,
              "shape": list(value.shape)}
-            for identifier, length, value
-            in zip(shard.identifiers, shard.lengths, outputs)
+            for identifier, sequence, node_count, core_length, value
+            in zip(shard.identifiers, shard.sequences, shard.lengths,
+                   shard.core_counts, outputs)
         ],
         "elapsed_seconds": time.time() - started,
     }
@@ -159,7 +197,26 @@ def _add_table_columns(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--id-column", default="transcript_id")
     parser.add_argument("--sequence-column", default="sequence")
     parser.add_argument("--structure-column", default="secondary_structure")
+    parser.add_argument(
+        "--start-column", default="start",
+        help="optional 0-based half-open window start column")
+    parser.add_argument(
+        "--end-column", default="end",
+        help="optional 0-based half-open window end column")
+    parser.add_argument(
+        "--no-slices", action="store_true",
+        help="ignore start/end columns and encode full molecules")
     parser.add_argument("--delimiter", default="\t")
+
+
+def _add_slice_graph_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--keep-paired-neighbours", action="store_true",
+        help="keep crossing pair partners outside each window")
+    parser.add_argument(
+        "--context-hops", type=int, default=None, metavar="N",
+        help="neighbourhood depth around crossing pair partners "
+             "(implies --keep-paired-neighbours; hop 1 is the partner)")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -180,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     embed.add_argument("--max-batch-nodes", type=int, default=60_000)
     embed.add_argument("--max-batch-edges", type=int, default=300_000)
     _add_table_columns(embed)
+    _add_slice_graph_options(embed)
     build_graphs = subparsers.add_parser(
         "build-graphs", help="build a persistent graph shard from an RNA TSV")
     build_graphs.add_argument("--input", type=Path, required=True)
@@ -187,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     build_graphs.add_argument("--metadata", type=Path)
     build_graphs.add_argument("--checksum", action="store_true")
     _add_table_columns(build_graphs)
+    _add_slice_graph_options(build_graphs)
     embed_graphs = subparsers.add_parser(
         "embed-graphs", help="encode a previously built graph shard")
     embed_graphs.add_argument("--input", type=Path, required=True)

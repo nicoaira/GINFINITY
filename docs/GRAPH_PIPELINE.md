@@ -34,6 +34,16 @@ The Safetensors file contains only numeric arrays:
 | `edge_types` | `uint8` | `(total_edges,)` |
 | `node_ptr` | `int64` | `(records + 1,)` |
 | `edge_ptr` | `int64` | `(records + 1,)` |
+| `residue_index` | `int32` | `(total_nodes,)` |
+| `node_roles` | `uint8` | `(total_nodes,)` |
+
+`residue_index` and `node_roles` are written only when a shard contains a
+window or retained context. They are optional on read so full-molecule
+shards and shards written before this feature still load. Missing roles
+are treated as core. They are provenance, not GINE features: after
+encoding, only `node_roles == 0` rows are returned. `node_ptr` counts
+selected nodes, which may be smaller than the source sequence when the
+graph is a window. See [sliced graphs](SLICED_GRAPHS.md).
 
 The JSON sidecar stores identifiers, sequences, structures, counts, and the
 versioned graph specification. Dense edge one-hot vectors are reconstructed

@@ -11,8 +11,8 @@ import torch
 
 from ._model import EncoderConfig, GINEEncoder
 from ._validation import RNA
-from .graph import (Graph, GraphBuilder, GraphCompatibilityError, GraphShard,
-                    GraphSpec)
+from .graph import (NODE_ROLE_CORE, Graph, GraphBuilder,
+                    GraphCompatibilityError, GraphShard, GraphSpec)
 
 
 class ModelIntegrityError(RuntimeError):
@@ -109,17 +109,42 @@ class Ginfinity:
     def info(self) -> dict:
         return json.loads(json.dumps(self._metadata))
 
-    def encode(self, record: RNA) -> np.ndarray:
-        return self.encode_many([record])[0]
+    def encode(
+        self,
+        record: RNA,
+        *,
+        keep_paired_neighbours: bool = False,
+        context_hops: int = 1,
+    ) -> np.ndarray:
+        return self.encode_many(
+            [record],
+            keep_paired_neighbours=keep_paired_neighbours,
+            context_hops=context_hops,
+        )[0]
 
-    def encode_many(self, records: Sequence[RNA], *,
-                    max_batch_nodes: int = 60_000,
-                    max_batch_edges: int = 300_000) -> list[np.ndarray]:
-        """Build graphs and encode records through the staged public path."""
+    def encode_many(
+        self,
+        records: Sequence[RNA],
+        *,
+        max_batch_nodes: int = 60_000,
+        max_batch_edges: int = 300_000,
+        keep_paired_neighbours: bool = False,
+        context_hops: int = 1,
+    ) -> list[np.ndarray]:
+        """Build graphs and encode records through the staged public path.
+
+        For sliced records, context nucleotides participate in message
+        passing and are discarded after encoding. Returned arrays contain
+        only core nucleotides, in 5′→3′ order.
+        """
         records = list(records)
         if not records:
             return []
-        shard = GraphBuilder(self._graph_spec).build_shard(records)
+        shard = GraphBuilder(
+            self._graph_spec,
+            keep_paired_neighbours=keep_paired_neighbours,
+            context_hops=context_hops,
+        ).build_shard(records)
         return self.encode_graphs(
             shard,
             max_batch_nodes=max_batch_nodes,
@@ -195,11 +220,11 @@ class Ginfinity:
         ).float().cpu().numpy().astype(np.float64)
         norms = np.linalg.norm(embedding, axis=1, keepdims=True)
         embedding = embedding / np.maximum(norms, 1e-12)
-        return [
-            np.ascontiguousarray(
-                embedding[int(shard.node_ptr[index]):
-                          int(shard.node_ptr[index + 1])],
-                dtype=np.float32,
-            )
-            for index in range(shard.record_count)
-        ]
+        outputs: list[np.ndarray] = []
+        for index in range(shard.record_count):
+            node_start = int(shard.node_ptr[index])
+            node_stop = int(shard.node_ptr[index + 1])
+            core = shard.node_roles[node_start:node_stop] == NODE_ROLE_CORE
+            outputs.append(np.ascontiguousarray(
+                embedding[node_start:node_stop][core], dtype=np.float32))
+        return outputs

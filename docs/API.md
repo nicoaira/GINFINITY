@@ -2,12 +2,17 @@
 
 ## `RNA`
 
-`RNA(identifier, sequence, structure)` is an immutable validated input record.
-Normalization and structural validation happen before graph construction.
+`RNA(identifier, sequence, structure, start=None, end=None)` is an immutable
+validated input record. Normalization and structural validation happen before
+graph construction. `start` and `end` are optional 0-based half-open
+coordinates into the normalized sequence (`sequence[start:end]` is the
+core window). Both must be omitted for a full-molecule record.
 
 `RNA.from_mapping(row, identifier_column=..., sequence_column=...,
-structure_column=...)` creates the same record from a mapping whose field names
-are selected by the caller.
+structure_column=..., start_column=None, end_column=None)` creates one
+record from a mapping. A mapping that lists several windows must use
+`RNA.many_from_mapping(...)`, which emits one `RNA` per window and suffixes
+identifiers as `{id}:{start}-{end}`.
 
 ## `read_rna_table`
 
@@ -18,6 +23,8 @@ read_rna_table(
     identifier_column="transcript_id",
     sequence_column="sequence",
     structure_column="secondary_structure",
+    start_column="start",
+    end_column="end",
     delimiter="\t",
 ) -> list[RNA]
 ```
@@ -25,6 +32,11 @@ read_rna_table(
 Reads records in file order. Required columns may appear in any order and the
 table may contain additional columns. The delimiter must be one character.
 Every row passes through the normal `RNA` validation contract.
+
+`start` and `end` are optional. When those columns are present, each row
+may hold one window or parallel comma-separated windows. Each window
+becomes its own record with identifier `{id}:{start}-{end}`. Pass
+`start_column=None, end_column=None` to ignore window columns.
 
 ## `Ginfinity.load`
 
@@ -45,10 +57,18 @@ weights-only deserialization.
 ## `Ginfinity.encode`
 
 ```python
-encode(rna: RNA) -> numpy.ndarray
+encode(
+    rna: RNA,
+    *,
+    keep_paired_neighbours=False,
+    context_hops=1,
+) -> numpy.ndarray
 ```
 
 Returns an `(L, 128)` C-contiguous `float32` matrix with unit-length rows.
+For a sliced record `L` is the core window length, not the source molecule.
+`keep_paired_neighbours` and `context_hops` have the same meaning as on
+`encode_many`.
 
 ## `Ginfinity.encode_many`
 
@@ -58,12 +78,20 @@ encode_many(
     *,
     max_batch_nodes=60000,
     max_batch_edges=300000,
+    keep_paired_neighbours=False,
+    context_hops=1,
 )
     -> list[numpy.ndarray]
 ```
 
 Preserves input order and rejects duplicate identifiers. Batches are bounded by
 total nucleotide and edge counts rather than record count.
+
+`keep_paired_neighbours` retains nucleotides outside a window when they are
+base-paired with a core nucleotide. `context_hops` is the depth of that
+neighbourhood (hop 1 is the partner). Context nodes participate in GINE
+message passing and are discarded; each returned array contains only core
+rows. See [sliced graphs](SLICED_GRAPHS.md).
 
 ## Graph construction and persistence
 
@@ -73,10 +101,17 @@ content hash calculated separately for each graph.
 
 ```python
 builder = GraphBuilder()             # uses the bundled GraphSpec
+builder = GraphBuilder(
+    keep_paired_neighbours=True, context_hops=3)
 graph = builder.build(rna)           # one Graph
 graphs = builder.build_many(records) # list[Graph]
 shard = builder.build_shard(records) # one GraphShard
 ```
+
+A sliced `Graph` keeps the full source `sequence`/`structure`. Selected
+nodes are described by `residue_index` (0-based source coordinates) and
+`node_roles` (`NODE_ROLE_CORE` or `NODE_ROLE_CONTEXT`). The role array is
+not part of `node_features`.
 
 `GraphShard` stores concatenated compact arrays plus per-record offsets and
 metadata. Persist it without Python-object serialization:

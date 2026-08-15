@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 import ginfinity.graph as graph_module
+from safetensors import safe_open
+
 from ginfinity import (Ginfinity, GraphBuilder, GraphCompatibilityError,
                         GraphSpec, GraphValidationError, RNA,
                         load_graph_shard, partition_records, save_graph_shard)
@@ -24,6 +26,9 @@ def test_graph_builder_exposes_compact_model_versioned_arrays():
     assert graph.edge_index.dtype == np.int32
     assert graph.edge_types.shape == (30,)
     assert graph.edge_types.dtype == np.uint8
+    np.testing.assert_array_equal(graph.residue_index, np.arange(8, dtype=np.int32))
+    assert graph.node_count == 8
+    assert graph.core_count == 8
     assert graph.spec.sha256 == GraphSpec.bundled().sha256
     assert len(graph.spec.sha256) == 64
 
@@ -44,6 +49,16 @@ def test_graph_shard_round_trip_uses_metadata_validation_by_default(tmp_path):
     np.testing.assert_array_equal(restored.edge_types, original.edge_types)
     np.testing.assert_array_equal(restored.node_ptr, original.node_ptr)
     np.testing.assert_array_equal(restored.edge_ptr, original.edge_ptr)
+    np.testing.assert_array_equal(restored.residue_index, original.residue_index)
+    np.testing.assert_array_equal(restored.node_roles, original.node_roles)
+
+
+def test_full_molecule_shards_omit_optional_node_metadata(tmp_path):
+    tensor_path = tmp_path / "graphs.safetensors"
+    save_graph_shard(GraphBuilder().build_shard(_records()), tensor_path)
+    with safe_open(str(tensor_path), framework="np") as handle:
+        assert set(handle.keys()) == {
+            "node_features", "edge_index", "edge_types", "node_ptr", "edge_ptr"}
 
 
 def test_optional_shard_checksum_detects_content_change(tmp_path):

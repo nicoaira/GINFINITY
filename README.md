@@ -183,6 +183,53 @@ ginfinity embed \
 already exist as Python mappings. The column flags are also available on
 `ginfinity build-graphs`.
 
+## Sliced graphs
+
+Optional `start` and `end` columns select a window on a longer molecule.
+Coordinates are 0-based and half-open, like `sequence[start:end]`. One row
+may list several windows as parallel comma-separated lists; each window
+becomes its own graph.
+
+```text
+transcript_id	sequence	secondary_structure	start	end
+example	GGGAAACCCUUUUGGG	......(((....)))	9	16
+example	GGGAAACCCUUUUGGG	......(((....)))	9,6	16,12
+```
+
+By default only the window is kept. `--keep-paired-neighbours` also keeps a
+nucleotide outside the window when it is base-paired with one inside it.
+`--context-hops N` expands that neighbourhood: hop 1 is the crossing-pair
+partner, further hops follow backbone, pairing, and skip-2 edges.
+
+```python
+from ginfinity import Ginfinity, RNA
+
+encoder = Ginfinity.load()
+rna = RNA(
+    "example",
+    "GGGAAACCCUUUUGGG",
+    "......(((....)))",
+    start=9,
+    end=16,
+)
+embedding = encoder.encode(
+    rna, keep_paired_neighbours=True, context_hops=3)
+print(embedding.shape)  # (7, 128) — core nucleotides only
+```
+
+```bash
+ginfinity embed \
+  --input structures.tsv \
+  --output embeddings.npz \
+  --keep-paired-neighbours \
+  --context-hops 3
+```
+
+Context nucleotides take part in GINE message passing and are discarded
+afterwards. They are never written into the embedding matrix. See
+[Sliced graphs](https://github.com/nicoaira/GINFINITY/blob/main/docs/SLICED_GRAPHS.md)
+for the coordinate convention, node-role metadata, and a worked example.
+
 ## Input contract
 
 - Sequence length: 1–4,096 nucleotides.
@@ -215,6 +262,7 @@ or hardware. Use CPU when stable byte-for-byte output is required.
 ## Documentation
 
 - [API reference](https://github.com/nicoaira/GINFINITY/blob/main/docs/API.md)
+- [Sliced graphs](https://github.com/nicoaira/GINFINITY/blob/main/docs/SLICED_GRAPHS.md)
 - [Distributed graph pipeline](https://github.com/nicoaira/GINFINITY/blob/main/docs/GRAPH_PIPELINE.md)
 - [Operations guide](https://github.com/nicoaira/GINFINITY/blob/main/docs/OPERATIONS.md)
 - [Publishing guide](https://github.com/nicoaira/GINFINITY/blob/main/docs/PUBLISHING.md)
