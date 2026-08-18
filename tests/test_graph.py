@@ -85,13 +85,14 @@ def test_default_shard_path_does_not_hash_tensor_content(tmp_path, monkeypatch):
 def test_saved_staged_encoding_equals_direct_encoding_across_microbatches(tmp_path):
     records = _records()
     encoder = Ginfinity.load()
-    direct = encoder.encode_many(records)
+    direct = encoder.encode_many(records, embedding_dtype=np.float32)
     tensor_path = tmp_path / "graphs.safetensors"
     save_graph_shard(GraphBuilder().build_shard(records), tensor_path)
     restored = load_graph_shard(
         tensor_path, expected_spec=encoder.graph_spec)
     staged = encoder.encode_graphs(
-        restored, max_batch_nodes=8, max_batch_edges=30)
+        restored, max_batch_nodes=8, max_batch_edges=30,
+        embedding_dtype=np.float32)
     for direct_value, staged_value in zip(direct, staged):
         np.testing.assert_allclose(
             staged_value, direct_value, rtol=1e-5, atol=3e-7)

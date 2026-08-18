@@ -1,6 +1,6 @@
 {
   "package": "ginfinity",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "files": {
     ".github/workflows/ci.yml": {
       "bytes": 719,
@@ -23,8 +23,8 @@
       "sha256": "7154cde75439d52611b1b7e99e3573a3725efb222f4a92057768d8f99817e92c"
     },
     "CHANGELOG.md": {
-      "bytes": 1934,
-      "sha256": "44432fdf1744294f1dac1c01751a109b8c34240d0f9f7a19a2f1bff3cd208a01"
+      "bytes": 2172,
+      "sha256": "2459205254b9acb4d53b607fab1466fd3d276479072bb5f068c97bc6e19008e5"
     },
     "CONTRIBUTING.md": {
       "bytes": 718,
@@ -47,8 +47,8 @@
       "sha256": "e962caadb410cea0b7dc5725e05e9c8ffc5e6ddcae5b5e9dd19aab88eea4287a"
     },
     "README.md": {
-      "bytes": 10365,
-      "sha256": "6b060224ca03d22612d76757c60043443da67bcc4ebce23a2e5069e176e23e70"
+      "bytes": 10537,
+      "sha256": "275a5726a604a13ee90878bb3bfdf8cf42d1150ebfef0cedef8b4a3beb1e78da"
     },
     "conda-recipe/conda_build_config.yaml": {
       "bytes": 15,
@@ -56,11 +56,11 @@
     },
     "conda-recipe/meta.yaml": {
       "bytes": 1126,
-      "sha256": "02c4589819de8e916d837ed43aeb785f83169f22c0c56669f42aab68620f3644"
+      "sha256": "ea8a8082157c9eaf88d990c5271fb1899bfdf7c88c38b06a275cbf39f72640e5"
     },
     "docs/API.md": {
-      "bytes": 5769,
-      "sha256": "e080bf5f49d99a3915136abeda18c47ae451b2d17c1ec76f8cea33acd56019ff"
+      "bytes": 5872,
+      "sha256": "8eb4646a02ff9d075136cb665716c79b051d380bf28e8dc5296179c5bcf20b70"
     },
     "docs/GRAPH_PIPELINE.md": {
       "bytes": 3796,
@@ -80,7 +80,7 @@
     },
     "pyproject.toml": {
       "bytes": 1511,
-      "sha256": "42f9e52f7e068df0728ad15a16d318f0ea91b3b12be55ecf7f23a638cf55063c"
+      "sha256": "e8dc66572567d253c8413b79b6d2f8d47e46d0a96cfffa63872ba3bbc0640ea0"
     },
     "requirements.lock": {
       "bytes": 45,
@@ -96,7 +96,7 @@
     },
     "src/ginfinity/__init__.py": {
       "bytes": 1074,
-      "sha256": "f9d06f6135612b697b15ebed95e5d279e52315e9d10f997b7befe1b2a9c355c5"
+      "sha256": "70b90887c4d5a91a7a79645a8da3075a37781e65f8f8a38c6fd4c135a4ca0197"
     },
     "src/ginfinity/__main__.py": {
       "bytes": 48,
@@ -111,12 +111,12 @@
       "sha256": "15dd9ca09e8d5b64332bbc12100532df0516cd9a3695e3abf2e39226aed60121"
     },
     "src/ginfinity/api.py": {
-      "bytes": 8913,
-      "sha256": "896d0f2eaac9570cc389657d13c8ff97a64582e5232c766187377586d45e3935"
+      "bytes": 9734,
+      "sha256": "42028535322a3bb4c85a620ff274d13990aaaeec0157dceaa0ccffcd9edf64ca"
     },
     "src/ginfinity/cli.py": {
-      "bytes": 10996,
-      "sha256": "b8195a476ecfad59bfbaa4a7e013b59f367a806a33d0ef7670930a4c55fbcdf2"
+      "bytes": 11427,
+      "sha256": "25918766c5acf5e78130b8fbdb4721e0d16587f0c505d969efa73a81285dfd27"
     },
     "src/ginfinity/data/alignment.json": {
       "bytes": 471,
@@ -128,7 +128,7 @@
     },
     "src/ginfinity/data/model.json": {
       "bytes": 1305,
-      "sha256": "08c0dcee41734a76fea8173d29a0967a7520a064a28759bbf5134a72fd837b83"
+      "sha256": "180dfec5898d57429ef74eb17a5d3c76236099f6d860e83e86c29d75b4b49969"
     },
     "src/ginfinity/graph.py": {
       "bytes": 39291,
@@ -147,16 +147,16 @@
       "sha256": "8c75b617726556b77f7765ea7fb2d37a0203fddb8c336687122f0030b78f3bf9"
     },
     "tests/test_api.py": {
-      "bytes": 2387,
-      "sha256": "12faf72e1d20388c95f6130c141c761ea0d00ef8315acd5646534410ffb8bbad"
+      "bytes": 2801,
+      "sha256": "c51123d56e18c67b1121674b34fb17ac84bd1b2c88b876286c6919f275936739"
     },
     "tests/test_encoder_cli.py": {
-      "bytes": 2813,
-      "sha256": "55edabfda57d77fbb54a27719c0b9dd50a3418755bed1d39e59dc8421cbf6e7f"
+      "bytes": 3338,
+      "sha256": "aa8c6d66e3d92e2fe670e06c76f68d1d0f5a6e244bd7b347c42e954749c877c8"
     },
     "tests/test_graph.py": {
-      "bytes": 5095,
-      "sha256": "a4c5ac1b09d4a6e866a001014175f00ebcf4a6c57e519d2084b0db4ffdd2f6bd"
+      "bytes": 5159,
+      "sha256": "e943c82d051011e78d2464222ec2e83455334224d3c1780d83b4ae4f6a49ef79"
     },
     "tests/test_release.py": {
       "bytes": 1827,
@@ -164,7 +164,7 @@
     },
     "tests/test_sliced_graphs.py": {
       "bytes": 9935,
-      "sha256": "08a911d90b8f50a1b8f2b6496449b342878564a43392ba1d458cfde625b63914"
+      "sha256": "72385bbac41f1bca97948ab9b17fe2354d5fbd42339600bed360e594859bb4a5"
     },
     "tests/test_table.py": {
       "bytes": 3607,

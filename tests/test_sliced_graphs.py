@@ -88,7 +88,7 @@ def test_encode_returns_only_core_rows_in_sequence_order():
     record = _sliced(start=9, end=16)
     embedding = encoder.encode(record, keep_paired_neighbours=True, context_hops=3)
     assert embedding.shape == (7, 128)
-    assert embedding.dtype == np.float32
+    assert embedding.dtype == np.float16
     np.testing.assert_allclose(np.linalg.norm(embedding, axis=1), 1.0, atol=1e-6)
 
 

@@ -65,7 +65,9 @@ encode(
 ) -> numpy.ndarray
 ```
 
-Returns an `(L, 128)` C-contiguous `float32` matrix with unit-length rows.
+Returns an `(L, 128)` C-contiguous `float16` matrix with unit-length rows by
+default. `embedding_dtype` accepts a NumPy dtype or dtype name (`float16`,
+`float32`, or `float64`).
 For a sliced record `L` is the core window length, not the source molecule.
 `keep_paired_neighbours` and `context_hops` have the same meaning as on
 `encode_many`.

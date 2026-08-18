@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "package": "ginfinity",
-  "package_version": "1.1.0",
+  "package_version": "1.2.0",
   "model_version": "1.0.0",
   "checkpoint_sha256": "7e9cd61028c4d2ab3c50c475774aef233f3e3799690469e8c82df74ce46c3754",
   "parameter_count": 306436,
@@ -41,7 +41,7 @@
   },
   "graph_spec_sha256": "da2e670e377e47667fec8a8ebb1c90c6e506b9cdd8a5555a6bfab50b202fb9bd",
   "default_device": "cpu",
-  "output_dtype": "float32",
+  "output_dtype": "float16",
   "output_normalization": "L2 per nucleotide",
   "input": {
     "sequence": "canonical A/C/G/U; T normalizes to U",

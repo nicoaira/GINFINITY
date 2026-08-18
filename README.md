@@ -48,8 +48,11 @@ embedding = encoder.encode(rna)
 print(embedding.shape)  # (8, 128)
 ```
 
-Embeddings are returned as L2-normalized `float32` NumPy arrays in 5′→3′
-sequence order. Reuse a loaded `Ginfinity` instance across requests.
+Embeddings are returned as L2-normalized `float16` NumPy arrays by default in
+5′→3′ sequence order. Pass `embedding_dtype="float32"` (or `np.float64`) to
+`encode`, `encode_many`, `encode_graph`, or `encode_graphs` to select another
+floating-point output dtype. Reuse a loaded `Ginfinity` instance across
+requests.
 
 Batch inference amortizes graph construction and model overhead:
 

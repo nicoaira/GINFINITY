@@ -18,6 +18,7 @@ def test_cli_writes_embeddings_and_integrity_manifest(tmp_path):
     with np.load(output) as archive:
         assert archive["rna-1"].shape == (8, 128)
         assert archive["rna-2"].shape == (8, 128)
+        assert archive["rna-1"].dtype == np.float16
     got = json.loads(manifest.read_text())
     assert got["status"] == "complete"
     assert got["records"][0]["identifier"] == "rna-1"
@@ -44,6 +45,20 @@ def test_embed_cli_accepts_configurable_columns_and_extra_fields(tmp_path):
     ]) == 0
     with np.load(output) as archive:
         assert archive["custom-id"].shape == (4, 128)
+
+
+def test_embed_cli_accepts_embedding_dtype(tmp_path):
+    source = tmp_path / "molecules.tsv"
+    source.write_text(
+        "transcript_id\tsequence\tsecondary_structure\n"
+        "rna-1\tACGU\t....\n")
+    output = tmp_path / "embeddings.npz"
+    assert main([
+        "embed", "--input", str(source), "--output", str(output),
+        "--embedding-dtype", "float32",
+    ]) == 0
+    with np.load(output) as archive:
+        assert archive["rna-1"].dtype == np.float32
 
 
 def test_cli_can_build_then_embed_a_graph_shard(tmp_path):

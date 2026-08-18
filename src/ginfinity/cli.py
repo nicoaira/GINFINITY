@@ -79,6 +79,7 @@ def _embed(args: argparse.Namespace) -> int:
         max_batch_edges=args.max_batch_edges,
         keep_paired_neighbours=builder.keep_paired_neighbours,
         context_hops=builder.context_hops,
+        embedding_dtype=args.embedding_dtype,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -150,6 +151,7 @@ def _embed_graphs(args: argparse.Namespace) -> int:
         shard,
         max_batch_nodes=args.max_batch_nodes,
         max_batch_edges=args.max_batch_edges,
+        embedding_dtype=args.embedding_dtype,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -236,6 +238,9 @@ def main(argv: list[str] | None = None) -> int:
     embed.add_argument("--allow-nondeterministic-cuda", action="store_true")
     embed.add_argument("--max-batch-nodes", type=int, default=60_000)
     embed.add_argument("--max-batch-edges", type=int, default=300_000)
+    embed.add_argument(
+        "--embedding-dtype", choices=("float16", "float32", "float64"),
+        default="float16", help="dtype for returned node embeddings")
     _add_table_columns(embed)
     _add_slice_graph_options(embed)
     build_graphs = subparsers.add_parser(
@@ -257,6 +262,9 @@ def main(argv: list[str] | None = None) -> int:
         "--allow-nondeterministic-cuda", action="store_true")
     embed_graphs.add_argument("--max-batch-nodes", type=int, default=60_000)
     embed_graphs.add_argument("--max-batch-edges", type=int, default=300_000)
+    embed_graphs.add_argument(
+        "--embedding-dtype", choices=("float16", "float32", "float64"),
+        default="float16", help="dtype for returned node embeddings")
     embed_graphs.add_argument("--verify-checksum", action="store_true")
     embed_graphs.add_argument("--full-validation", action="store_true")
     embed_graphs.add_argument("--checksum", action="store_true")

@@ -34,6 +34,16 @@ def _load_json(path: Path) -> dict:
         raise ModelIntegrityError(f"cannot read model metadata {path}: {error}") from error
 
 
+def _embedding_dtype(value: np.dtype | str) -> np.dtype:
+    try:
+        dtype = np.dtype(value)
+    except TypeError as error:
+        raise ValueError(f"unsupported embedding dtype {value!r}") from error
+    if dtype.kind != "f":
+        raise ValueError(f"embedding dtype must be floating-point, got {dtype}")
+    return dtype
+
+
 def default_alignment_parameters() -> dict[str, float]:
     """Return model-versioned parameters for the separate SW package."""
     data = _load_json(_resource_directory() / "alignment.json")
@@ -115,11 +125,13 @@ class Ginfinity:
         *,
         keep_paired_neighbours: bool = False,
         context_hops: int = 1,
+        embedding_dtype: np.dtype | str = np.float16,
     ) -> np.ndarray:
         return self.encode_many(
             [record],
             keep_paired_neighbours=keep_paired_neighbours,
             context_hops=context_hops,
+            embedding_dtype=embedding_dtype,
         )[0]
 
     def encode_many(
@@ -130,6 +142,7 @@ class Ginfinity:
         max_batch_edges: int = 300_000,
         keep_paired_neighbours: bool = False,
         context_hops: int = 1,
+        embedding_dtype: np.dtype | str = np.float16,
     ) -> list[np.ndarray]:
         """Build graphs and encode records through the staged public path.
 
@@ -149,11 +162,14 @@ class Ginfinity:
             shard,
             max_batch_nodes=max_batch_nodes,
             max_batch_edges=max_batch_edges,
+            embedding_dtype=embedding_dtype,
         )
 
-    def encode_graph(self, graph: Graph) -> np.ndarray:
+    def encode_graph(
+        self, graph: Graph, *, embedding_dtype: np.dtype | str = np.float16
+    ) -> np.ndarray:
         """Encode one prebuilt graph."""
-        return self.encode_graphs([graph])[0]
+        return self.encode_graphs([graph], embedding_dtype=embedding_dtype)[0]
 
     def encode_graphs(
         self,
@@ -161,6 +177,7 @@ class Ginfinity:
         *,
         max_batch_nodes: int = 60_000,
         max_batch_edges: int = 300_000,
+        embedding_dtype: np.dtype | str = np.float16,
     ) -> list[np.ndarray]:
         """Encode prebuilt graphs, dynamically microbatching a persistent shard."""
         if isinstance(graphs, GraphShard):
@@ -176,6 +193,7 @@ class Ginfinity:
                 "this encoder")
         if max_batch_nodes <= 0 or max_batch_edges <= 0:
             raise ValueError("batch node and edge limits must be positive")
+        embedding_dtype = _embedding_dtype(embedding_dtype)
         lengths = shard.lengths
         edge_counts = shard.edge_counts
         if max(lengths) > max_batch_nodes:
@@ -200,12 +218,15 @@ class Ginfinity:
                 nodes += next_nodes
                 edges += next_edges
                 stop += 1
-            outputs.extend(self._run_graph_shard(shard.slice(start, stop)))
+            outputs.extend(self._run_graph_shard(
+                shard.slice(start, stop), embedding_dtype))
             start = stop
         return outputs
 
     @torch.inference_mode()
-    def _run_graph_shard(self, shard: GraphShard) -> list[np.ndarray]:
+    def _run_graph_shard(
+        self, shard: GraphShard, embedding_dtype: np.dtype
+    ) -> list[np.ndarray]:
         node = torch.from_numpy(shard.node_features).to(self.device)
         edge_index = torch.from_numpy(shard.edge_index).to(
             device=self.device, dtype=torch.long)
@@ -226,5 +247,5 @@ class Ginfinity:
             node_stop = int(shard.node_ptr[index + 1])
             core = shard.node_roles[node_start:node_stop] == NODE_ROLE_CORE
             outputs.append(np.ascontiguousarray(
-                embedding[node_start:node_stop][core], dtype=np.float32))
+                embedding[node_start:node_stop][core], dtype=embedding_dtype))
         return outputs

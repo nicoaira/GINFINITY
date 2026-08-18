@@ -17,10 +17,20 @@ def test_bundled_model_loads_and_is_deterministic():
     first = encoder.encode(record)
     second = encoder.encode(record)
     assert first.shape == (8, 128)
-    assert first.dtype == np.float32
+    assert first.dtype == np.float16
     np.testing.assert_array_equal(first, second)
     np.testing.assert_allclose(np.linalg.norm(first, axis=1), 1.0, atol=1e-6)
     assert encoder.info()["parameter_count"] == 306_436
+
+
+def test_embedding_dtype_is_configurable():
+    encoder = Ginfinity.load()
+    record = RNA("rna", "ACGU", "....")
+    assert encoder.encode(record, embedding_dtype="float32").dtype == np.float32
+    assert encoder.encode_many(
+        [record], embedding_dtype=np.float64)[0].dtype == np.float64
+    with pytest.raises(ValueError, match="floating-point"):
+        encoder.encode(record, embedding_dtype="int8")
 
 
 def test_checkpoint_loading_is_restricted_to_weights_only(monkeypatch):

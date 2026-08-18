@@ -6,6 +6,12 @@
   creating the GitHub release that starts the PyPI and Anaconda.org
   workflows.
 
+## 1.2.0 - 2026-08-18
+
+- Returned node embeddings now default to normalized `float16` NumPy arrays.
+- Added the `embedding_dtype` Python parameter and `--embedding-dtype` CLI
+  option to select `float16`, `float32`, or `float64` output.
+
 ## 1.1.0 - 2026-08-15
 
 - Added sliced graphs: optional `start`/`end` windows on an RNA, including
