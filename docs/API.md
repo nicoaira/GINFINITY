@@ -51,6 +51,8 @@ Ginfinity.load(
 
 Loads and SHA-256-verifies the packaged checkpoint before restricted,
 weights-only deserialization.
+Inference defaults to `float16`; pass `full_precision=True` for `float32`
+model inference.
 `model_dir` is intended for controlled deployment mirrors and must contain
 `encoder.pt`, `model.json`, and `alignment.json`.
 

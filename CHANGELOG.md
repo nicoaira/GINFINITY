@@ -6,6 +6,12 @@
   creating the GitHub release that starts the PyPI and Anaconda.org
   workflows.
 
+## 1.2.1 - 2026-08-18
+
+- Model inference now defaults to `float16` precision to reduce memory use.
+- Added `full_precision=True` to `Ginfinity.load` and `--full-precision` to
+  embedding commands for `float32` inference.
+
 ## 1.2.0 - 2026-08-18
 
 - Returned node embeddings now default to normalized `float16` NumPy arrays.

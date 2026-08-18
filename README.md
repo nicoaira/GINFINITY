@@ -54,6 +54,9 @@ Embeddings are returned as L2-normalized `float16` NumPy arrays by default in
 floating-point output dtype. Reuse a loaded `Ginfinity` instance across
 requests.
 
+Inference uses `float16` model precision by default. For full `float32`
+inference, load the model with `Ginfinity.load(full_precision=True)`.
+
 Batch inference amortizes graph construction and model overhead:
 
 ```python

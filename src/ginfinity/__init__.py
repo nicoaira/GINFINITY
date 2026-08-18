@@ -9,7 +9,7 @@ from .graph import (GRAPH_SHARD_FORMAT, GRAPH_SHARD_FORMAT_VERSION,
                     load_graph_shard, partition_records, save_graph_shard)
 from .table import read_rna_table
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 __all__ = [
     "Ginfinity",

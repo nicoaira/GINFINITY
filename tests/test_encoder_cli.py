@@ -61,6 +61,28 @@ def test_embed_cli_accepts_embedding_dtype(tmp_path):
         assert archive["rna-1"].dtype == np.float32
 
 
+def test_embed_cli_accepts_full_precision_flag(tmp_path, monkeypatch):
+    source = tmp_path / "molecules.tsv"
+    source.write_text(
+        "transcript_id\tsequence\tsecondary_structure\n"
+        "rna-1\tACGU\t....\n")
+    output = tmp_path / "embeddings.npz"
+    observed = {}
+    from ginfinity import cli
+    original = cli.Ginfinity.load
+
+    def wrapped(*args, **kwargs):
+        observed.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cli.Ginfinity, "load", wrapped)
+    assert cli.main([
+        "embed", "--input", str(source), "--output", str(output),
+        "--full-precision",
+    ]) == 0
+    assert observed["full_precision"] is True
+
+
 def test_cli_can_build_then_embed_a_graph_shard(tmp_path):
     source = tmp_path / "molecules.tsv"
     source.write_text(

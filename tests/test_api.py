@@ -21,6 +21,14 @@ def test_bundled_model_loads_and_is_deterministic():
     np.testing.assert_array_equal(first, second)
     np.testing.assert_allclose(np.linalg.norm(first, axis=1), 1.0, atol=1e-6)
     assert encoder.info()["parameter_count"] == 306_436
+    assert next(encoder._model.parameters()).dtype == api_module.torch.float16
+
+
+def test_full_precision_model_is_available():
+    encoder = Ginfinity.load(full_precision=True)
+    assert next(encoder._model.parameters()).dtype == api_module.torch.float32
+    embedding = encoder.encode(RNA("rna", "ACGU", "...."))
+    assert embedding.dtype == np.float16
 
 
 def test_embedding_dtype_is_configurable():

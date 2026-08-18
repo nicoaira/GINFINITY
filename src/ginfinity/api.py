@@ -54,16 +54,18 @@ class Ginfinity:
     """Loaded GINFINITY encoder ready for repeated inference."""
 
     def __init__(self, model: GINEEncoder, metadata: dict, device: str,
-                 graph_spec: GraphSpec) -> None:
+                 graph_spec: GraphSpec, *, full_precision: bool) -> None:
         self._model = model.eval()
         self._metadata = metadata
         self._graph_spec = graph_spec
         self.device = device
+        self.full_precision = full_precision
 
     @classmethod
     def load(cls, device: str = "cpu", *,
              allow_nondeterministic_cuda: bool = False,
-             model_dir: str | Path | None = None) -> "Ginfinity":
+             model_dir: str | Path | None = None,
+             full_precision: bool = False) -> "Ginfinity":
         if device != "cpu" and not device.startswith("cuda"):
             raise ValueError("device must be 'cpu' or a CUDA device")
         if device.startswith("cuda"):
@@ -105,7 +107,11 @@ class Ginfinity:
                 f"checkpoint could not be loaded: {error}") from error
         if model.parameter_count != metadata.get("parameter_count"):
             raise ModelIntegrityError("parameter-count mismatch")
-        return cls(model.to(device), metadata, device, graph_spec)
+        model = model.to(device)
+        if not full_precision:
+            model = model.half()
+        return cls(model, metadata, device, graph_spec,
+                   full_precision=full_precision)
 
     @property
     def embedding_dimension(self) -> int:
@@ -227,18 +233,21 @@ class Ginfinity:
     def _run_graph_shard(
         self, shard: GraphShard, embedding_dtype: np.dtype
     ) -> list[np.ndarray]:
-        node = torch.from_numpy(shard.node_features).to(self.device)
+        model_dtype = next(self._model.parameters()).dtype
+        node = torch.from_numpy(shard.node_features).to(
+            device=self.device, dtype=model_dtype)
         edge_index = torch.from_numpy(shard.edge_index).to(
             device=self.device, dtype=torch.long)
         edge_types = torch.from_numpy(shard.edge_types).to(
             device=self.device, dtype=torch.long)
         edge_attributes = torch.nn.functional.one_hot(
-            edge_types, num_classes=self._graph_spec.edge_dim).float()
+            edge_types, num_classes=self._graph_spec.edge_dim).to(
+                dtype=model_dtype)
         embedding = self._model(
             node,
             edge_index,
             edge_attributes,
-        ).float().cpu().numpy().astype(np.float64)
+        ).to(dtype=torch.float32).cpu().numpy().astype(np.float64)
         norms = np.linalg.norm(embedding, axis=1, keepdims=True)
         embedding = embedding / np.maximum(norms, 1e-12)
         outputs: list[np.ndarray] = []
