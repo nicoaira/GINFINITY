@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.2.2 - 2026-08-28
+
+- Model inference now defaults to full `float32` precision.
+- Added `--half-precision` to embedding commands for opt-in `float16`
+  inference.
 - Added `scripts/release.py` to preflight a release and publish it by
   creating the GitHub release that starts the PyPI and Anaconda.org
   workflows.

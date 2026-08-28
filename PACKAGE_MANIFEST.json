@@ -1,6 +1,6 @@
 {
   "package": "ginfinity",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "files": {
     ".github/workflows/ci.yml": {
       "bytes": 719,
@@ -23,8 +23,8 @@
       "sha256": "7154cde75439d52611b1b7e99e3573a3725efb222f4a92057768d8f99817e92c"
     },
     "CHANGELOG.md": {
-      "bytes": 2394,
-      "sha256": "a7a824062e661bb0ab82e2bbaec55232f076a0252cebd997e7d8756d38a6815e"
+      "bytes": 2560,
+      "sha256": "31adf3a25d72789ee195604388aa95dd6a4b87c7370875b762624fd39885e04c"
     },
     "CONTRIBUTING.md": {
       "bytes": 718,
@@ -47,8 +47,8 @@
       "sha256": "e962caadb410cea0b7dc5725e05e9c8ffc5e6ddcae5b5e9dd19aab88eea4287a"
     },
     "README.md": {
-      "bytes": 10680,
-      "sha256": "fee131b925e7774129f3afe69e740796bad8bdb0b558f2c626c89a721279db69"
+      "bytes": 10741,
+      "sha256": "c028df965af1ce0749eeab13712610a0da807caa9ad6c2d7588aadc2e42e0253"
     },
     "conda-recipe/conda_build_config.yaml": {
       "bytes": 15,
@@ -56,11 +56,11 @@
     },
     "conda-recipe/meta.yaml": {
       "bytes": 1126,
-      "sha256": "5992426c95b35c53653695dcda4e13c042c2a6d69a644ef121cc21ef326852b5"
+      "sha256": "3f8759ab33bb3f0a867a6b36608be23cb8b9fa33dd57fd983c15b968a9082814"
     },
     "docs/API.md": {
-      "bytes": 5963,
-      "sha256": "0873aa46557ca269e295f7ae41a35d631149ea1b37ac4a7e2e5c42abfc518c1d"
+      "bytes": 5989,
+      "sha256": "c5a39a0b7125d17ed2a2928d42f2da885277aef80c0730a31dd9b69727ca677f"
     },
     "docs/GRAPH_PIPELINE.md": {
       "bytes": 3796,
@@ -80,7 +80,7 @@
     },
     "pyproject.toml": {
       "bytes": 1511,
-      "sha256": "f10e9a53209a04933e173f75684cc58263d839d16bb44f427cac78008e84d81b"
+      "sha256": "5384663818771923e0983a4db42787f4be39e06d7c4aba122e3c648b66139a29"
     },
     "requirements.lock": {
       "bytes": 45,
@@ -91,12 +91,12 @@
       "sha256": "5a2bccc7f6c7ded1c4688aa01e56dbd9ccbe3661024f1c4f7d0bf159a0f06f99"
     },
     "scripts/update_manifest.py": {
-      "bytes": 2520,
-      "sha256": "9797157041dc95a491acc026195a725de696b929a9ba08e48dfe31968d7923af"
+      "bytes": 2535,
+      "sha256": "546f19cdffecdc64b5088ea9f8817324bf249fd8119a329d4f5c44da13eead6b"
     },
     "src/ginfinity/__init__.py": {
       "bytes": 1074,
-      "sha256": "5a2bb98e8b456db16cdb9b5fef60640c2b2e176aeefc6333f147869525759c5d"
+      "sha256": "244602371a295c3c011f33bb93a0beee46640443745b70bbed3f363b427ea712"
     },
     "src/ginfinity/__main__.py": {
       "bytes": 48,
@@ -111,12 +111,12 @@
       "sha256": "15dd9ca09e8d5b64332bbc12100532df0516cd9a3695e3abf2e39226aed60121"
     },
     "src/ginfinity/api.py": {
-      "bytes": 10128,
-      "sha256": "e3d465a200c4e08406300c080229b9c9912dac5fa36b28ccb5c6753088a52115"
+      "bytes": 10127,
+      "sha256": "5feb2be5767ff6e0bb6b371a6acca7ecb53adbedefa56ee4ccfece151b10a94f"
     },
     "src/ginfinity/cli.py": {
-      "bytes": 11824,
-      "sha256": "22fc081d4ac2f755502567d2d4413a0ddbe62e5d069efd2bf4f091426034469e"
+      "bytes": 11832,
+      "sha256": "c5564d684920fdf66556e3c86b58a56f222022205a490bb3d5d4819d36e22d49"
     },
     "src/ginfinity/data/alignment.json": {
       "bytes": 471,
@@ -128,7 +128,7 @@
     },
     "src/ginfinity/data/model.json": {
       "bytes": 1305,
-      "sha256": "9e0350f2a18eb98ce79079c0b63105af6fc21cfd0682faa91b5eda7e9fb78ca9"
+      "sha256": "0b981c0c114f27b4a26c2319052863df30902560a1ae5b3c3af64409c3cf8a1c"
     },
     "src/ginfinity/graph.py": {
       "bytes": 39291,
@@ -151,12 +151,12 @@
       "sha256": "7aebc1af275c33803ce23c98840e5f467c62bdf04566064b1e14a11be129aac9"
     },
     "tests/test_api.py": {
-      "bytes": 3157,
-      "sha256": "bc741c45806081ac847e65195c9c93c98fa09464a3acf73c46fc4a86ec6e638b"
+      "bytes": 3158,
+      "sha256": "0720c18e612a3e5802c573665099a93bd74cb14940337f980be8589341728201"
     },
     "tests/test_encoder_cli.py": {
-      "bytes": 4024,
-      "sha256": "21b6cb2375492d31823725345560dd14334b4a9e07728c097f7e82b32a94c43e"
+      "bytes": 4682,
+      "sha256": "88eee051f46d4a10ba03d73dae2c27d24042be48da4a31ae0fefb2500764c0ef"
     },
     "tests/test_graph.py": {
       "bytes": 5159,

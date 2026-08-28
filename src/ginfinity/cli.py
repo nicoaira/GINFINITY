@@ -72,7 +72,7 @@ def _embed(args: argparse.Namespace) -> int:
     encoder = Ginfinity.load(
         device=args.device,
         allow_nondeterministic_cuda=args.allow_nondeterministic_cuda,
-        full_precision=args.full_precision)
+        full_precision=not args.half_precision)
     builder = _graph_builder(args)
     outputs = encoder.encode_many(
         records,
@@ -140,7 +140,7 @@ def _embed_graphs(args: argparse.Namespace) -> int:
     encoder = Ginfinity.load(
         device=args.device,
         allow_nondeterministic_cuda=args.allow_nondeterministic_cuda,
-        full_precision=args.full_precision,
+        full_precision=not args.half_precision,
     )
     shard = load_graph_shard(
         args.input,
@@ -239,8 +239,8 @@ def main(argv: list[str] | None = None) -> int:
     embed.add_argument("--device", default="cpu")
     embed.add_argument("--allow-nondeterministic-cuda", action="store_true")
     embed.add_argument(
-        "--full-precision", action="store_true",
-        help="run model inference in float32 instead of the default float16")
+        "--half-precision", action="store_true",
+        help="run model inference in float16 instead of the default float32")
     embed.add_argument("--max-batch-nodes", type=int, default=60_000)
     embed.add_argument("--max-batch-edges", type=int, default=300_000)
     embed.add_argument(
@@ -266,8 +266,8 @@ def main(argv: list[str] | None = None) -> int:
     embed_graphs.add_argument(
         "--allow-nondeterministic-cuda", action="store_true")
     embed_graphs.add_argument(
-        "--full-precision", action="store_true",
-        help="run model inference in float32 instead of the default float16")
+        "--half-precision", action="store_true",
+        help="run model inference in float16 instead of the default float32")
     embed_graphs.add_argument("--max-batch-nodes", type=int, default=60_000)
     embed_graphs.add_argument("--max-batch-edges", type=int, default=300_000)
     embed_graphs.add_argument(

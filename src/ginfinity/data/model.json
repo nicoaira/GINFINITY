@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "package": "ginfinity",
-  "package_version": "1.2.1",
+  "package_version": "1.2.2",
   "model_version": "1.0.0",
   "checkpoint_sha256": "7e9cd61028c4d2ab3c50c475774aef233f3e3799690469e8c82df74ce46c3754",
   "parameter_count": 306436,

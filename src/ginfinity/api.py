@@ -65,7 +65,7 @@ class Ginfinity:
     def load(cls, device: str = "cpu", *,
              allow_nondeterministic_cuda: bool = False,
              model_dir: str | Path | None = None,
-             full_precision: bool = False) -> "Ginfinity":
+             full_precision: bool = True) -> "Ginfinity":
         if device != "cpu" and not device.startswith("cuda"):
             raise ValueError("device must be 'cpu' or a CUDA device")
         if device.startswith("cuda"):

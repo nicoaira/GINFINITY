@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_DIRECTORIES = {
     ".git", ".pytest_cache", ".repowise", ".venv", "__pycache__",
-    "build", "conda-dist", "dist",
+    "build", "conda-dist", "dist", "experiments",
 }
 
 
